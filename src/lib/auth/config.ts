@@ -66,33 +66,7 @@ export const authConfig: NextAuthConfig = {
           scope: HUBSPOT_SCOPES,
         },
       },
-      token: {
-        url: 'https://api.hubapi.com/oauth/v1/token',
-        async request({ params, provider }: { params: { redirect_uri?: string; code?: string }; provider: { clientId?: string; clientSecret?: string } }) {
-          const response = await fetch('https://api.hubapi.com/oauth/v1/token', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-              grant_type: 'authorization_code',
-              client_id: provider.clientId || '',
-              client_secret: provider.clientSecret || '',
-              redirect_uri: params.redirect_uri || '',
-              code: params.code || '',
-            }),
-          });
-
-          const tokens = await response.json();
-
-          if (!response.ok) {
-            console.error('HubSpot token error:', tokens);
-            throw new Error(tokens.message || 'Token request failed');
-          }
-
-          return { tokens };
-        },
-      },
+      token: 'https://api.hubapi.com/oauth/v1/token',
       userinfo: {
         url: 'https://api.hubapi.com/oauth/v1/access-tokens',
         async request({ tokens }: { tokens: { access_token?: string } }) {
