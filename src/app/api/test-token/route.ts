@@ -11,7 +11,8 @@ export async function GET(request: Request) {
     });
   }
 
-  const redirectUri = 'https://sales-cockpit.netlify.app/api/auth/callback/hubspot';
+  const baseUrl = process.env.NEXTAUTH_URL || new URL(request.url).origin;
+  const redirectUri = `${baseUrl}/api/auth/callback/hubspot`;
 
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
