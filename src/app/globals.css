@@ -1,26 +1,126 @@
 @import "tailwindcss";
 
+/* sipgate Fonts */
+@font-face {
+  font-family: 'PX Grotesk';
+  src: url('https://cdn.prod.website-files.com/678900e941dcd8f65b4519f8/678900e941dcd8f65b451a41_PxGrotesk-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'PX Grotesk';
+  src: url('https://cdn.prod.website-files.com/678900e941dcd8f65b4519f8/678900e941dcd8f65b451a45_PxGrotesk-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'PX Grotesk';
+  src: url('https://cdn.prod.website-files.com/678900e941dcd8f65b4519f8/678900e941dcd8f65b451a10_PxGrotesk-RegularIta.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Tiempos';
+  src: url('https://cdn.prod.website-files.com/678900e941dcd8f65b4519f8/67c6ba4a314508259484697b_tiempos-headline-light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --background: #ffffff;
+  --background: #f5f5f5;
   --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-primary: 'PX Grotesk', system-ui, sans-serif;
+  --font-headline: 'Tiempos', Georgia, serif;
+  --accent: #DEFF00;
 }
 
 body {
   background: var(--background);
+  background-image: url('/background.jpg');
+  background-size: cover;
+  background-attachment: fixed;
+  background-position: center;
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-primary);
+}
+
+/* Rich Text Editor Styles */
+.ProseMirror {
+  outline: none;
+  min-height: 60px;
+}
+
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #9ca3af;
+  pointer-events: none;
+  height: 0;
+}
+
+.ProseMirror ul {
+  list-style-type: disc;
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.ProseMirror ol {
+  list-style-type: decimal;
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.ProseMirror li {
+  margin: 0.25em 0;
+}
+
+.ProseMirror p {
+  margin: 0.5em 0;
+}
+
+/* Canvas cell content paragraph spacing - override Tailwind prose */
+div.prose.prose-sm.max-w-none p {
+  margin-top: 0;
+  margin-bottom: 0.75em;
+}
+
+div.prose.prose-sm.max-w-none p:last-child {
+  margin-bottom: 0;
+}
+
+.ProseMirror strong {
+  font-weight: 600;
+}
+
+.ProseMirror em {
+  font-style: italic;
+}
+
+/* Canvas Grid Gap Fix */
+.canvas-grid-gap {
+  gap: 1px;
+  background-color: #e5e7eb;
+}
+
+/* Highlight animation */
+@keyframes highlight-pulse {
+  0%, 100% {
+    background-color: #DEFF00;
+    opacity: 0.3;
+  }
+  50% {
+    background-color: #DEFF00;
+    opacity: 0.6;
+  }
+}
+
+.highlight-pulse {
+  animation: highlight-pulse 2s ease-in-out infinite;
 }
