@@ -48,6 +48,7 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
 }
 
 export const authConfig: NextAuthConfig = {
+  debug: process.env.NODE_ENV === 'development' || process.env.AUTH_DEBUG === 'true',
   providers: [
     {
       id: 'hubspot',
