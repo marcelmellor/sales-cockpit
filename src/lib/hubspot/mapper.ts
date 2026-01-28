@@ -81,6 +81,15 @@ export function mapHubSpotToCanvas(data: HubSpotDealData): CanvasData {
     { milestones: [], startDate: new Date().toISOString(), endDate: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString() }
   );
 
+  // Calculate deal age in days
+  const calculateDealAge = (createdate: string | undefined): number => {
+    if (!createdate) return 0;
+    const created = new Date(createdate);
+    const now = new Date();
+    const diffTime = now.getTime() - created.getTime();
+    return Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  };
+
   return {
     dealId: data.id,
     topBar: {
@@ -89,6 +98,7 @@ export function mapHubSpotToCanvas(data: HubSpotDealData): CanvasData {
       productManager: properties.deal_po || '',
       dealOwner,
       dealStage: data.stageLabel,
+      dealAge: calculateDealAge(properties.createdate),
     },
     header: {
       companyDescription: textToHtml(company?.properties.description),
@@ -118,6 +128,9 @@ export function mapHubSpotToCanvas(data: HubSpotDealData): CanvasData {
       champion: textToHtml(properties.champion_name),
       competitors: textToHtml(properties.competition_analysis || properties.canvas_competitors),
       risks: textToHtml(properties.canvas_risks || properties.canvas_risks_blockers),
+      showStoppers: properties.frontdesk_deal_tags
+        ? properties.frontdesk_deal_tags.split(';').map(tag => tag.trim()).filter(Boolean)
+        : [],
     },
     roadmap: {
       milestones: roadmapData.milestones.map(m => ({

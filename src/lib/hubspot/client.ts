@@ -91,12 +91,86 @@ export class HubSpotClient {
     });
   }
 
+  // Deals with company associations for overview
+  async getDealsWithAssociations(pipelineId: string) {
+    const properties = [
+      'dealname',
+      'amount',
+      'dealstage',
+      'pipeline',
+      'agents_minuten',
+      'deal_po',
+      'createdate',
+    ];
+
+    const searchBody = {
+      properties,
+      filterGroups: [{
+        filters: [{ propertyName: 'pipeline', operator: 'EQ', value: pipelineId }]
+      }],
+      limit: 100,
+    };
+
+    // First get deals
+    const deals = await this.request<{
+      results: Array<{
+        id: string;
+        properties: Record<string, string>;
+        associations?: {
+          companies?: { results: Array<{ id: string; type: string }> };
+        };
+      }>;
+    }>('/crm/v3/objects/deals/search', {
+      method: 'POST',
+      body: JSON.stringify(searchBody),
+    });
+
+    // Use batch associations API to get all company associations at once
+    const dealIds = deals.results.map(d => d.id);
+    let associationsMap = new Map<string, Array<{ id: string; type: string }>>();
+
+    if (dealIds.length > 0) {
+      try {
+        const batchAssociations = await this.request<{
+          results: Array<{
+            from: { id: string };
+            to: Array<{ toObjectId: number; associationTypes: Array<{ typeId: number }> }>;
+          }>;
+        }>('/crm/v4/associations/deals/companies/batch/read', {
+          method: 'POST',
+          body: JSON.stringify({
+            inputs: dealIds.map(id => ({ id })),
+          }),
+        });
+
+        for (const result of batchAssociations.results) {
+          // toObjectId is a number, convert to string
+          const companyAssocs = result.to.map(t => ({ id: String(t.toObjectId), type: 'company' }));
+          associationsMap.set(result.from.id, companyAssocs);
+        }
+      } catch {
+        // Fallback: associations will be empty
+      }
+    }
+
+    // Merge associations into deals
+    const dealsWithAssociations = deals.results.map(deal => ({
+      ...deal,
+      associations: {
+        companies: { results: associationsMap.get(deal.id) || [] },
+      },
+    }));
+
+    return { results: dealsWithAssociations };
+  }
+
   async getDeal(dealId: string) {
     const properties = [
       'dealname',
       'amount',
       'dealstage',
       'closedate',
+      'createdate',
       'pipeline',
       'hubspot_owner_id',
       'deal_po',
@@ -113,6 +187,7 @@ export class HubSpotClient {
       'canvas_next_steps',
       'canvas_roadmap',
       'canvas_next_appointment',
+      'frontdesk_deal_tags',
     ].join(',');
 
     return this.request<{
@@ -168,6 +243,23 @@ export class HubSpotClient {
     }>(`/crm/v3/objects/companies/${companyId}?properties=name,description,domain,industry,numberofemployees`);
   }
 
+  async getCompanies(companyIds: string[]) {
+    if (companyIds.length === 0) return { results: [] };
+
+    return this.request<{
+      results: Array<{
+        id: string;
+        properties: Record<string, string>;
+      }>;
+    }>('/crm/v3/objects/companies/batch/read', {
+      method: 'POST',
+      body: JSON.stringify({
+        properties: ['name'],
+        inputs: companyIds.map(id => ({ id })),
+      }),
+    });
+  }
+
   // Pipelines
   async getPipelines() {
     return this.request<{
@@ -177,6 +269,9 @@ export class HubSpotClient {
         stages: Array<{
           id: string;
           label: string;
+          metadata: {
+            probability: string;
+          };
         }>;
       }>;
     }>('/crm/v3/pipelines/deals');

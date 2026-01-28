@@ -1,0 +1,40 @@
+{
+  "uid": "sales_canvas_clean_app",
+  "type": "app",
+  "config": {
+    "description": "An example to demonstrate how to build a private oauth app with developer projects.",
+    "name": "sales-canvas-clean-Application",
+    "distribution": "marketplace",
+    "auth": {
+      "type": "oauth",
+      "redirectUrls": [
+        "http://localhost:4000/api/auth/callback/hubspot",
+        "https://sales-cockpit.netlify.app/api/auth/callback/hubspot"
+      ],
+      "requiredScopes": [
+        "oauth",
+        "crm.objects.deals.read",
+        "crm.objects.deals.write",
+        "crm.objects.contacts.read",
+        "crm.objects.companies.read",
+        "crm.objects.owners.read",
+        "crm.schemas.deals.read"
+      ],
+      "optionalScopes": [],
+      "conditionallyRequiredScopes": []
+    },
+    "permittedUrls": {
+      "fetch": [
+        "https://api.hubapi.com"
+      ],
+      "iframe": [],
+      "img": []
+    },
+    "support": {
+      "supportEmail": "support@example.com",
+      "documentationUrl": "https://example.com/docs",
+      "supportUrl": "https://example.com/support",
+      "supportPhone": "+18005555555"
+    }
+  }
+}

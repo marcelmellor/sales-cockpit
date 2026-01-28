@@ -17,6 +17,7 @@ export interface TopBarSection {
   productManager: string;
   dealOwner: string;
   dealStage?: string;
+  dealAge?: number; // Alter des Deals in Tagen
 }
 
 // Header: Profil, Umsatz, Termin
@@ -44,6 +45,7 @@ export interface DecisionSection {
   champion: string;
   competitors: string;   // Wettbewerber
   risks: string;         // Risiken
+  showStoppers: string[]; // Tags als potentielle Show Stopper
 }
 
 // Roadmap mit Nächste Schritte

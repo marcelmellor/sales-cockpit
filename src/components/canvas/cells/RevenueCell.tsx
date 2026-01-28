@@ -34,7 +34,7 @@ export function RevenueCell() {
         <h3 className="font-medium text-xs text-gray-400 uppercase tracking-wide">Umsatzerwartung</h3>
         <button
           onClick={isEditing ? handleSave : handleEdit}
-          className="p-1 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
+          className="no-print p-1 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
         >
           {isEditing ? <Check size={16} /> : <Pencil size={16} />}
         </button>
@@ -52,8 +52,8 @@ export function RevenueCell() {
           </div>
         ) : (
           <>
-            <div className="text-2xl font-bold text-gray-900">
-              ~{mrr.toLocaleString('de-DE')} MRR
+            <div className="text-4xl font-bold text-gray-900">
+              ~{(Math.round(mrr / 10) * 10).toLocaleString('de-DE')} MRR
             </div>
             {seats > 0 && (
               <div className="text-xl font-semibold text-gray-700 mt-1">

@@ -5,9 +5,12 @@ import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { SalesCanvas } from '@/components/canvas/SalesCanvas';
+import { ExportButton } from '@/components/canvas/ExportButton';
 import { UserMenu } from '@/components/UserMenu';
+import { Autosuggest } from '@/components/ui/Autosuggest';
 import { useCanvasStore } from '@/stores/canvas-store';
-import { ChevronDown, Loader2 } from 'lucide-react';
+import { Loader2, FileText, LayoutGrid } from 'lucide-react';
+import Link from 'next/link';
 import type { CanvasData } from '@/types/canvas';
 
 interface Deal {
@@ -43,11 +46,11 @@ export default function Home() {
 function HomeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
   const [selectedDealId, setSelectedDealId] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
-  const { setCanvasData, canvasData, setSaving, markClean } = useCanvasStore();
+  const { setCanvasData, clearCanvasData, canvasData, setSaving, markClean } = useCanvasStore();
 
   // Update URL when selection changes
   const updateUrl = useCallback((pipelineId: string | null, dealId: string | null) => {
@@ -117,7 +120,8 @@ function HomeContent() {
 
   // Update canvas store when deal data changes
   useEffect(() => {
-    if (dealData) {
+    // Only set data if it matches the currently selected deal
+    if (dealData && dealData.dealId === selectedDealId) {
       const processedData: CanvasData = {
         ...dealData,
         lastSaved: dealData.lastSaved ? new Date(dealData.lastSaved) : undefined,
@@ -142,7 +146,7 @@ function HomeContent() {
       };
       setCanvasData(processedData);
     }
-  }, [dealData, setCanvasData]);
+  }, [dealData, selectedDealId, setCanvasData]);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -160,6 +164,7 @@ function HomeContent() {
 
   // Handle deal selection
   const handleDealChange = (dealId: string | null) => {
+    clearCanvasData(); // Clear old data immediately to show empty state
     setSelectedDealId(dealId);
     updateUrl(selectedPipelineId, dealId);
   };
@@ -209,48 +214,61 @@ function HomeContent() {
           <div className="flex items-center gap-6">
             <h1 className="text-xl font-bold text-gray-900">Sales Canvas</h1>
 
-            {/* Pipeline Selector */}
-            <div className="relative">
-              <select
-                value={selectedPipelineId || ''}
-                onChange={(e) => handlePipelineChange(e.target.value || null)}
-                disabled={pipelinesLoading}
-                className="appearance-none bg-gray-50 border border-gray-300 rounded-lg px-4 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[200px]"
+            <nav className="flex items-center gap-2">
+              <span className="px-3 py-1.5 text-sm font-medium text-gray-900 bg-gray-100 rounded-md flex items-center gap-1.5">
+                <FileText className="h-4 w-4" />
+                Canvas
+              </span>
+              <Link
+                href={selectedPipelineId ? `/pipeline?id=${selectedPipelineId}` : '/pipeline'}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors flex items-center gap-1.5"
               >
-                <option value="">Pipeline auswählen...</option>
-                {pipelinesData?.map((pipeline) => (
-                  <option key={pipeline.id} value={pipeline.id}>
-                    {pipeline.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none" />
-            </div>
+                <LayoutGrid className="h-4 w-4" />
+                Pipeline
+              </Link>
+            </nav>
+
+            <div className="h-6 w-px bg-gray-200" />
+
+            {/* Pipeline Selector */}
+            <Autosuggest
+              options={pipelinesData?.map((pipeline) => ({
+                id: pipeline.id,
+                label: pipeline.label,
+              })) || []}
+              value={selectedPipelineId}
+              onChange={handlePipelineChange}
+              placeholder="Pipeline suchen..."
+              disabled={pipelinesLoading}
+              isLoading={pipelinesLoading}
+              className="min-w-[200px]"
+            />
 
             {/* Deal Selector */}
-            <div className="relative">
-              <select
-                value={selectedDealId || ''}
-                onChange={(e) => handleDealChange(e.target.value || null)}
-                disabled={!selectedPipelineId || dealsLoading}
-                className="appearance-none bg-gray-50 border border-gray-300 rounded-lg px-4 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[250px] disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <option value="">Deal auswählen...</option>
-                {dealsData?.map((deal) => (
-                  <option key={deal.id} value={deal.id}>
-                    {deal.properties.dealname}
-                    {deal.properties.amount && ` - ${parseFloat(deal.properties.amount).toLocaleString('de-DE')} EUR`}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none" />
-            </div>
+            <Autosuggest
+              options={dealsData?.map((deal) => ({
+                id: deal.id,
+                label: deal.properties.dealname,
+                sublabel: deal.properties.amount
+                  ? `${parseFloat(deal.properties.amount).toLocaleString('de-DE')} EUR`
+                  : undefined,
+              })) || []}
+              value={selectedDealId}
+              onChange={handleDealChange}
+              placeholder="Deal suchen..."
+              disabled={!selectedPipelineId || dealsLoading}
+              isLoading={dealsLoading}
+              className="min-w-[250px]"
+            />
 
             {dealLoading && (
               <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
             )}
           </div>
-          <UserMenu />
+          <div className="flex items-center gap-2">
+            <ExportButton disabled={!selectedDealId} />
+            <UserMenu />
+          </div>
         </div>
       </header>
 
@@ -264,8 +282,15 @@ function HomeContent() {
               </p>
             </div>
           </div>
-        ) : selectedDealId ? (
+        ) : selectedDealId && canvasData && canvasData.dealId === selectedDealId ? (
           <SalesCanvas onSave={handleSave} />
+        ) : selectedDealId ? (
+          <div className="max-w-7xl mx-auto px-4">
+            <div className="flex items-center justify-center gap-2 text-gray-400 py-12">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              Deal wird geladen...
+            </div>
+          </div>
         ) : (
           <div className="max-w-7xl mx-auto px-4">
             <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">

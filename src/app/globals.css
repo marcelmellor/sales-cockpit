@@ -39,6 +39,303 @@
   --font-primary: 'PX Grotesk', system-ui, sans-serif;
   --font-headline: 'Tiempos', Georgia, serif;
   --accent: #DEFF00;
+
+  /* primitive-colors-neo */
+  --black: #000000;
+  --focus: #f547cd;
+  --gray-dark-a3: #ffffff12;
+  --gray-dark-a8: #ffffff54;
+  --gray-light-a3: #00000010;
+  --gray-light-a8: #00000044;
+  --overlay-dark: #070707c4;
+  --overlay-light: #07070754;
+  --transparent-dark: #00000000;
+  --transparent-light: #ffffff00;
+  --white: #ffffff;
+
+  /* Clementine */
+  --clementine-dark-1: #17110d;
+  --clementine-dark-10: #f36400;
+  --clementine-dark-10a: #e56500;
+  --clementine-dark-11: #ff9d62;
+  --clementine-dark-12: #ffdcc8;
+  --clementine-dark-2: #201510;
+  --clementine-dark-3: #351c0e;
+  --clementine-dark-4: #4b1c00;
+  --clementine-dark-5: #5a2503;
+  --clementine-dark-6: #693314;
+  --clementine-dark-7: #814321;
+  --clementine-dark-8: #a5562a;
+  --clementine-dark-9: #ff7200;
+  --clementine-light-1: #fefcfb;
+  --clementine-light-10: #f36400;
+  --clementine-light-10a: #e56500;
+  --clementine-light-11: #d14d00;
+  --clementine-light-12: #582e17;
+  --clementine-light-2: #fff5ef;
+  --clementine-light-3: #ffeadc;
+  --clementine-light-4: #ffd8be;
+  --clementine-light-5: #ffcaa9;
+  --clementine-light-6: #ffba91;
+  --clementine-light-7: #fca87e;
+  --clementine-light-8: #f1905e;
+  --clementine-light-9: #ff7200;
+
+  /* Cornflower */
+  --cornflower-dark-1: #0f121b;
+  --cornflower-dark-10: #274ff0;
+  --cornflower-dark-10a: #2042e4;
+  --cornflower-dark-11: #8ab2ff;
+  --cornflower-dark-11a: #769feb;
+  --cornflower-dark-11b: #5989d1;
+  --cornflower-dark-12: #d1e2ff;
+  --cornflower-dark-2: #141723;
+  --cornflower-dark-3: #1e2441;
+  --cornflower-dark-4: #262f58;
+  --cornflower-dark-5: #2f3968;
+  --cornflower-dark-6: #394477;
+  --cornflower-dark-7: #44518a;
+  --cornflower-dark-8: #4f5ea1;
+  --cornflower-dark-9: #315dff;
+  --cornflower-light-1: #fdfdfe;
+  --cornflower-light-10: #274ff0;
+  --cornflower-light-10a: #2042e4;
+  --cornflower-light-11: #2b53e2;
+  --cornflower-light-11a: #0041cc;
+  --cornflower-light-11b: #002db4;
+  --cornflower-light-12: #172b67;
+  --cornflower-light-2: #f7f9ff;
+  --cornflower-light-3: #edf2ff;
+  --cornflower-light-4: #e1e9ff;
+  --cornflower-light-5: #d2deff;
+  --cornflower-light-6: #c0cfff;
+  --cornflower-light-7: #aabcff;
+  --cornflower-light-8: #8da2f7;
+  --cornflower-light-9: #315dff;
+
+  /* Electric Lime */
+  --electric-lime-dark-1: #11130b;
+  --electric-lime-dark-10: #d5f505;
+  --electric-lime-dark-10a: #c9e702;
+  --electric-lime-dark-11: #cae729;
+  --electric-lime-dark-12: #e6f7ab;
+  --electric-lime-dark-2: #17190d;
+  --electric-lime-dark-3: #23280e;
+  --electric-lime-dark-4: #2d350c;
+  --electric-lime-dark-5: #38410a;
+  --electric-lime-dark-6: #444f0e;
+  --electric-lime-dark-7: #535f15;
+  --electric-lime-dark-8: #647317;
+  --electric-lime-dark-9: #deff00;
+  --electric-lime-light-1: #fcfdf9;
+  --electric-lime-light-10: #d5f505;
+  --electric-lime-light-10a: #c9e702;
+  --electric-lime-light-11: #6e8000;
+  --electric-lime-light-12: #39401e;
+  --electric-lime-light-2: #f9fdec;
+  --electric-lime-light-3: #effdc1;
+  --electric-lime-light-4: #e5f8a1;
+  --electric-lime-light-5: #d9f083;
+  --electric-lime-light-6: #cbe176;
+  --electric-lime-light-7: #bcd06d;
+  --electric-lime-light-8: #a5bb42;
+  --electric-lime-light-9: #deff00;
+
+  /* Gray */
+  --gray-dark-1: #121212;
+  --gray-dark-10: #797979;
+  --gray-dark-10a: #707070;
+  --gray-dark-11: #b4b4b4;
+  --gray-dark-12: #eeeeee;
+  --gray-dark-2: #191919;
+  --gray-dark-3: #232323;
+  --gray-dark-4: #2a2a2a;
+  --gray-dark-5: #313131;
+  --gray-dark-6: #3a3a3a;
+  --gray-dark-7: #484848;
+  --gray-dark-8: #606060;
+  --gray-dark-9: #838383;
+  --gray-light-1: #fcfcfc;
+  --gray-light-10: #838383;
+  --gray-light-10a: #797979;
+  --gray-light-11: #646464;
+  --gray-light-12: #202020;
+  --gray-light-2: #f9f9f9;
+  --gray-light-3: #efefef;
+  --gray-light-4: #e8e8e8;
+  --gray-light-5: #e0e0e0;
+  --gray-light-6: #d8d8d8;
+  --gray-light-7: #cecece;
+  --gray-light-8: #bbbbbb;
+  --gray-light-9: #8d8d8d;
+
+  /* Green */
+  --green-dark-1: #0c1410;
+  --green-dark-10: #01ac76;
+  --green-dark-10a: #0e9b6b;
+  --green-dark-11: #3ad599;
+  --green-dark-12: #a9f3ce;
+  --green-dark-2: #111b16;
+  --green-dark-3: #112d20;
+  --green-dark-4: #0b3c28;
+  --green-dark-5: #0f4a33;
+  --green-dark-6: #16593e;
+  --green-dark-7: #1c6a4a;
+  --green-dark-8: #1d7d58;
+  --green-dark-9: #00bd82;
+  --green-light-1: #fafefc;
+  --green-light-10: #01ac76;
+  --green-light-10a: #0e9b6b;
+  --green-light-11: #008353;
+  --green-light-12: #0b3e2a;
+  --green-light-2: #f3fcf7;
+  --green-light-3: #e1f8ec;
+  --green-light-4: #cef3e0;
+  --green-light-5: #b8ecd1;
+  --green-light-6: #9ce2bf;
+  --green-light-7: #73d4a7;
+  --green-light-8: #0fc085;
+  --green-light-9: #00bd82;
+
+  /* Lavender */
+  --lavender-dark-1: #130f20;
+  --lavender-dark-10: #7a2fee;
+  --lavender-dark-10a: #643db6;
+  --lavender-dark-11: #bca4ff;
+  --lavender-dark-12: #e3daff;
+  --lavender-dark-2: #19142b;
+  --lavender-dark-3: #29194e;
+  --lavender-dark-4: #361b69;
+  --lavender-dark-5: #3f2379;
+  --lavender-dark-6: #4a2e89;
+  --lavender-dark-7: #5a3ba1;
+  --lavender-dark-8: #724bca;
+  --lavender-dark-9: #8642fe;
+  --lavender-light-1: #fcfcff;
+  --lavender-light-10: #7933ec;
+  --lavender-light-10a: #643db6;
+  --lavender-light-11: #7235dc;
+  --lavender-light-12: #381672;
+  --lavender-light-2: #f9f8ff;
+  --lavender-light-3: #f3efff;
+  --lavender-light-4: #eae3ff;
+  --lavender-light-5: #e0d6ff;
+  --lavender-light-6: #d4c6ff;
+  --lavender-light-7: #c3afff;
+  --lavender-light-8: #ad90ff;
+  --lavender-light-9: #8642fe;
+
+  /* Mint */
+  --mint-dark-1: #101310;
+  --mint-dark-10: #005650;
+  --mint-dark-10a: #00504b;
+  --mint-dark-11: #6ed0c7;
+  --mint-dark-12: #b9f6ef;
+  --mint-dark-2: #171a17;
+  --mint-dark-3: #1f271f;
+  --mint-dark-4: #263127;
+  --mint-dark-5: #2f3b2f;
+  --mint-dark-6: #394739;
+  --mint-dark-7: #465747;
+  --mint-dark-8: #5a6e5a;
+  --mint-dark-9: #006660;
+  --mint-light-1: #fcfefc;
+  --mint-light-10: #005650;
+  --mint-light-10a: #00504b;
+  --mint-light-11: #1d756e;
+  --mint-light-12: #163d39;
+  --mint-light-2: #f6faf6;
+  --mint-light-3: #ebf5eb;
+  --mint-light-4: #dfeedf;
+  --mint-light-5: #d1e6d1;
+  --mint-light-6: #bdd9be;
+  --mint-light-7: #a8c7a8;
+  --mint-light-8: #8ead8f;
+  --mint-light-9: #006660;
+
+  /* Neo Black */
+  --neo-black-dark-1: #111111;
+  --neo-black-dark-10: #ededed;
+  --neo-black-dark-10a: #d6d6d6;
+  --neo-black-dark-11: #b4b4b4;
+  --neo-black-dark-12: #eeeeee;
+  --neo-black-dark-2: #191919;
+  --neo-black-dark-3: #222222;
+  --neo-black-dark-4: #292929;
+  --neo-black-dark-5: #313131;
+  --neo-black-dark-6: #3a3a3a;
+  --neo-black-dark-7: #484848;
+  --neo-black-dark-8: #606060;
+  --neo-black-dark-9: #ffffff;
+  --neo-black-light-1: #fcfcfc;
+  --neo-black-light-10: #2b2b2b;
+  --neo-black-light-10a: #3c3c3c;
+  --neo-black-light-11: #636363;
+  --neo-black-light-12: #1f1f1f;
+  --neo-black-light-2: #f9f9f9;
+  --neo-black-light-3: #f0f0f0;
+  --neo-black-light-4: #e8e8e8;
+  --neo-black-light-5: #e1e1e1;
+  --neo-black-light-6: #d9d9d9;
+  --neo-black-light-7: #cecece;
+  --neo-black-light-8: #bbbbbb;
+  --neo-black-light-9: #121212;
+
+  /* Orange */
+  --orange-dark-1: #15120c;
+  --orange-dark-10: #f0b706;
+  --orange-dark-10a: #e2ad11;
+  --orange-dark-11: #ffc940;
+  --orange-dark-12: #ffe6b5;
+  --orange-dark-2: #1d180f;
+  --orange-dark-3: #2d2109;
+  --orange-dark-4: #3d2900;
+  --orange-dark-5: #4a3200;
+  --orange-dark-6: #584006;
+  --orange-dark-7: #6b521a;
+  --orange-dark-8: #886824;
+  --orange-dark-9: #ffbd00;
+  --orange-light-1: #fefdfb;
+  --orange-light-10: #f0b706;
+  --orange-light-10a: #e2ad11;
+  --orange-light-11: #986f00;
+  --orange-light-12: #48391b;
+  --orange-light-2: #fffae8;
+  --orange-light-3: #fff3d6;
+  --orange-light-4: #ffe9b8;
+  --orange-light-5: #ffde95;
+  --orange-light-6: #ffd070;
+  --orange-light-7: #eebf60;
+  --orange-light-8: #dca72b;
+  --orange-light-9: #ffbd00;
+
+  /* Red */
+  --red-dark-1: #18100f;
+  --red-dark-10: #ed4d50;
+  --red-dark-10a: #e24347;
+  --red-dark-11: #ff8d87;
+  --red-dark-12: #ffd0cc;
+  --red-dark-2: #211312;
+  --red-dark-3: #3d1010;
+  --red-dark-4: #54080e;
+  --red-dark-5: #651015;
+  --red-dark-6: #771e21;
+  --red-dark-7: #912e2f;
+  --red-dark-8: #bb3e3f;
+  --red-dark-9: #ff5e5e;
+  --red-light-1: #fffcfc;
+  --red-light-10: #ed4d50;
+  --red-light-10a: #e24347;
+  --red-light-11: #d3333a;
+  --red-light-12: #602121;
+  --red-light-2: #fff6f5;
+  --red-light-3: #ffebe9;
+  --red-light-4: #ffd9d6;
+  --red-light-5: #ffcac5;
+  --red-light-6: #ffbab4;
+  --red-light-7: #f9a7a1;
+  --red-light-8: #f08c87;
+  --red-light-9: #ff5e5e;
 }
 
 body {
@@ -123,4 +420,130 @@ div.prose.prose-sm.max-w-none p:last-child {
 
 .highlight-pulse {
   animation: highlight-pulse 2s ease-in-out infinite;
+}
+
+/* Print Styles for PDF Export */
+@media print {
+  /* Page setup: A4 landscape */
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  /* Keep background image for print */
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Hide non-printable elements */
+  .no-print,
+  header,
+  nav {
+    display: none !important;
+  }
+
+  /* Ensure colors print correctly */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Prevent page breaks - fit everything on one page */
+  * {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Canvas container - scale to fit one page */
+  main {
+    padding: 0 !important;
+  }
+
+  .max-w-7xl {
+    max-width: 100% !important;
+    padding: 0 !important;
+  }
+
+  /* Compact spacing */
+  .space-y-4 > * + * {
+    margin-top: 0.5rem !important;
+  }
+
+  .p-4 {
+    padding: 0.5rem !important;
+  }
+
+  .px-4 {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+
+  .py-4 {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+  }
+
+  .gap-4 {
+    gap: 0.5rem !important;
+  }
+
+  .mb-2, .mb-3, .mb-4 {
+    margin-bottom: 0.25rem !important;
+  }
+
+  /* Smaller text for print */
+  .text-4xl {
+    font-size: 1.25rem !important;
+    line-height: 1.2 !important;
+  }
+
+  .text-2xl {
+    font-size: 1rem !important;
+  }
+
+  .text-xl {
+    font-size: 0.9rem !important;
+  }
+
+  .text-lg {
+    font-size: 0.85rem !important;
+  }
+
+  .text-sm {
+    font-size: 0.7rem !important;
+  }
+
+  .text-xs {
+    font-size: 0.6rem !important;
+  }
+
+  /* Compact min-heights */
+  .min-h-\[100px\] {
+    min-height: 60px !important;
+  }
+
+  /* Fixed height for content blocks in print */
+  .h-\[300px\],
+  .min-h-\[300px\] {
+    height: 290px !important;
+    max-height: none !important;
+    overflow: hidden !important;
+  }
+
+  /* Timeline adjustments */
+  .h-40 {
+    height: 6rem !important;
+  }
+
+  /* Ensure shadows don't print weird */
+  .shadow-sm {
+    box-shadow: none !important;
+    border: 1px solid #e5e7eb !important;
+  }
+
+  /* Rounded corners slightly smaller */
+  .rounded-xl {
+    border-radius: 0.5rem !important;
+  }
 }

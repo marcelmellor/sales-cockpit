@@ -41,14 +41,14 @@ export function RoadmapTimeline() {
         <h3 className="font-medium text-xs text-gray-400 uppercase tracking-wide">Milestones</h3>
         <button
           onClick={() => setIsAdding(true)}
-          className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+          className="no-print p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
         >
           <Plus size={16} />
         </button>
       </div>
 
       {isAdding && (
-        <div className="flex items-center gap-3 mb-4 p-3 bg-gray-50 rounded-xl">
+        <div className="no-print flex items-center gap-3 mb-4 p-3 bg-gray-50 rounded-xl">
           <input
             type="text"
             value={newMilestone.title}
@@ -125,7 +125,7 @@ export function RoadmapTimeline() {
                   </span>
                   <button
                     onClick={() => removeMilestone(milestone.id)}
-                    className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-600 hover:text-red-600 transition-opacity"
+                    className="no-print opacity-0 group-hover:opacity-100 p-0.5 text-gray-600 hover:text-red-600 transition-opacity"
                   >
                     <X size={12} />
                   </button>
@@ -143,7 +143,8 @@ export function RoadmapTimeline() {
 
         {milestones.length === 0 && !isAdding && (
           <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-sm">
-            Keine Milestones definiert. Klicken Sie auf + um einen hinzuzufügen.
+            <span>Keine Milestones definiert.</span>
+            <span className="no-print">&nbsp;Klicken Sie auf + um einen hinzuzufügen.</span>
           </div>
         )}
       </div>

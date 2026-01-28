@@ -11,6 +11,7 @@ interface CanvasState {
   activeCell: string | null;
 
   setCanvasData: (data: CanvasData) => void;
+  clearCanvasData: () => void;
   updateField: (path: string, value: unknown) => void;
   addNextStep: (step: Omit<NextStep, 'id'>) => void;
   removeNextStep: (stepId: string) => void;
@@ -58,6 +59,13 @@ export const useCanvasStore = create<CanvasState>()(
       set((state) => {
         state.canvasData = data;
         state.originalData = JSON.parse(JSON.stringify(data));
+        state.error = null;
+      }),
+
+    clearCanvasData: () =>
+      set((state) => {
+        state.canvasData = null;
+        state.originalData = null;
         state.error = null;
       }),
 
