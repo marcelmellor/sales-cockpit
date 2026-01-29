@@ -92,7 +92,7 @@ export class HubSpotClient {
   }
 
   // Deals with company associations for overview
-  async getDealsWithAssociations(pipelineId: string) {
+  async getDealsWithAssociations(pipelineId: string, stageIds?: string[]) {
     const properties = [
       'dealname',
       'amount',
@@ -102,6 +102,13 @@ export class HubSpotClient {
       'deal_po',
       'createdate',
     ];
+
+    // Add hs_date_entered_* properties for each stage to track time in stage
+    if (stageIds) {
+      for (const stageId of stageIds) {
+        properties.push(`hs_date_entered_${stageId}`);
+      }
+    }
 
     const searchBody = {
       properties,

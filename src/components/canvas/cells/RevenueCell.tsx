@@ -52,7 +52,7 @@ export function RevenueCell() {
           </div>
         ) : (
           <>
-            <div className="text-4xl font-bold text-gray-900">
+            <div className="text-4xl font-bold text-gray-900 revenue-amount">
               ~{(Math.round(mrr / 10) * 10).toLocaleString('de-DE')} MRR
             </div>
             {seats > 0 && (

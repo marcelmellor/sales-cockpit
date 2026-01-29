@@ -74,10 +74,15 @@ export function DealCard({ deal, pipelineId, meetingsLoading, showAgentsMinuten 
     >
       <div className="flex items-center gap-4">
         {/* Company Name */}
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 flex items-center gap-2">
           <h4 className="font-medium text-gray-900 truncate group-hover:text-blue-600 transition-colors">
             {deal.companyName}
           </h4>
+          {deal.daysInStage >= 0 && deal.daysInStage < 2 && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 whitespace-nowrap">
+              New in Stage
+            </span>
+          )}
         </div>
 
         {/* Metrics */}

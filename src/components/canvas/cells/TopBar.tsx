@@ -27,7 +27,7 @@ export function TopBar() {
     <div className="px-5 py-4 flex items-center justify-between">
       {/* Links: Unternehmensname und Deal Stage */}
       <div className="flex items-center gap-3">
-        <h1 className="text-4xl text-gray-900" style={{ fontFamily: 'var(--font-headline)', fontWeight: 300 }}>
+        <h1 className="text-4xl text-gray-900 company-title" style={{ fontFamily: 'var(--font-headline)', fontWeight: 300 }}>
           {canvasData.topBar.companyName || 'Unbekanntes Unternehmen'}
         </h1>
         {canvasData.topBar.dealStage && stageColors && (

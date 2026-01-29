@@ -11,6 +11,7 @@ export interface DealOverviewItem {
   dealStage: string;
   dealStageId: string;
   dealAge: number; // Alter des Deals in Tagen
+  daysInStage: number; // Tage in aktueller Stage
   nextAppointment: {
     date: string;
     title: string;
@@ -78,8 +79,21 @@ export async function GET(request: Request) {
       );
     }
 
-    // Fetch deals with associations
-    const dealsWithAssociations = await client.getDealsWithAssociations(pipelineId);
+    // Extract stage IDs for fetching stage entry dates
+    const stageIds = pipeline.stages.map(s => s.id);
+    console.log('[DaysInStage] Stage IDs:', stageIds);
+
+    // Fetch deals with associations and stage entry dates
+    const dealsWithAssociations = await client.getDealsWithAssociations(pipelineId, stageIds);
+
+    // Debug: Log first deal's properties to see what HubSpot returns
+    if (dealsWithAssociations.results.length > 0) {
+      const firstDeal = dealsWithAssociations.results[0];
+      const hsDateProps = Object.entries(firstDeal.properties)
+        .filter(([key]) => key.startsWith('hs_date_entered'))
+        .reduce((acc, [k, v]) => ({ ...acc, [k]: v }), {});
+      console.log('[DaysInStage] First deal hs_date_entered_* properties:', hsDateProps);
+    }
 
     // Collect all company IDs
     const companyIds = new Set<string>();
@@ -110,6 +124,29 @@ export async function GET(request: Request) {
       return Math.floor(diffTime / (1000 * 60 * 60 * 24));
     };
 
+    // Helper to calculate days in current stage
+    // Returns -1 if no stage entry date is available (to distinguish from "0 days")
+    const calculateDaysInStage = (
+      dealstageId: string | undefined,
+      properties: Record<string, string>,
+      dealName?: string
+    ): number => {
+      if (!dealstageId) return -1;
+      const propertyKey = `hs_date_entered_${dealstageId}`;
+      const stageEnteredDate = properties[propertyKey];
+
+      // Debug logging
+      console.log(`[DaysInStage] Deal: ${dealName}, StageId: ${dealstageId}, Property: ${propertyKey}, Value: ${stageEnteredDate}`);
+
+      if (!stageEnteredDate) return -1;
+      const entered = new Date(stageEnteredDate);
+      const now = new Date();
+      const diffTime = now.getTime() - entered.getTime();
+      const days = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      console.log(`[DaysInStage] -> Calculated ${days} days in stage`);
+      return days;
+    };
+
     // Build the overview items (without meetings - those are loaded separately)
     const deals: DealOverviewItem[] = dealsWithAssociations.results.map((deal) => {
       const companyId = deal.associations?.companies?.results?.[0]?.id;
@@ -124,6 +161,7 @@ export async function GET(request: Request) {
         dealStage: pipeline.stages.find(s => s.id === deal.properties.dealstage)?.label || deal.properties.dealstage || 'Unknown',
         dealStageId: deal.properties.dealstage || '',
         dealAge: calculateDealAge(deal.properties.createdate),
+        daysInStage: calculateDaysInStage(deal.properties.dealstage, deal.properties, deal.properties.dealname),
         nextAppointment: null, // Loaded separately via /api/deals/overview/meetings
       };
     });

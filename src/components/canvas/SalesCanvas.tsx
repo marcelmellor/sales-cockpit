@@ -143,7 +143,8 @@ export function SalesCanvas({ onSave }: SalesCanvasProps) {
                         className="text-lg font-bold text-gray-900 cursor-default"
                         title={`${absolute}, ${time} Uhr`}
                       >
-                        {relative}
+                        <span className="print:hidden">{relative}</span>
+                        <span className="hidden print:inline">{absolute}, {time}</span>
                       </div>
                       <div className="text-xs text-gray-500 truncate" title={canvasData.header.nextAppointment.title}>
                         {canvasData.header.nextAppointment.title}
