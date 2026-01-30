@@ -2,17 +2,9 @@
 
 import { signOut, useSession } from 'next-auth/react';
 import { LogOut, User } from 'lucide-react';
-import { useEffect } from 'react';
 
 export function UserMenu() {
   const { data: session, status } = useSession();
-
-  // Handle token refresh errors
-  useEffect(() => {
-    if (session?.error === 'RefreshAccessTokenError') {
-      signOut({ callbackUrl: '/login?error=RefreshAccessTokenError' });
-    }
-  }, [session?.error]);
 
   if (status === 'loading') {
     return (
@@ -28,7 +20,7 @@ export function UserMenu() {
     <div className="flex items-center gap-3">
       <div className="flex items-center gap-2 text-sm text-gray-600">
         <User className="h-4 w-4" />
-        <span>{session.user?.email || 'HubSpot User'}</span>
+        <span>{session.user?.email || 'User'}</span>
       </div>
       <button
         onClick={() => signOut({ callbackUrl: '/login' })}

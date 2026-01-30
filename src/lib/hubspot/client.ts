@@ -1,5 +1,17 @@
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
 
+/**
+ * Creates a HubSpotClient using the private app token from environment variables.
+ * Throws if the token is not configured.
+ */
+export function getHubSpotClient(): HubSpotClient {
+  const token = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
+  if (!token) {
+    throw new Error('HUBSPOT_PRIVATE_APP_TOKEN is not configured');
+  }
+  return new HubSpotClient(token);
+}
+
 export class HubSpotClient {
   private accessToken: string;
 
@@ -92,7 +104,7 @@ export class HubSpotClient {
   }
 
   // Deals with company associations for overview
-  async getDealsWithAssociations(pipelineId: string, stageIds?: string[]) {
+  async getDealsWithAssociations(pipelineId: string) {
     const properties = [
       'dealname',
       'amount',
@@ -102,13 +114,6 @@ export class HubSpotClient {
       'deal_po',
       'createdate',
     ];
-
-    // Add hs_date_entered_* properties for each stage to track time in stage
-    if (stageIds) {
-      for (const stageId of stageIds) {
-        properties.push(`hs_date_entered_${stageId}`);
-      }
-    }
 
     const searchBody = {
       properties,
@@ -361,6 +366,21 @@ export class HubSpotClient {
         groupName: property.groupName || 'dealinformation',
       }),
     });
+  }
+
+  // Get deal stage history to determine when deal entered current stage
+  async getDealStageHistory(dealId: string) {
+    return this.request<{
+      id: string;
+      properties: Record<string, string>;
+      propertiesWithHistory: {
+        dealstage: Array<{
+          value: string;
+          timestamp: string;
+          sourceType: string;
+        }>;
+      };
+    }>(`/crm/v3/objects/deals/${dealId}?properties=dealstage&propertiesWithHistory=dealstage`);
   }
 }
 

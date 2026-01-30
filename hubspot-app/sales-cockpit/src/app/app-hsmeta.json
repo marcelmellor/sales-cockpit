@@ -1,0 +1,30 @@
+{
+  "uid": "sales_cockpit",
+  "type": "app",
+  "config": {
+    "name": "Sales Cockpit",
+    "description": "Internal sales dashboard for HubSpot deals",
+    "distribution": "private",
+    "auth": {
+      "type": "static",
+      "requiredScopes": [
+        "crm.objects.deals.read",
+        "crm.objects.deals.write",
+        "crm.objects.contacts.read",
+        "crm.objects.companies.read",
+        "crm.objects.owners.read",
+        "crm.schemas.deals.read"
+      ],
+      "optionalScopes": [],
+      "conditionallyRequiredScopes": []
+    },
+    "permittedUrls": {
+      "fetch": ["https://api.hubapi.com"],
+      "iframe": [],
+      "img": []
+    },
+    "support": {
+      "supportEmail": "support@sipgate.de"
+    }
+  }
+}

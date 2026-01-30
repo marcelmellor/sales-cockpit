@@ -22,6 +22,7 @@ interface DealStageGroupProps {
   };
   onSortChange: (field: SortField) => void;
   meetingsLoading?: boolean;
+  stageHistoryLoading?: boolean;
 }
 
 export function DealStageGroup({
@@ -32,6 +33,7 @@ export function DealStageGroup({
   sortConfig,
   onSortChange,
   meetingsLoading,
+  stageHistoryLoading,
 }: DealStageGroupProps) {
   const showAgentsMinuten = pipelineName === 'AI Agents';
   const [isExpanded, setIsExpanded] = useState(true);
@@ -115,7 +117,7 @@ export function DealStageGroup({
                     <SortableHeader field="agentsMinuten" label="Agents Min" className="min-w-[100px] justify-end" />
                   )}
                   <span className="text-xs text-gray-500 w-[120px]">PM</span>
-                  <SortableHeader field="dealAge" label="Alter" className="w-[80px] justify-end" />
+                  <span className="text-xs text-gray-500 w-[80px] text-right">In Stage</span>
                   <SortableHeader field="nextAppointment" label="Nächster Termin" className="min-w-[140px]" />
                   {/* Link indicator placeholder */}
                   <div className="w-4" />
@@ -130,6 +132,7 @@ export function DealStageGroup({
                     deal={deal}
                     pipelineId={pipelineId}
                     meetingsLoading={meetingsLoading}
+                    stageHistoryLoading={stageHistoryLoading}
                     showAgentsMinuten={showAgentsMinuten}
                   />
                 ))}

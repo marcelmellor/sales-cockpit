@@ -4,11 +4,12 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { ExternalLink, Loader2 } from 'lucide-react';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
+import { getStageColor } from '@/lib/stage-colors';
 
-function getDealAgeIcon(dealAge: number): { src: string; alt: string } {
-  if (dealAge <= 14) {
+function getStageAgeIcon(daysInStage: number): { src: string; alt: string } {
+  if (daysInStage <= 14) {
     return { src: '/tomato-fresh.svg', alt: 'Frisch' };
-  } else if (dealAge <= 45) {
+  } else if (daysInStage <= 45) {
     return { src: '/tomato-half-fresh.svg', alt: 'Halb frisch' };
   } else {
     return { src: '/tomato-rotten.svg', alt: 'Alt' };
@@ -53,11 +54,14 @@ interface DealCardProps {
   deal: DealOverviewItem;
   pipelineId: string;
   meetingsLoading?: boolean;
+  stageHistoryLoading?: boolean;
   showAgentsMinuten?: boolean;
+  showStage?: boolean;
 }
 
-export function DealCard({ deal, pipelineId, meetingsLoading, showAgentsMinuten }: DealCardProps) {
+export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoading, showAgentsMinuten, showStage }: DealCardProps) {
   const canvasUrl = `/?pipeline=${pipelineId}&deal=${deal.id}`;
+  const stageColors = showStage ? getStageColor(deal.dealStage) : null;
 
   const nextAppointmentDate = deal.nextAppointment?.date
     ? new Date(deal.nextAppointment.date)
@@ -74,16 +78,24 @@ export function DealCard({ deal, pipelineId, meetingsLoading, showAgentsMinuten 
     >
       <div className="flex items-center gap-4">
         {/* Company Name */}
-        <div className="flex-1 min-w-0 flex items-center gap-2">
+        <div className="flex-1 min-w-0">
           <h4 className="font-medium text-gray-900 truncate group-hover:text-blue-600 transition-colors">
             {deal.companyName}
           </h4>
-          {deal.daysInStage >= 0 && deal.daysInStage < 2 && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 whitespace-nowrap">
-              New in Stage
-            </span>
-          )}
         </div>
+
+        {/* Stage Tag */}
+        {showStage && stageColors && (
+          <div className="w-[140px]">
+            <span
+              className="inline-block px-2 py-0.5 text-xs font-medium rounded-full truncate max-w-full"
+              style={{ backgroundColor: stageColors.bg, color: stageColors.text }}
+              title={deal.dealStage}
+            >
+              {deal.dealStage}
+            </span>
+          </div>
+        )}
 
         {/* Metrics */}
         <div className="flex items-center gap-6 text-sm">
@@ -96,7 +108,9 @@ export function DealCard({ deal, pipelineId, meetingsLoading, showAgentsMinuten 
           {/* Agents Minuten */}
           {showAgentsMinuten && (
             <div className="min-w-[100px] text-right text-gray-900">
-              <span className="font-medium">{deal.agentsMinuten.toLocaleString('de-DE')}</span>
+              <span className={`font-medium ${deal.agentsMinuten === 0 ? 'text-gray-400' : ''}`}>
+                {deal.agentsMinuten === 0 ? '?' : deal.agentsMinuten.toLocaleString('de-DE')}
+              </span>
             </div>
           )}
 
@@ -105,12 +119,26 @@ export function DealCard({ deal, pipelineId, meetingsLoading, showAgentsMinuten 
             {deal.productManager || '—'}
           </div>
 
-          {/* Deal Age */}
-          <div className="w-[80px] flex justify-end" title={`${deal.dealAge} Tage`}>
-            {!deal.dealStage.toLowerCase().includes('abgeschlossen') && (
+          {/* Days in Stage (Tomato Icon) */}
+          <div
+            className="w-[80px] flex justify-end"
+            title={deal.daysInStage >= 0
+              ? `${deal.daysInStage} Tag${deal.daysInStage !== 1 ? 'e' : ''} in Stage\n${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`
+              : `${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`
+            }
+          >
+            {stageHistoryLoading ? (
+              <Loader2 className="h-7 w-7 animate-spin text-gray-300" />
+            ) : !deal.dealStage.toLowerCase().includes('abgeschlossen') && (
               <Image
-                src={getDealAgeIcon(deal.dealAge).src}
-                alt={getDealAgeIcon(deal.dealAge).alt}
+                src={deal.daysInStage >= 0
+                  ? getStageAgeIcon(deal.daysInStage).src
+                  : '/tomato-fresh.svg'
+                }
+                alt={deal.daysInStage >= 0
+                  ? getStageAgeIcon(deal.daysInStage).alt
+                  : 'Unbekannt'
+                }
                 width={28}
                 height={28}
               />

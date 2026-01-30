@@ -1,22 +1,15 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
-import { HubSpotClient } from '@/lib/hubspot/client';
+import { getHubSpotClient } from '@/lib/hubspot/client';
 import type { DealMeetingsMap } from '../route';
 
 export async function GET(request: Request) {
   try {
     const session = await auth();
 
-    if (!session?.accessToken) {
+    if (!session) {
       return NextResponse.json(
         { error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    if (session.error === 'RefreshAccessTokenError') {
-      return NextResponse.json(
-        { error: 'Session expired', code: 'REFRESH_ERROR' },
         { status: 401 }
       );
     }
@@ -39,7 +32,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const client = new HubSpotClient(session.accessToken);
+    const client = getHubSpotClient();
     const now = new Date();
 
     // Fetch meetings sequentially to avoid rate limits

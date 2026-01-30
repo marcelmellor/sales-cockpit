@@ -7,9 +7,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { UserMenu } from '@/components/UserMenu';
 import { Autosuggest } from '@/components/ui/Autosuggest';
 import { DealStageGroup } from '@/components/pipeline/DealStageGroup';
-import { Loader2, LayoutGrid, RefreshCw } from 'lucide-react';
+import { DealListView } from '@/components/pipeline/DealListView';
+import { Loader2, LayoutGrid, RefreshCw, List } from 'lucide-react';
 import Link from 'next/link';
 import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
+import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
 
 interface Pipeline {
@@ -23,6 +25,7 @@ interface Pipeline {
 
 export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'nextAppointment';
 export type SortDirection = 'asc' | 'desc';
+export type ViewMode = 'stages' | 'list';
 
 export default function PipelineOverview() {
   return (
@@ -44,6 +47,8 @@ function PipelineOverviewContent() {
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
+  const [viewMode, setViewMode] = useState<ViewMode>('stages');
+  const [listSortConfig, setListSortConfig] = useState<{ field: SortField; direction: SortDirection }>({ field: 'revenue', direction: 'desc' });
 
   // Initialize from URL params
   useEffect(() => {
@@ -124,14 +129,39 @@ function PipelineOverviewContent() {
     initialData: cachedMeetings ?? undefined,
   });
 
-  // Merge meetings into deals
+  // Get cached stage history data
+  const cachedStageHistory = useMemo(
+    () => selectedPipelineId ? getCachedData<DealStageHistoryMap>(`stage-history-${selectedPipelineId}`) : null,
+    [selectedPipelineId]
+  );
+
+  // Fetch stage history separately (slower - sequential API calls)
+  const { data: stageHistoryData, isLoading: stageHistoryLoading, isFetching: stageHistoryFetching } = useQuery({
+    queryKey: ['pipeline-stage-history', selectedPipelineId, dealIds.join(',')],
+    queryFn: async () => {
+      if (dealIds.length === 0) return {} as DealStageHistoryMap;
+      const response = await fetch(`/api/deals/overview/stage-history?dealIds=${dealIds.join(',')}`);
+      if (!response.ok) throw new Error('Failed to fetch stage history');
+      const data = await response.json();
+      const result = data.data as DealStageHistoryMap;
+      // Save to localStorage cache
+      setCachedData(`stage-history-${selectedPipelineId}`, result);
+      return result;
+    },
+    enabled: isAuthenticated && dealIds.length > 0,
+    staleTime: 5 * 60 * 1000, // 5 minutes cache
+    initialData: cachedStageHistory ?? undefined,
+  });
+
+  // Merge meetings and stage history into deals
   const dealsWithMeetings: DealOverviewItem[] = useMemo(() => {
     if (!overviewData?.deals) return [];
     return overviewData.deals.map(deal => ({
       ...deal,
       nextAppointment: meetingsData?.[deal.id] || null,
+      daysInStage: stageHistoryData?.[deal.id]?.daysInStage ?? -1,
     }));
-  }, [overviewData?.deals, meetingsData]);
+  }, [overviewData?.deals, meetingsData, stageHistoryData]);
 
   // Refresh all data (clears localStorage cache and React Query cache)
   const handleRefresh = () => {
@@ -140,7 +170,11 @@ function PipelineOverviewContent() {
     }
     queryClient.invalidateQueries({ queryKey: ['pipeline-overview', selectedPipelineId] });
     queryClient.invalidateQueries({ queryKey: ['pipeline-meetings', selectedPipelineId] });
+    queryClient.invalidateQueries({ queryKey: ['pipeline-stage-history', selectedPipelineId] });
   };
+
+  // Combined loading state for secondary data
+  const secondaryDataLoading = meetingsFetching || stageHistoryFetching;
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -197,8 +231,8 @@ function PipelineOverviewContent() {
   };
 
   const sortDeals = (deals: DealOverviewItem[], stageId: string): DealOverviewItem[] => {
-    const sortConfig = sortByStage[stageId];
-    if (!sortConfig) return deals;
+    // Default: sort by revenue descending
+    const sortConfig = sortByStage[stageId] || { field: 'revenue' as SortField, direction: 'desc' as SortDirection };
 
     return [...deals].sort((a, b) => {
       const { field, direction } = sortConfig;
@@ -228,6 +262,44 @@ function PipelineOverviewContent() {
       stage.id
     ),
   })) || [];
+
+  // Filter open deals (exclude closed/won stages) and sort for list view
+  const openDeals = useMemo(() => {
+    const filtered = dealsWithMeetings.filter(deal =>
+      !deal.dealStage.toLowerCase().includes('abgeschlossen') &&
+      !deal.dealStage.toLowerCase().includes('closed')
+    );
+
+    // Sort by listSortConfig
+    return [...filtered].sort((a, b) => {
+      const { field, direction } = listSortConfig;
+      let comparison = 0;
+
+      if (field === 'revenue') {
+        comparison = a.revenue - b.revenue;
+      } else if (field === 'agentsMinuten') {
+        comparison = a.agentsMinuten - b.agentsMinuten;
+      } else if (field === 'dealAge') {
+        comparison = a.dealAge - b.dealAge;
+      } else if (field === 'nextAppointment') {
+        const aDate = a.nextAppointment?.date ? new Date(a.nextAppointment.date).getTime() : Infinity;
+        const bDate = b.nextAppointment?.date ? new Date(b.nextAppointment.date).getTime() : Infinity;
+        comparison = aDate - bDate;
+      }
+
+      return direction === 'asc' ? comparison : -comparison;
+    });
+  }, [dealsWithMeetings, listSortConfig]);
+
+  // Handler for list view sort
+  const handleListSortChange = (field: SortField) => {
+    setListSortConfig(prev => {
+      if (prev.field === field) {
+        return { field, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { field, direction: field === 'nextAppointment' ? 'asc' : 'desc' };
+    });
+  };
 
   if (status === 'loading') {
     return (
@@ -280,10 +352,40 @@ function PipelineOverviewContent() {
               className="min-w-[200px]"
             />
 
-            {(overviewLoading || meetingsFetching) && (
+            {/* View Mode Toggle */}
+            {selectedPipelineId && (
+              <div className="flex items-center bg-gray-100 rounded-md p-0.5">
+                <button
+                  onClick={() => setViewMode('stages')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${
+                    viewMode === 'stages'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  title="Nach Stages gruppiert"
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                  Stages
+                </button>
+                <button
+                  onClick={() => setViewMode('list')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${
+                    viewMode === 'list'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  title="Offene Deals als Liste"
+                >
+                  <List className="h-4 w-4" />
+                  Offen
+                </button>
+              </div>
+            )}
+
+            {(overviewLoading || secondaryDataLoading) && (
               <div className="flex items-center gap-2 text-sm text-gray-500">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                {meetingsFetching && !overviewLoading ? 'Termine laden...' : 'Laden...'}
+                {secondaryDataLoading && !overviewLoading ? 'Termine laden...' : 'Laden...'}
               </div>
             )}
           </div>
@@ -340,38 +442,52 @@ function PipelineOverviewContent() {
                 </h1>
                 <p className="text-gray-500 mt-1">
                   {dealsWithMeetings.length} Deal{dealsWithMeetings.length !== 1 ? 's' : ''} in {overviewData?.stages.length} Stages
-                  {meetingsLoading && (
+                  {(meetingsLoading || stageHistoryLoading) && (
                     <span className="ml-2 text-blue-500">
                       <Loader2 className="h-3 w-3 animate-spin inline mr-1" />
-                      Termine werden geladen...
+                      {stageHistoryLoading ? 'Stage-Daten werden geladen...' : 'Termine werden geladen...'}
                     </span>
                   )}
                 </p>
               </div>
               <button
                 onClick={handleRefresh}
-                disabled={overviewLoading || meetingsFetching}
+                disabled={overviewLoading || secondaryDataLoading}
                 className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Daten neu laden"
               >
-                <RefreshCw className={`h-4 w-4 ${meetingsFetching || overviewLoading ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`h-4 w-4 ${secondaryDataLoading || overviewLoading ? 'animate-spin' : ''}`} />
                 Aktualisieren
               </button>
             </div>
 
-            {/* Stage Groups */}
-            {dealsByStage.map(({ stage, deals }) => (
-              <DealStageGroup
-                key={stage.id}
-                stage={stage}
-                deals={deals}
+            {/* View Content */}
+            {viewMode === 'stages' ? (
+              /* Stage Groups */
+              dealsByStage.map(({ stage, deals }) => (
+                <DealStageGroup
+                  key={stage.id}
+                  stage={stage}
+                  deals={deals}
+                  pipelineId={selectedPipelineId}
+                  pipelineName={overviewData?.pipelineName}
+                  sortConfig={sortByStage[stage.id]}
+                  onSortChange={(field) => handleSortChange(stage.id, field)}
+                  meetingsLoading={meetingsLoading}
+                  stageHistoryLoading={stageHistoryLoading}
+                />
+              ))
+            ) : (
+              /* Open Deals List */
+              <DealListView
+                deals={openDeals}
                 pipelineId={selectedPipelineId}
-                pipelineName={overviewData?.pipelineName}
-                sortConfig={sortByStage[stage.id]}
-                onSortChange={(field) => handleSortChange(stage.id, field)}
+                sortConfig={listSortConfig}
+                onSortChange={handleListSortChange}
                 meetingsLoading={meetingsLoading}
+                stageHistoryLoading={stageHistoryLoading}
               />
-            ))}
+            )}
           </div>
         )}
       </main>

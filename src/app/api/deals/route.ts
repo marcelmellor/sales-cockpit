@@ -1,21 +1,14 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
-import { HubSpotClient } from '@/lib/hubspot/client';
+import { getHubSpotClient } from '@/lib/hubspot/client';
 
 export async function GET(request: Request) {
   try {
     const session = await auth();
 
-    if (!session?.accessToken) {
+    if (!session) {
       return NextResponse.json(
         { error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    if (session.error === 'RefreshAccessTokenError') {
-      return NextResponse.json(
-        { error: 'Session expired', code: 'REFRESH_ERROR' },
         { status: 401 }
       );
     }
@@ -23,7 +16,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const pipelineId = searchParams.get('pipelineId') || undefined;
 
-    const client = new HubSpotClient(session.accessToken);
+    const client = getHubSpotClient();
     const deals = await client.getDeals(pipelineId);
 
     return NextResponse.json({
