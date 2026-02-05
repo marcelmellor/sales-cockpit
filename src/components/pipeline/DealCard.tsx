@@ -6,6 +6,12 @@ import { ExternalLink, Loader2 } from 'lucide-react';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import { getStageColor } from '@/lib/stage-colors';
 
+const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
+
+function getHubSpotDealUrl(dealId: string): string {
+  return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-3/${dealId}`;
+}
+
 function getStageAgeIcon(daysInStage: number): { src: string; alt: string } {
   if (daysInStage <= 14) {
     return { src: '/tomato-fresh.svg', alt: 'Frisch' };
@@ -50,6 +56,36 @@ function formatRelativeDate(date: Date): { relative: string; absolute: string } 
   return { relative, absolute };
 }
 
+function isLostDeal(dealStage: string): boolean {
+  const lostKeywords = ['verloren', 'lost', 'abgesagt', 'cancelled', 'storniert'];
+  const normalizedStage = dealStage.toLowerCase();
+  return lostKeywords.some(keyword => normalizedStage.includes(keyword));
+}
+
+function isWonDeal(dealStage: string): boolean {
+  const wonKeywords = ['gewonnen', 'won', 'closed won'];
+  const normalizedStage = dealStage.toLowerCase();
+  return wonKeywords.some(keyword => normalizedStage.includes(keyword));
+}
+
+function getDaysSinceLost(stageEnteredAt: string | null, closedate: string | null): number | null {
+  // Use stageEnteredAt first (when deal entered lost stage), fallback to closedate
+  const dateToUse = stageEnteredAt || closedate;
+  if (!dateToUse) return null;
+
+  const closedDate = new Date(dateToUse);
+  const now = new Date();
+
+  // Reset time for day comparison
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const closedDay = new Date(closedDate.getFullYear(), closedDate.getMonth(), closedDate.getDate());
+
+  const diffTime = today.getTime() - closedDay.getTime();
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+  return diffDays;
+}
+
 interface DealCardProps {
   deal: DealOverviewItem;
   pipelineId: string;
@@ -71,6 +107,19 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
     ? nextAppointmentDate.getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000
     : false;
 
+  // Check if deal is lost and recently lost
+  const isDealLost = isLostDeal(deal.dealStage);
+  const daysSinceLost = isDealLost ? getDaysSinceLost(deal.stageEnteredAt, deal.closedate) : null;
+  const showLostBadge = isDealLost && daysSinceLost !== null && daysSinceLost >= 0 && daysSinceLost < 10;
+
+  // Check if deal is won and recently won
+  const isDealWon = isWonDeal(deal.dealStage);
+  const daysSinceWon = isDealWon ? getDaysSinceLost(deal.stageEnteredAt, deal.closedate) : null;
+  const showWonBadge = isDealWon && daysSinceWon !== null && daysSinceWon >= 0 && daysSinceWon < 10;
+
+  // Check if deal is new in current stage (less than 2 days)
+  const isNewInStage = !isDealLost && !isDealWon && deal.daysInStage >= 0 && deal.daysInStage < 2;
+
   return (
     <Link
       href={canvasUrl}
@@ -78,11 +127,52 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
     >
       <div className="flex items-center gap-4">
         {/* Company Name */}
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 flex items-center gap-2">
           <h4 className="font-medium text-gray-900 truncate group-hover:text-blue-600 transition-colors">
             {deal.companyName}
           </h4>
+          {HUBSPOT_PORTAL_ID && (
+            <a
+              href={getHubSpotDealUrl(deal.id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="shrink-0 text-orange-400 hover:text-orange-600 transition-colors opacity-0 group-hover:opacity-100"
+              title="In HubSpot öffnen"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M17.1 11.3V8.4c.6-.3 1-1 1-1.7 0-1.1-.9-2-2-2s-2 .9-2 2c0 .7.4 1.4 1 1.7v2.9c-1.2.2-2.3.8-3.1 1.6l-5.4-4.2c.1-.2.1-.4.1-.6 0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2c.4 0 .7-.1 1-.3l5.3 4.1c-.4.8-.6 1.7-.6 2.6 0 3.2 2.6 5.8 5.8 5.8s5.8-2.6 5.8-5.8c0-2.8-2-5.2-4.7-5.8l-.2.3zm-.9 9.1c-2 0-3.6-1.6-3.6-3.6s1.6-3.6 3.6-3.6 3.6 1.6 3.6 3.6-1.6 3.6-3.6 3.6z"/>
+              </svg>
+            </a>
+          )}
         </div>
+
+        {/* Lost Badge */}
+        {showLostBadge && daysSinceLost !== null && (
+          <div className="shrink-0">
+            <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-red-100 text-red-800 border border-red-200">
+              Vor {daysSinceLost} Tag{daysSinceLost !== 1 ? 'en' : ''} verloren
+            </span>
+          </div>
+        )}
+
+        {/* Won Badge */}
+        {showWonBadge && daysSinceWon !== null && (
+          <div className="shrink-0">
+            <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-green-100 text-green-800 border border-green-200">
+              Vor {daysSinceWon} Tag{daysSinceWon !== 1 ? 'en' : ''} gewonnen
+            </span>
+          </div>
+        )}
+
+        {/* New in Stage Badge */}
+        {isNewInStage && (
+          <div className="shrink-0">
+            <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-blue-100 text-blue-800 border border-blue-200">
+              Neu in Stage
+            </span>
+          </div>
+        )}
 
         {/* Stage Tag */}
         {showStage && stageColors && (

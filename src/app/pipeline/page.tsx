@@ -160,6 +160,7 @@ function PipelineOverviewContent() {
       ...deal,
       nextAppointment: meetingsData?.[deal.id] || null,
       daysInStage: stageHistoryData?.[deal.id]?.daysInStage ?? -1,
+      stageEnteredAt: stageHistoryData?.[deal.id]?.stageEnteredAt ?? null,
     }));
   }, [overviewData?.deals, meetingsData, stageHistoryData]);
 
@@ -254,8 +255,29 @@ function PipelineOverviewContent() {
     });
   };
 
+  // Reorder stages: swap "Verloren" and "Gewonnen" (Gewonnen should come before Verloren)
+  const reorderedStages = useMemo(() => {
+    if (!overviewData?.stages) return [];
+    const stages = [...overviewData.stages];
+
+    // Find the indices of "verloren" and "gewonnen" stages
+    const verlorenIndex = stages.findIndex(s =>
+      s.label.toLowerCase().includes('verloren') || s.label.toLowerCase().includes('lost')
+    );
+    const gewonnenIndex = stages.findIndex(s =>
+      s.label.toLowerCase().includes('gewonnen') || s.label.toLowerCase().includes('won')
+    );
+
+    // If both exist and verloren comes before gewonnen, swap them
+    if (verlorenIndex !== -1 && gewonnenIndex !== -1 && verlorenIndex < gewonnenIndex) {
+      [stages[verlorenIndex], stages[gewonnenIndex]] = [stages[gewonnenIndex], stages[verlorenIndex]];
+    }
+
+    return stages;
+  }, [overviewData?.stages]);
+
   // Group deals by stage (using dealsWithMeetings)
-  const dealsByStage = overviewData?.stages.map(stage => ({
+  const dealsByStage = reorderedStages.map(stage => ({
     stage,
     deals: sortDeals(
       dealsWithMeetings.filter(deal => deal.dealStageId === stage.id),

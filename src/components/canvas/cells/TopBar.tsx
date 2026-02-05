@@ -1,8 +1,15 @@
 'use client';
 
 import Image from 'next/image';
+import { ExternalLink } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvas-store';
 import { getStageColor } from '@/lib/stage-colors';
+
+const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
+
+function getHubSpotDealUrl(dealId: string): string {
+  return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-3/${dealId}`;
+}
 
 function getDealAgeIcon(dealAge: number): { src: string; alt: string } {
   if (dealAge <= 14) {
@@ -30,6 +37,17 @@ export function TopBar() {
         <h1 className="text-4xl text-gray-900 company-title" style={{ fontFamily: 'var(--font-headline)', fontWeight: 300 }}>
           {canvasData.topBar.companyName || 'Unbekanntes Unternehmen'}
         </h1>
+        {HUBSPOT_PORTAL_ID && canvasData.dealId && (
+          <a
+            href={getHubSpotDealUrl(canvasData.dealId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-orange-400 hover:text-orange-600 transition-colors"
+            title="In HubSpot öffnen"
+          >
+            <ExternalLink className="h-5 w-5" />
+          </a>
+        )}
         {canvasData.topBar.dealStage && stageColors && (
           <span
             className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"

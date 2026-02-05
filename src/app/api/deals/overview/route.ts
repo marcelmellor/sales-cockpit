@@ -12,6 +12,8 @@ export interface DealOverviewItem {
   dealStageId: string;
   dealAge: number; // Alter des Deals in Tagen
   daysInStage: number; // Tage in aktueller Stage
+  stageEnteredAt: string | null; // Datum, an dem der Deal in die aktuelle Stage verschoben wurde
+  closedate: string | null; // Datum, an dem der Deal geschlossen wurde
   nextAppointment: {
     date: string;
     title: string;
@@ -119,6 +121,8 @@ export async function GET(request: Request) {
         dealStageId: deal.properties.dealstage || '',
         dealAge: calculateDealAge(deal.properties.createdate),
         daysInStage: -1, // Loaded separately via /api/deals/overview/stage-history
+        stageEnteredAt: null, // Loaded separately via /api/deals/overview/stage-history
+        closedate: deal.properties.closedate || null,
         nextAppointment: null, // Loaded separately via /api/deals/overview/meetings
       };
     });

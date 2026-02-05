@@ -113,6 +113,7 @@ export class HubSpotClient {
       'agents_minuten',
       'deal_po',
       'createdate',
+      'closedate',
     ];
 
     const searchBody = {
