@@ -23,7 +23,7 @@ interface Pipeline {
   }>;
 }
 
-export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'nextAppointment';
+export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
 export type ViewMode = 'stages' | 'list';
 
@@ -249,6 +249,10 @@ function PipelineOverviewContent() {
         const aDate = a.nextAppointment?.date ? new Date(a.nextAppointment.date).getTime() : Infinity;
         const bDate = b.nextAppointment?.date ? new Date(b.nextAppointment.date).getTime() : Infinity;
         comparison = aDate - bDate;
+      } else if (field === 'closedDate') {
+        const aDate = a.stageEnteredAt ? new Date(a.stageEnteredAt).getTime() : (a.closedate ? new Date(a.closedate).getTime() : Infinity);
+        const bDate = b.stageEnteredAt ? new Date(b.stageEnteredAt).getTime() : (b.closedate ? new Date(b.closedate).getTime() : Infinity);
+        comparison = aDate - bDate;
       }
 
       return direction === 'asc' ? comparison : -comparison;
@@ -276,14 +280,26 @@ function PipelineOverviewContent() {
     return stages;
   }, [overviewData?.stages]);
 
+  // Helper to check if stage is closed (won or lost)
+  const isClosedStage = (label: string): boolean => {
+    const closedKeywords = ['verloren', 'lost', 'gewonnen', 'won', 'abgesagt', 'cancelled', 'storniert'];
+    return closedKeywords.some(keyword => label.toLowerCase().includes(keyword));
+  };
+
   // Group deals by stage (using dealsWithMeetings)
-  const dealsByStage = reorderedStages.map(stage => ({
-    stage,
-    deals: sortDeals(
+  // Limit closed stages (won/lost) to 20 deals
+  const dealsByStage = reorderedStages.map(stage => {
+    const sortedDeals = sortDeals(
       dealsWithMeetings.filter(deal => deal.dealStageId === stage.id),
       stage.id
-    ),
-  })) || [];
+    );
+    const isClosed = isClosedStage(stage.label);
+    return {
+      stage,
+      deals: isClosed ? sortedDeals.slice(0, 20) : sortedDeals,
+      totalCount: sortedDeals.length,
+    };
+  }) || [];
 
   // Filter open deals (exclude closed/won stages) and sort for list view
   const openDeals = useMemo(() => {
@@ -486,11 +502,12 @@ function PipelineOverviewContent() {
             {/* View Content */}
             {viewMode === 'stages' ? (
               /* Stage Groups */
-              dealsByStage.map(({ stage, deals }) => (
+              dealsByStage.map(({ stage, deals, totalCount }) => (
                 <DealStageGroup
                   key={stage.id}
                   stage={stage}
                   deals={deals}
+                  totalCount={totalCount}
                   pipelineId={selectedPipelineId}
                   pipelineName={overviewData?.pipelineName}
                   sortConfig={sortByStage[stage.id]}

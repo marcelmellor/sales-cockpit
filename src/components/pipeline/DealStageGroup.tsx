@@ -14,6 +14,7 @@ interface DealStageGroupProps {
     probability: number;
   };
   deals: DealOverviewItem[];
+  totalCount?: number; // Total deals in stage (before limiting)
   pipelineId: string;
   pipelineName?: string;
   sortConfig?: {
@@ -25,9 +26,20 @@ interface DealStageGroupProps {
   stageHistoryLoading?: boolean;
 }
 
+function isLostStage(label: string): boolean {
+  const lostKeywords = ['verloren', 'lost', 'abgesagt', 'cancelled', 'storniert'];
+  return lostKeywords.some(keyword => label.toLowerCase().includes(keyword));
+}
+
+function isWonStage(label: string): boolean {
+  const wonKeywords = ['gewonnen', 'won', 'closed won'];
+  return wonKeywords.some(keyword => label.toLowerCase().includes(keyword));
+}
+
 export function DealStageGroup({
   stage,
   deals,
+  totalCount,
   pipelineId,
   pipelineName,
   sortConfig,
@@ -38,6 +50,10 @@ export function DealStageGroup({
   const showAgentsMinuten = pipelineName === 'AI Agents';
   const [isExpanded, setIsExpanded] = useState(true);
   const stageColors = getStageColor(stage.label);
+
+  const isLost = isLostStage(stage.label);
+  const isWon = isWonStage(stage.label);
+  const showClosedDate = isLost || isWon;
 
   const totalRevenue = deals.reduce((sum, deal) => sum + deal.revenue, 0);
   const weightedRevenue = totalRevenue * stage.probability;
@@ -86,7 +102,7 @@ export function DealStageGroup({
             className="px-2 py-0.5 text-sm rounded-full"
             style={{ backgroundColor: stageColors.bg, color: stageColors.text }}
           >
-            {deals.length}
+            {totalCount && totalCount > deals.length ? `${deals.length} von ${totalCount}` : deals.length}
           </span>
         </div>
 
@@ -117,8 +133,18 @@ export function DealStageGroup({
                     <SortableHeader field="agentsMinuten" label="Agents Min" className="min-w-[100px] justify-end" />
                   )}
                   <span className="text-xs text-gray-500 w-[120px]">PM</span>
-                  <span className="text-xs text-gray-500 w-[80px] text-right">In Stage</span>
-                  <SortableHeader field="nextAppointment" label="Nächster Termin" className="min-w-[140px]" />
+                  {showClosedDate ? (
+                    <SortableHeader
+                      field="closedDate"
+                      label={isLost ? 'Verloren am' : 'Gewonnen am'}
+                      className="w-[100px] justify-end"
+                    />
+                  ) : (
+                    <>
+                      <span className="text-xs text-gray-500 w-[80px] text-right">In Stage</span>
+                      <SortableHeader field="nextAppointment" label="Nächster Termin" className="min-w-[140px]" />
+                    </>
+                  )}
                   {/* Link indicator placeholder */}
                   <div className="w-4" />
                 </div>
@@ -134,6 +160,8 @@ export function DealStageGroup({
                     meetingsLoading={meetingsLoading}
                     stageHistoryLoading={stageHistoryLoading}
                     showAgentsMinuten={showAgentsMinuten}
+                    showClosedDate={showClosedDate}
+                    closedDateLabel={isLost ? 'verloren' : 'gewonnen'}
                   />
                 ))}
               </div>

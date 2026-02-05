@@ -93,9 +93,18 @@ interface DealCardProps {
   stageHistoryLoading?: boolean;
   showAgentsMinuten?: boolean;
   showStage?: boolean;
+  showClosedDate?: boolean;
+  closedDateLabel?: 'verloren' | 'gewonnen';
 }
 
-export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoading, showAgentsMinuten, showStage }: DealCardProps) {
+function formatClosedDate(stageEnteredAt: string | null, closedate: string | null): string | null {
+  const dateToUse = stageEnteredAt || closedate;
+  if (!dateToUse) return null;
+  const date = new Date(dateToUse);
+  return date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoading, showAgentsMinuten, showStage, showClosedDate, closedDateLabel }: DealCardProps) {
   const canvasUrl = `/?pipeline=${pipelineId}&deal=${deal.id}`;
   const stageColors = showStage ? getStageColor(deal.dealStage) : null;
 
@@ -132,18 +141,20 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
             {deal.companyName}
           </h4>
           {HUBSPOT_PORTAL_ID && (
-            <a
-              href={getHubSpotDealUrl(deal.id)}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                window.open(getHubSpotDealUrl(deal.id), '_blank', 'noopener,noreferrer');
+              }}
               className="shrink-0 text-orange-400 hover:text-orange-600 transition-colors opacity-0 group-hover:opacity-100"
               title="In HubSpot öffnen"
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M17.1 11.3V8.4c.6-.3 1-1 1-1.7 0-1.1-.9-2-2-2s-2 .9-2 2c0 .7.4 1.4 1 1.7v2.9c-1.2.2-2.3.8-3.1 1.6l-5.4-4.2c.1-.2.1-.4.1-.6 0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2c.4 0 .7-.1 1-.3l5.3 4.1c-.4.8-.6 1.7-.6 2.6 0 3.2 2.6 5.8 5.8 5.8s5.8-2.6 5.8-5.8c0-2.8-2-5.2-4.7-5.8l-.2.3zm-.9 9.1c-2 0-3.6-1.6-3.6-3.6s1.6-3.6 3.6-3.6 3.6 1.6 3.6 3.6-1.6 3.6-3.6 3.6z"/>
               </svg>
-            </a>
+            </button>
           )}
         </div>
 
@@ -209,55 +220,68 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
             {deal.productManager || '—'}
           </div>
 
-          {/* Days in Stage (Tomato Icon) */}
-          <div
-            className="w-[80px] flex justify-end"
-            title={deal.daysInStage >= 0
-              ? `${deal.daysInStage} Tag${deal.daysInStage !== 1 ? 'e' : ''} in Stage\n${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`
-              : `${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`
-            }
-          >
-            {stageHistoryLoading ? (
-              <Loader2 className="h-7 w-7 animate-spin text-gray-300" />
-            ) : !deal.dealStage.toLowerCase().includes('abgeschlossen') && (
-              <Image
-                src={deal.daysInStage >= 0
-                  ? getStageAgeIcon(deal.daysInStage).src
-                  : '/tomato-fresh.svg'
+          {showClosedDate ? (
+            /* Closed Date (Verloren am / Gewonnen am) */
+            <div className="w-[100px] text-right text-gray-600">
+              {stageHistoryLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin text-gray-300 ml-auto" />
+              ) : (
+                <span>{formatClosedDate(deal.stageEnteredAt, deal.closedate) || '—'}</span>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Days in Stage (Tomato Icon) */}
+              <div
+                className="w-[80px] flex justify-end"
+                title={deal.daysInStage >= 0
+                  ? `${deal.daysInStage} Tag${deal.daysInStage !== 1 ? 'e' : ''} in Stage\n${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`
+                  : `${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`
                 }
-                alt={deal.daysInStage >= 0
-                  ? getStageAgeIcon(deal.daysInStage).alt
-                  : 'Unbekannt'
-                }
-                width={28}
-                height={28}
-              />
-            )}
-          </div>
+              >
+                {stageHistoryLoading ? (
+                  <Loader2 className="h-7 w-7 animate-spin text-gray-300" />
+                ) : !deal.dealStage.toLowerCase().includes('abgeschlossen') && (
+                  <Image
+                    src={deal.daysInStage >= 0
+                      ? getStageAgeIcon(deal.daysInStage).src
+                      : '/tomato-fresh.svg'
+                    }
+                    alt={deal.daysInStage >= 0
+                      ? getStageAgeIcon(deal.daysInStage).alt
+                      : 'Unbekannt'
+                    }
+                    width={28}
+                    height={28}
+                  />
+                )}
+              </div>
 
-          {/* Next Appointment */}
-          <div className={`min-w-[140px] ${
-            nextAppointmentDate
-              ? isAppointmentSoon
-                ? 'text-amber-600'
-                : 'text-gray-900'
-              : 'text-gray-400'
-          }`}>
-            {meetingsLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin text-gray-300" />
-            ) : nextAppointmentDate ? (
-              (() => {
-                const { relative, absolute } = formatRelativeDate(nextAppointmentDate);
-                return (
-                  <span className="font-medium cursor-default" title={absolute}>
-                    {relative}
-                  </span>
-                );
-              })()
-            ) : (
-              <span>—</span>
-            )}
-          </div>
+              {/* Next Appointment */}
+              <div className={`min-w-[140px] ${
+                nextAppointmentDate
+                  ? isAppointmentSoon
+                    ? 'text-amber-600'
+                    : 'text-gray-900'
+                  : 'text-gray-400'
+              }`}>
+                {meetingsLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-gray-300" />
+                ) : nextAppointmentDate ? (
+                  (() => {
+                    const { relative, absolute } = formatRelativeDate(nextAppointmentDate);
+                    return (
+                      <span className="font-medium cursor-default" title={absolute}>
+                        {relative}
+                      </span>
+                    );
+                  })()
+                ) : (
+                  <span>—</span>
+                )}
+              </div>
+            </>
+          )}
 
           {/* Link indicator */}
           <ExternalLink className="h-4 w-4 text-gray-300 group-hover:text-blue-500 transition-colors" />

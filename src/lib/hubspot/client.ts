@@ -72,35 +72,62 @@ export class HubSpotClient {
       'canvas_next_appointment',
     ];
 
-    // Use Search API for filtering - GET endpoint doesn't support filterGroups
-    const searchBody: {
-      properties: string[];
-      filterGroups?: Array<{ filters: Array<{ propertyName: string; operator: string; value: string }> }>;
-      limit: number;
-    } = {
-      properties,
-      limit: 100,
-    };
+    // Fetch all deals with pagination (HubSpot search API returns max 100 per request)
+    let allDeals: Array<{
+      id: string;
+      properties: Record<string, string>;
+      associations?: {
+        contacts?: { results: Array<{ id: string; type: string }> };
+        companies?: { results: Array<{ id: string; type: string }> };
+      };
+    }> = [];
+    let after: string | undefined;
 
-    if (pipelineId) {
-      searchBody.filterGroups = [{
-        filters: [{ propertyName: 'pipeline', operator: 'EQ', value: pipelineId }]
-      }];
-    }
+    do {
+      const searchBody: {
+        properties: string[];
+        filterGroups?: Array<{ filters: Array<{ propertyName: string; operator: string; value: string }> }>;
+        limit: number;
+        after?: string;
+      } = {
+        properties,
+        limit: 100,
+      };
 
-    return this.request<{
-      results: Array<{
-        id: string;
-        properties: Record<string, string>;
-        associations?: {
-          contacts?: { results: Array<{ id: string; type: string }> };
-          companies?: { results: Array<{ id: string; type: string }> };
+      if (pipelineId) {
+        searchBody.filterGroups = [{
+          filters: [{ propertyName: 'pipeline', operator: 'EQ', value: pipelineId }]
+        }];
+      }
+
+      if (after) {
+        searchBody.after = after;
+      }
+
+      const response = await this.request<{
+        results: Array<{
+          id: string;
+          properties: Record<string, string>;
+          associations?: {
+            contacts?: { results: Array<{ id: string; type: string }> };
+            companies?: { results: Array<{ id: string; type: string }> };
+          };
+        }>;
+        paging?: {
+          next?: {
+            after: string;
+          };
         };
-      }>;
-    }>('/crm/v3/objects/deals/search', {
-      method: 'POST',
-      body: JSON.stringify(searchBody),
-    });
+      }>('/crm/v3/objects/deals/search', {
+        method: 'POST',
+        body: JSON.stringify(searchBody),
+      });
+
+      allDeals = allDeals.concat(response.results);
+      after = response.paging?.next?.after;
+    } while (after);
+
+    return { results: allDeals };
   }
 
   // Deals with company associations for overview
@@ -116,50 +143,86 @@ export class HubSpotClient {
       'closedate',
     ];
 
-    const searchBody = {
-      properties,
-      filterGroups: [{
-        filters: [{ propertyName: 'pipeline', operator: 'EQ', value: pipelineId }]
-      }],
-      limit: 100,
-    };
+    // Fetch all deals with pagination (HubSpot search API returns max 100 per request)
+    let allDeals: Array<{
+      id: string;
+      properties: Record<string, string>;
+      associations?: {
+        companies?: { results: Array<{ id: string; type: string }> };
+      };
+    }> = [];
+    let after: string | undefined;
 
-    // First get deals
-    const deals = await this.request<{
-      results: Array<{
-        id: string;
-        properties: Record<string, string>;
-        associations?: {
-          companies?: { results: Array<{ id: string; type: string }> };
+    do {
+      const searchBody: {
+        properties: string[];
+        filterGroups: Array<{ filters: Array<{ propertyName: string; operator: string; value: string }> }>;
+        limit: number;
+        after?: string;
+      } = {
+        properties,
+        filterGroups: [{
+          filters: [{ propertyName: 'pipeline', operator: 'EQ', value: pipelineId }]
+        }],
+        limit: 100,
+      };
+
+      if (after) {
+        searchBody.after = after;
+      }
+
+      const response = await this.request<{
+        results: Array<{
+          id: string;
+          properties: Record<string, string>;
+          associations?: {
+            companies?: { results: Array<{ id: string; type: string }> };
+          };
+        }>;
+        paging?: {
+          next?: {
+            after: string;
+          };
         };
-      }>;
-    }>('/crm/v3/objects/deals/search', {
-      method: 'POST',
-      body: JSON.stringify(searchBody),
-    });
+      }>('/crm/v3/objects/deals/search', {
+        method: 'POST',
+        body: JSON.stringify(searchBody),
+      });
 
-    // Use batch associations API to get all company associations at once
+      allDeals = allDeals.concat(response.results);
+      after = response.paging?.next?.after;
+    } while (after);
+
+    const deals = { results: allDeals };
+
+    // Use batch associations API to get all company associations
+    // HubSpot batch API has a limit of 100 inputs per request
     const dealIds = deals.results.map(d => d.id);
-    let associationsMap = new Map<string, Array<{ id: string; type: string }>>();
+    const associationsMap = new Map<string, Array<{ id: string; type: string }>>();
 
     if (dealIds.length > 0) {
       try {
-        const batchAssociations = await this.request<{
-          results: Array<{
-            from: { id: string };
-            to: Array<{ toObjectId: number; associationTypes: Array<{ typeId: number }> }>;
-          }>;
-        }>('/crm/v4/associations/deals/companies/batch/read', {
-          method: 'POST',
-          body: JSON.stringify({
-            inputs: dealIds.map(id => ({ id })),
-          }),
-        });
+        // Process in batches of 100
+        const batchSize = 100;
+        for (let i = 0; i < dealIds.length; i += batchSize) {
+          const batchIds = dealIds.slice(i, i + batchSize);
+          const batchAssociations = await this.request<{
+            results: Array<{
+              from: { id: string };
+              to: Array<{ toObjectId: number; associationTypes: Array<{ typeId: number }> }>;
+            }>;
+          }>('/crm/v4/associations/deals/companies/batch/read', {
+            method: 'POST',
+            body: JSON.stringify({
+              inputs: batchIds.map(id => ({ id })),
+            }),
+          });
 
-        for (const result of batchAssociations.results) {
-          // toObjectId is a number, convert to string
-          const companyAssocs = result.to.map(t => ({ id: String(t.toObjectId), type: 'company' }));
-          associationsMap.set(result.from.id, companyAssocs);
+          for (const result of batchAssociations.results) {
+            // toObjectId is a number, convert to string
+            const companyAssocs = result.to.map(t => ({ id: String(t.toObjectId), type: 'company' }));
+            associationsMap.set(result.from.id, companyAssocs);
+          }
         }
       } catch {
         // Fallback: associations will be empty
@@ -234,18 +297,28 @@ export class HubSpotClient {
   async getContacts(contactIds: string[]) {
     if (contactIds.length === 0) return { results: [] };
 
-    return this.request<{
-      results: Array<{
-        id: string;
-        properties: Record<string, string>;
-      }>;
-    }>('/crm/v3/objects/contacts/batch/read', {
-      method: 'POST',
-      body: JSON.stringify({
-        properties: ['firstname', 'lastname', 'email', 'jobtitle', 'phone'],
-        inputs: contactIds.map(id => ({ id })),
-      }),
-    });
+    // HubSpot batch API has a limit of 100 inputs per request
+    const allResults: Array<{ id: string; properties: Record<string, string> }> = [];
+    const batchSize = 100;
+
+    for (let i = 0; i < contactIds.length; i += batchSize) {
+      const batchIds = contactIds.slice(i, i + batchSize);
+      const response = await this.request<{
+        results: Array<{
+          id: string;
+          properties: Record<string, string>;
+        }>;
+      }>('/crm/v3/objects/contacts/batch/read', {
+        method: 'POST',
+        body: JSON.stringify({
+          properties: ['firstname', 'lastname', 'email', 'jobtitle', 'phone'],
+          inputs: batchIds.map(id => ({ id })),
+        }),
+      });
+      allResults.push(...response.results);
+    }
+
+    return { results: allResults };
   }
 
   // Companies
@@ -259,18 +332,28 @@ export class HubSpotClient {
   async getCompanies(companyIds: string[]) {
     if (companyIds.length === 0) return { results: [] };
 
-    return this.request<{
-      results: Array<{
-        id: string;
-        properties: Record<string, string>;
-      }>;
-    }>('/crm/v3/objects/companies/batch/read', {
-      method: 'POST',
-      body: JSON.stringify({
-        properties: ['name'],
-        inputs: companyIds.map(id => ({ id })),
-      }),
-    });
+    // HubSpot batch API has a limit of 100 inputs per request
+    const allResults: Array<{ id: string; properties: Record<string, string> }> = [];
+    const batchSize = 100;
+
+    for (let i = 0; i < companyIds.length; i += batchSize) {
+      const batchIds = companyIds.slice(i, i + batchSize);
+      const response = await this.request<{
+        results: Array<{
+          id: string;
+          properties: Record<string, string>;
+        }>;
+      }>('/crm/v3/objects/companies/batch/read', {
+        method: 'POST',
+        body: JSON.stringify({
+          properties: ['name'],
+          inputs: batchIds.map(id => ({ id })),
+        }),
+      });
+      allResults.push(...response.results);
+    }
+
+    return { results: allResults };
   }
 
   // Pipelines
