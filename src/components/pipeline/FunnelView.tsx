@@ -126,6 +126,32 @@ function dateToMsEnd(dateStr: string): number | null {
   return isNaN(t) ? null : t;
 }
 
+// ── Filter date range helper ──
+
+function getFilterDateRange(filter: FilterState): { from: number; to: number } | null {
+  const active = filter.criteria.filter(criterionIsComplete);
+  if (active.length === 0) return null;
+
+  const froms: number[] = [];
+  const tos: number[] = [];
+
+  for (const c of active) {
+    const f = dateToMs(c.dateFrom);
+    if (f !== null) froms.push(f);
+    if (c.operator === 'between' && c.dateTo) {
+      const t = dateToMsEnd(c.dateTo);
+      if (t !== null) tos.push(t);
+    }
+  }
+
+  if (froms.length === 0) return null;
+
+  const from = Math.min(...froms);
+  const to = tos.length > 0 ? Math.max(...tos) : Date.now();
+
+  return to > from ? { from, to } : null;
+}
+
 // ── Filter logic ──
 
 function criterionIsComplete(c: FilterCriterion): boolean {
@@ -206,6 +232,7 @@ interface FunnelStageData {
   deals: DealOverviewItem[];
   currentCount: number;
   currentRevenue: number;
+  currentDeals: DealOverviewItem[];
   perWeek: number | null;
   avgDaysInStage: number | null;
 }
@@ -294,31 +321,10 @@ export function FunnelView({ stages, deals, isClosedStage, stageHistory, stageHi
     const counts = stageDealSets.map(s => s.size);
     const maxCount = Math.max(...counts, 1);
 
-    // ── Filter-unabhängige Kennzahlen ──
-    // currentCount + perWeek basieren auf ALLEN Deals, nicht auf gefilterten.
-
-    // Cumulative all-deals counts per pipeline stage (same funnel logic, but over all deals)
-    const allDealsStageCounts = pipelineStages.map((_stage, i) => {
-      let count = 0;
-      for (const deal of deals) {
-        const idx = stageIndexMap.get(deal.dealStageId);
-        if (idx !== undefined && idx >= i) {
-          count++;
-        } else if (closedStages.some(cs => cs.id === deal.dealStageId)) {
-          count++;
-        }
-      }
-      return count;
-    });
-
-    // Date range from all deals (earliest createdate → now)
-    let earliest = Infinity;
-    for (const deal of deals) {
-      const ts = getDealCreateTimestamp(deal);
-      if (ts !== null && ts < earliest) earliest = ts;
-    }
-    const allDealsWeeks = earliest < Infinity
-      ? (Date.now() - earliest) / (7 * 24 * 60 * 60 * 1000)
+    // ── Per-week from filter date range ──
+    const dateRange = getFilterDateRange(filter);
+    const filterWeeks = dateRange
+      ? (dateRange.to - dateRange.from) / (7 * 24 * 60 * 60 * 1000)
       : 0;
 
     // Average dwell time per pipeline stage (from filtered deals + stage history)
@@ -355,7 +361,8 @@ export function FunnelView({ stages, deals, isClosedStage, stageHistory, stageHi
         deals: stageDeals,
         currentCount: currentDeals.length,
         currentRevenue: currentDeals.reduce((sum, d) => sum + d.revenue, 0),
-        perWeek: allDealsWeeks >= 1 ? Math.round((allDealsStageCounts[i] / allDealsWeeks) * 10) / 10 : null,
+        currentDeals,
+        perWeek: filterWeeks >= 1 ? Math.round((stageDeals.length / filterWeeks) * 10) / 10 : null,
         avgDaysInStage: avgDwellPerStage[i],
       };
     });
@@ -370,12 +377,12 @@ export function FunnelView({ stages, deals, isClosedStage, stageHistory, stageHi
         deals: stageDeals,
         currentCount: currentDeals.length,
         currentRevenue: currentDeals.reduce((sum, d) => sum + d.revenue, 0),
-        perWeek: allDealsWeeks >= 1 ? Math.round((currentDeals.length / allDealsWeeks) * 10) / 10 : null,
+        perWeek: filterWeeks >= 1 ? Math.round((stageDeals.length / filterWeeks) * 10) / 10 : null,
       };
     });
 
     return { pipelineData, closedData, totalFiltered: filtered.length, totalDeals: deals.length };
-  }, [filteredDeals, deals, pipelineStages, closedStages, stageIndexMap, stageHistory]);
+  }, [filteredDeals, deals, pipelineStages, closedStages, stageIndexMap, stageHistory, filter]);
 
   // ── Filter mutations ──
 
@@ -466,6 +473,14 @@ export function FunnelView({ stages, deals, isClosedStage, stageHistory, stageHi
     return l.includes('gewonnen') || l.includes('won') || l.includes('abgeschlossen') || l.includes('aktiv') || l.includes('active');
   };
 
+  /** Shorten closed-stage labels and return a clean name for color lookup */
+  const closedStageLabel = (label: string): string => {
+    const l = label.toLowerCase();
+    if (l.includes('verloren') || l.includes('lost')) return 'Verloren';
+    if (l.includes('gewonnen') || l.includes('won') || l.includes('abgeschlossen') || l.includes('aktiv')) return 'Gewonnen';
+    return label;
+  };
+
   // ── Render ──
 
   const filterHeader = (
@@ -507,6 +522,20 @@ export function FunnelView({ stages, deals, isClosedStage, stageHistory, stageHi
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         {/* Pipeline Stages Funnel */}
         <div>
+          {/* Entry rate before first bar */}
+          {funnelData.pipelineData[0]?.perWeek !== null && (
+            <div className="flex items-center gap-3 h-12 mb-1">
+              <div className="w-52 shrink-0" />
+              <div className="flex-1 flex justify-center items-center relative h-full">
+                <div className="absolute left-1/2 top-1/2 bottom-0 w-px bg-gray-800 -translate-x-1/2" />
+                <div className="absolute left-1/2 -translate-x-1/2 bottom-0 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[6px] border-l-transparent border-r-transparent border-t-gray-800" />
+                <span className="relative z-10 text-xs text-gray-800 bg-white px-2">
+                  Ø {funnelData.pipelineData[0].perWeek} Deals/Wo
+                </span>
+              </div>
+              <div className="w-16 shrink-0" />
+            </div>
+          )}
           {funnelData.pipelineData.map((item, idx) => {
             const colors = getStageColor(item.stage.label);
             const prevCount = idx > 0 ? funnelData.pipelineData[idx - 1].count : null;
@@ -516,40 +545,44 @@ export function FunnelView({ stages, deals, isClosedStage, stageHistory, stageHi
 
             return (
               <div key={item.stage.id}>
-                {/* Conversion connector between stages */}
+                {/* Arrow connector between stages */}
                 {conversionRate !== null && (
-                  <div className="flex items-center gap-3 my-0.5">
-                    <div className="w-36 shrink-0" />
-                    <div className="flex-1 flex justify-center">
-                      <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-gray-50 border border-gray-100">
-                        <svg width="10" height="8" viewBox="0 0 10 8" className="text-gray-400 shrink-0">
-                          <path d="M1 1 L5 6.5 L9 1" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        <span className="text-xs text-gray-500">
-                          {conversionRate}%{item.perWeek !== null && <> · ~{item.perWeek}/Wo</>}
-                        </span>
-                      </div>
+                  <div className="flex items-center gap-3 h-12">
+                    <div className="w-52 shrink-0" />
+                    <div className="flex-1 flex justify-center items-center relative h-full">
+                      <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-800 -translate-x-1/2" />
+                      <div className="absolute left-1/2 -translate-x-1/2 bottom-0 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[6px] border-l-transparent border-r-transparent border-t-gray-800" />
+                      <span className="relative z-10 text-xs text-gray-800 bg-white px-2">
+                        {conversionRate}%{item.perWeek !== null && ` · Ø ${item.perWeek}/Wo`}
+                      </span>
                     </div>
-                    <div className="w-12 shrink-0" />
+                    <div className="w-16 shrink-0" />
                   </div>
                 )}
 
                 {/* Stage bar row */}
                 <div className="flex items-center gap-3">
-                  <div className="w-36 text-right text-sm font-medium text-gray-700 shrink-0 truncate" title={item.stage.label}>
+                  <div className="w-52 text-right text-base font-medium text-gray-900 shrink-0" title={item.stage.label}>
                     {item.stage.label}
                   </div>
                   <div className="flex-1 flex justify-center">
-                    <DealCountBar
-                      currentCount={item.currentCount}
-                      currentRevenue={item.currentRevenue}
-                      deals={item.deals}
-                      bgColor={colors.bg}
-                      textColor={colors.text}
-                      widthPercent={Math.max(item.ratio * 100, 8)}
-                    />
+                    {(() => {
+                      const t = funnelData.pipelineData.length > 1 ? idx / (funnelData.pipelineData.length - 1) : 0;
+                      return (
+                        <DealCountBar
+                          currentCount={item.currentCount}
+                          currentRevenue={item.currentRevenue}
+                          deals={item.currentDeals}
+                          bgColor={colors.bg}
+                          textColor={colors.text}
+                          widthPercent={Math.max(item.ratio * 75, 8)}
+                          height={40 + t * 24}
+                          fontSize={14 + t * 4}
+                        />
+                      );
+                    })()}
                   </div>
-                  <div className="w-12 text-xs text-gray-400 shrink-0 text-right" title="Ø Verweildauer">
+                  <div className="w-16 text-sm text-gray-800 shrink-0 text-right" title="Ø Verweildauer">
                     {item.avgDaysInStage !== null && (
                       <>Ø {item.avgDaysInStage < 1 ? '< 1' : item.avgDaysInStage}T</>
                     )}
@@ -563,67 +596,85 @@ export function FunnelView({ stages, deals, isClosedStage, stageHistory, stageHi
         {/* Fork to Closed Stages */}
         {funnelData.closedData.length > 0 && (() => {
           const lastCount = funnelData.pipelineData.at(-1)?.count ?? 0;
-          const closedCount = funnelData.closedData.length;
+          const n = funnelData.closedData.length;
+          const svgW = n * 220;
+          const svgH = 56;
+          const cx = svgW / 2;
+          const midY = svgH * 0.45;
 
           return (
-            <div className="flex flex-col items-center mt-4">
-              {/* Stem from last pipeline stage */}
-              <div className="w-px h-4 bg-gray-200" />
+            <div className="mt-4">
+              {/* Offset to align with bar center area */}
+              <div className="flex items-start gap-3">
+                <div className="w-52 shrink-0" />
+                <div className="flex-1 flex flex-col items-center">
+                  {/* Stem from last pipeline stage */}
+                  <div className="h-5 bg-gray-800" style={{ width: '2px' }} />
 
-              {/* SVG branching lines */}
-              <div className="relative" style={{ width: `${closedCount * 200}px`, maxWidth: '100%', height: '36px' }}>
-                <svg className="w-full h-full">
-                  {funnelData.closedData.map((_, idx) => {
-                    const targetX = ((idx + 0.5) / closedCount) * 100;
-                    return (
-                      <line
-                        key={idx}
-                        x1="50%" y1="0"
-                        x2={`${targetX}%`} y2="100%"
-                        stroke="#d1d5db" strokeWidth="2"
-                      />
-                    );
-                  })}
-                </svg>
-              </div>
+                  {/* Container for SVG + cards at same width */}
+                  <div style={{ width: `${svgW}px`, maxWidth: '100%' }}>
+                    {/* SVG curved fork */}
+                    <svg
+                      viewBox={`0 0 ${svgW} ${svgH}`}
+                      preserveAspectRatio="none"
+                      className="w-full block"
+                      style={{ height: `${svgH}px` }}
+                    >
+                      {funnelData.closedData.map((_, idx) => {
+                        const tx = ((idx + 0.5) / n) * svgW;
+                        return (
+                          <path
+                            key={idx}
+                            d={`M${cx},0 C${cx},${midY} ${tx},${midY} ${tx},${svgH}`}
+                            stroke="#1f2937"
+                            strokeWidth="2"
+                            fill="none"
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        );
+                      })}
+                    </svg>
 
-              {/* Arrowheads + labels + cards */}
-              <div className="flex" style={{ width: `${closedCount * 200}px`, maxWidth: '100%' }}>
-                {funnelData.closedData.map((item) => {
-                  const colors = getStageColor(item.stage.label);
-                  const rate = lastCount > 0
-                    ? Math.round((item.count / lastCount) * 100)
-                    : null;
+                    {/* Arrowheads + labels + cards */}
+                    <div className="flex">
+                      {funnelData.closedData.map((item) => {
+                        const shortLabel = closedStageLabel(item.stage.label);
+                        const colors = getStageColor(shortLabel);
+                        const rate = lastCount > 0
+                          ? Math.round((item.count / lastCount) * 100)
+                          : null;
 
-                  return (
-                    <div key={item.stage.id} className="flex-1 flex flex-col items-center">
-                      {/* Arrowhead */}
-                      <svg width="10" height="7" viewBox="0 0 10 7" className="text-gray-300 -mt-px">
-                        <polygon points="0,0 10,0 5,7" fill="currentColor" />
-                      </svg>
+                        return (
+                          <div key={item.stage.id} className="flex-1 flex flex-col items-center px-3">
+                            {/* Arrowhead */}
+                            <svg width="10" height="6" viewBox="0 0 10 6" className="text-gray-800 -mt-px shrink-0">
+                              <polygon points="0,0 10,0 5,6" fill="currentColor" />
+                            </svg>
 
-                      {/* Conversion label */}
-                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-100 mt-1.5 mb-3">
-                        <span className="text-xs text-gray-500">
-                          {rate !== null && <>{rate}%</>}
-                          {item.perWeek !== null && <> · ~{item.perWeek}/Wo</>}
-                        </span>
-                      </div>
+                            {/* Conversion label */}
+                            <span className="text-xs text-gray-800 mt-1.5 mb-3">
+                              {rate !== null && <>{rate}%</>}
+                              {item.perWeek !== null && <> · Ø {item.perWeek}/Wo</>}
+                            </span>
 
-                      {/* Card */}
-                      <div
-                        className="rounded-lg p-4 text-center min-w-[160px]"
-                        style={{ backgroundColor: colors.bg, color: colors.text }}
-                      >
-                        <div className="text-sm font-medium mb-1">{item.stage.label}</div>
-                        <DealCountTooltip count={item.currentCount} deals={item.deals}>
-                          <div className="text-2xl font-bold cursor-default">{item.currentCount}</div>
-                        </DealCountTooltip>
-                        <div className="text-sm mt-1">{formatEUR(item.currentRevenue)}</div>
-                      </div>
+                            {/* Card */}
+                            <div
+                              className="rounded-lg p-5 text-center min-w-[170px]"
+                              style={{ backgroundColor: colors.bg, color: colors.text }}
+                            >
+                              <div className="text-base font-medium mb-1">{shortLabel}</div>
+                              <DealCountTooltip count={item.count} deals={item.deals}>
+                                <div className="text-3xl font-bold cursor-default">{item.count}</div>
+                              </DealCountTooltip>
+                              <div className="text-base mt-1">{formatEUR(item.revenue)}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
+                  </div>
+                </div>
+                <div className="w-14 shrink-0" />
               </div>
             </div>
           );
@@ -953,6 +1004,8 @@ function DealCountBar({
   bgColor,
   textColor,
   widthPercent,
+  height = 48,
+  fontSize = 16,
 }: {
   currentCount: number;
   currentRevenue: number;
@@ -960,14 +1013,16 @@ function DealCountBar({
   bgColor: string;
   textColor: string;
   widthPercent: number;
+  height?: number;
+  fontSize?: number;
 }) {
   return (
     <div className="relative group" style={{ width: `${widthPercent}%`, minWidth: '80px' }}>
       <div
-        className="h-10 rounded-md flex items-center justify-center px-3 transition-all duration-300 cursor-default"
-        style={{ backgroundColor: bgColor, color: textColor }}
+        className="rounded-md flex items-center justify-center px-4 transition-all duration-300 cursor-default"
+        style={{ backgroundColor: bgColor, color: textColor, height: `${height}px` }}
       >
-        <span className="text-sm font-semibold whitespace-nowrap">
+        <span className="font-semibold whitespace-nowrap" style={{ fontSize: `${fontSize}px` }}>
           {currentCount} Deal{currentCount !== 1 ? 's' : ''} · {formatEUR(currentRevenue)}
         </span>
       </div>
