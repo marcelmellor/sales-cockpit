@@ -2,10 +2,16 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getHubSpotClient } from '@/lib/hubspot/client';
 
+export interface DealStageHistoryEntry {
+  stageId: string;
+  timestamp: string;
+}
+
 export interface DealStageHistoryMap {
   [dealId: string]: {
     stageEnteredAt: string;
     daysInStage: number;
+    history: DealStageHistoryEntry[];
   } | null;
 }
 
@@ -62,6 +68,10 @@ export async function GET(request: Request) {
           stageHistoryMap[dealId] = {
             stageEnteredAt,
             daysInStage,
+            history: history.map(entry => ({
+              stageId: entry.value,
+              timestamp: entry.timestamp,
+            })),
           };
         } else {
           stageHistoryMap[dealId] = null;

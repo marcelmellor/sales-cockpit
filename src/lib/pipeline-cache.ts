@@ -51,6 +51,7 @@ export function clearPipelineCache(pipelineId?: string): void {
       // Clear specific pipeline cache
       localStorage.removeItem(CACHE_PREFIX + `overview-${pipelineId}`);
       localStorage.removeItem(CACHE_PREFIX + `meetings-${pipelineId}`);
+      localStorage.removeItem(CACHE_PREFIX + `stage-history-${pipelineId}`);
     } else {
       // Clear all pipeline caches
       const keys = Object.keys(localStorage).filter(k => k.startsWith(CACHE_PREFIX));

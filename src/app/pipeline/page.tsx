@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState, useMemo } from 'react';
+import { Suspense, useCallback, useEffect, useState, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,7 +8,8 @@ import { UserMenu } from '@/components/UserMenu';
 import { Autosuggest } from '@/components/ui/Autosuggest';
 import { DealStageGroup } from '@/components/pipeline/DealStageGroup';
 import { DealListView } from '@/components/pipeline/DealListView';
-import { Loader2, LayoutGrid, RefreshCw, List } from 'lucide-react';
+import { FunnelView } from '@/components/pipeline/FunnelView';
+import { Loader2, LayoutGrid, RefreshCw, List, Filter } from 'lucide-react';
 import Link from 'next/link';
 import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
@@ -25,7 +26,7 @@ interface Pipeline {
 
 export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
-export type ViewMode = 'stages' | 'list';
+export type ViewMode = 'stages' | 'list' | 'funnel';
 
 export default function PipelineOverview() {
   return (
@@ -281,10 +282,10 @@ function PipelineOverviewContent() {
   }, [overviewData?.stages]);
 
   // Helper to check if stage is closed (won or lost)
-  const isClosedStage = (label: string): boolean => {
+  const isClosedStage = useCallback((label: string): boolean => {
     const closedKeywords = ['verloren', 'lost', 'gewonnen', 'won', 'abgesagt', 'cancelled', 'storniert'];
     return closedKeywords.some(keyword => label.toLowerCase().includes(keyword));
-  };
+  }, []);
 
   // Group deals by stage (using dealsWithMeetings)
   // Limit closed stages (won/lost) to 20 deals
@@ -417,6 +418,18 @@ function PipelineOverviewContent() {
                   <List className="h-4 w-4" />
                   Offen
                 </button>
+                <button
+                  onClick={() => setViewMode('funnel')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${
+                    viewMode === 'funnel'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  title="Funnel-Ansicht"
+                >
+                  <Filter className="h-4 w-4" />
+                  Funnel
+                </button>
               </div>
             )}
 
@@ -516,6 +529,16 @@ function PipelineOverviewContent() {
                   stageHistoryLoading={stageHistoryLoading}
                 />
               ))
+            ) : viewMode === 'funnel' ? (
+              /* Funnel View — uses overviewData.deals directly (no meetings/stage-history needed) */
+              <FunnelView
+                stages={reorderedStages}
+                deals={overviewData?.deals ?? []}
+                isClosedStage={isClosedStage}
+                stageHistory={stageHistoryData ?? {}}
+                stageHistoryLoading={stageHistoryLoading || stageHistoryFetching}
+                pipelineId={selectedPipelineId}
+              />
             ) : (
               /* Open Deals List */
               <DealListView
