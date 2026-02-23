@@ -115,7 +115,11 @@ export async function GET(request: Request) {
       return {
         id: deal.id,
         companyName: company?.name || deal.properties.dealname || 'Unknown',
-        revenue: parseFloat(deal.properties.amount) || 0,
+        revenue: (() => {
+          const tcv = parseFloat(deal.properties.tcv) || 0;
+          const laufzeit = parseFloat(deal.properties.vertragsdauer) || 0;
+          return laufzeit > 0 ? tcv / laufzeit : 0;
+        })(),
         agentsMinuten: parseInt(deal.properties.agents_minuten) || 0,
         productManager: deal.properties.deal_po || '',
         dealStage: pipeline.stages.find(s => s.id === deal.properties.dealstage)?.label || deal.properties.dealstage || 'Unknown',

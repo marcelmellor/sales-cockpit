@@ -49,6 +49,8 @@ export class HubSpotClient {
     const properties = [
       'dealname',
       'amount',
+      'tcv',
+      'vertragsdauer',
       'dealstage',
       'closedate',
       'pipeline',
@@ -135,6 +137,8 @@ export class HubSpotClient {
     const properties = [
       'dealname',
       'amount',
+      'tcv',
+      'vertragsdauer',
       'dealstage',
       'pipeline',
       'agents_minuten',
@@ -244,6 +248,8 @@ export class HubSpotClient {
     const properties = [
       'dealname',
       'amount',
+      'tcv',
+      'vertragsdauer',
       'dealstage',
       'closedate',
       'createdate',

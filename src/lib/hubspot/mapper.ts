@@ -103,7 +103,11 @@ export function mapHubSpotToCanvas(data: HubSpotDealData): CanvasData {
     header: {
       companyDescription: textToHtml(company?.properties.description),
       revenue: {
-        mrr: parseFloat(properties.amount) || 0,
+        mrr: (() => {
+          const tcv = parseFloat(properties.tcv) || 0;
+          const laufzeit = parseFloat(properties.vertragsdauer) || 0;
+          return laufzeit > 0 ? tcv / laufzeit : 0;
+        })(),
         seats: parseInt(properties.canvas_seats) || 0,
         currency: 'EUR',
       },
@@ -169,7 +173,5 @@ export function mapCanvasToHubSpot(canvas: CanvasData): Record<string, string | 
     metric: htmlToText(canvas.problemValue.metrics),
     // Anforderungen
     decision_criteria: htmlToText(canvas.decision.requirements),
-    // Umsatzerwartung (MRR)
-    amount: canvas.header.revenue.mrr,
   };
 }
