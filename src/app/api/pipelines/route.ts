@@ -2,15 +2,20 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getHubSpotClient } from '@/lib/hubspot/client';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const session = await auth();
+    const { searchParams } = new URL(request.url);
+    const tvSecret = searchParams.get('tvSecret');
+    const isValidTvSecret = tvSecret && process.env.TV_SECRET && tvSecret === process.env.TV_SECRET;
 
-    if (!session) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+    if (!isValidTvSecret) {
+      const session = await auth();
+      if (!session) {
+        return NextResponse.json(
+          { error: 'Unauthorized' },
+          { status: 401 }
+        );
+      }
     }
 
     const client = getHubSpotClient();

@@ -5,16 +5,20 @@ import type { DealMeetingsMap } from '../route';
 
 export async function GET(request: Request) {
   try {
-    const session = await auth();
+    const { searchParams } = new URL(request.url);
+    const tvSecret = searchParams.get('tvSecret');
+    const isValidTvSecret = tvSecret && process.env.TV_SECRET && tvSecret === process.env.TV_SECRET;
 
-    if (!session) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+    if (!isValidTvSecret) {
+      const session = await auth();
+      if (!session) {
+        return NextResponse.json(
+          { error: 'Unauthorized' },
+          { status: 401 }
+        );
+      }
     }
 
-    const { searchParams } = new URL(request.url);
     const dealIds = searchParams.get('dealIds');
 
     if (!dealIds) {
