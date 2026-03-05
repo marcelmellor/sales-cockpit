@@ -85,6 +85,28 @@ export function DealCarousel({ deals, intervalSeconds }: DealCarouselProps) {
     };
   }, [deals.length, intervalSeconds, advance]);
 
+  // Keyboard navigation: space/right = next, left = previous
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' || e.code === 'ArrowRight') {
+        e.preventDefault();
+        advance();
+        // Reset auto-advance timer
+        if (intervalRef.current) clearInterval(intervalRef.current);
+        intervalRef.current = setInterval(advance, intervalSeconds * 1000);
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        setCurrentIndex((prev) => (prev - 1 + deals.length) % deals.length);
+        setProgress(0);
+        startTimeRef.current = Date.now();
+        if (intervalRef.current) clearInterval(intervalRef.current);
+        intervalRef.current = setInterval(advance, intervalSeconds * 1000);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [advance, deals.length, intervalSeconds]);
+
   // Reset index when deals change
   useEffect(() => {
     setCurrentIndex(0);
