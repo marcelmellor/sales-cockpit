@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { DealCarousel } from '@/components/tv/DealCarousel';
 import { Loader2 } from 'lucide-react';
 import type { PipelineOverviewResponse, DealMeetingsMap } from '@/app/api/deals/overview/route';
+import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 
 interface Pipeline {
   id: string;
