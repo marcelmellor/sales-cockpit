@@ -44,3 +44,6 @@ next-env.d.ts
 
 # HubSpot config file
 hubspot.config.yml
+
+# Local Netlify folder
+.netlify

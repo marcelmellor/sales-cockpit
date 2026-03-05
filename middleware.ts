@@ -12,8 +12,11 @@ export default auth((req) => {
     nextUrl.pathname.startsWith(route)
   );
 
+  // Allow API requests with tvSecret to pass through (auth checked in route handlers)
+  const hasTvSecret = nextUrl.searchParams.has('tvSecret');
+
   // Redirect unauthenticated users to login
-  if (!isLoggedIn && !isPublicRoute) {
+  if (!isLoggedIn && !isPublicRoute && !hasTvSecret) {
     const loginUrl = new URL('/login', nextUrl.origin);
     loginUrl.searchParams.set('callbackUrl', nextUrl.pathname);
     return NextResponse.redirect(loginUrl);
