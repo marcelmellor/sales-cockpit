@@ -13,12 +13,12 @@ interface Pipeline {
   label: string;
 }
 
-// Closed stage keywords - deals in these stages are filtered out
-const CLOSED_KEYWORDS = ['verloren', 'lost', 'gewonnen', 'won', 'abgesagt', 'cancelled', 'storniert'];
+// Lost/cancelled stage keywords - these deals are filtered out
+const LOST_KEYWORDS = ['verloren', 'lost', 'abgesagt', 'cancelled', 'storniert'];
 
-function isClosedStage(stageName: string): boolean {
+function isLostStage(stageName: string): boolean {
   const lower = stageName.toLowerCase();
-  return CLOSED_KEYWORDS.some((kw) => lower.includes(kw));
+  return LOST_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
 export default function TVPage() {
@@ -123,7 +123,7 @@ function TVContent() {
   const deals = useMemo(() => {
     if (!overviewData?.deals) return [];
     return overviewData.deals
-      .filter((deal) => !isClosedStage(deal.dealStage))
+      .filter((deal) => !isLostStage(deal.dealStage))
       .map((deal) => ({
         ...deal,
         nextAppointment: meetingsData?.[deal.id] || null,

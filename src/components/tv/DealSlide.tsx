@@ -1,10 +1,14 @@
 'use client';
 
+import { useEffect } from 'react';
 import { motion } from 'framer-motion';
+import confetti from 'canvas-confetti';
 import { getStageColor } from '@/lib/stage-colors';
 import { formatDistanceToNow, format } from 'date-fns';
 import { de } from 'date-fns/locale';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
+
+const WON_KEYWORDS = ['gewonnen', 'won', 'closed won'];
 
 interface DealSlideProps {
   deal: DealOverviewItem;
@@ -23,6 +27,21 @@ const childVariants = {
 
 export function DealSlide({ deal, index, total }: DealSlideProps) {
   const stageColor = getStageColor(deal.dealStage);
+  // Convert light text color to dark variant for TV's dark background
+  const stageDarkText = stageColor.text.replace('-light-', '-dark-');
+  const isWon = WON_KEYWORDS.some((kw) => deal.dealStage.toLowerCase().includes(kw));
+
+  useEffect(() => {
+    if (!isWon) return;
+    const duration = 3000;
+    const end = Date.now() + duration;
+    const frame = () => {
+      confetti({ particleCount: 3, angle: 60, spread: 55, origin: { x: 0, y: 0.6 } });
+      confetti({ particleCount: 3, angle: 120, spread: 55, origin: { x: 1, y: 0.6 } });
+      if (Date.now() < end) requestAnimationFrame(frame);
+    };
+    frame();
+  }, [isWon]);
 
   const formattedMRR = new Intl.NumberFormat('de-DE', {
     style: 'currency',
@@ -58,24 +77,6 @@ export function DealSlide({ deal, index, total }: DealSlideProps) {
         {index + 1} / {total}
       </motion.div>
 
-      {/* Stage Badge */}
-      <motion.div
-        custom={0}
-        variants={childVariants}
-        initial="hidden"
-        animate="visible"
-      >
-        <span
-          className="inline-block px-5 py-2 rounded-full text-base font-medium tracking-wide mb-8"
-          style={{
-            backgroundColor: stageColor.bg,
-            color: stageColor.text,
-          }}
-        >
-          {deal.dealStage}
-        </span>
-      </motion.div>
-
       {/* Company Name */}
       <motion.h1
         custom={1}
@@ -107,7 +108,7 @@ export function DealSlide({ deal, index, total }: DealSlideProps) {
           </div>
         </motion.div>
 
-        {/* Deal Age */}
+        {/* Stage */}
         <motion.div
           custom={3}
           variants={childVariants}
@@ -117,10 +118,13 @@ export function DealSlide({ deal, index, total }: DealSlideProps) {
           style={{ backgroundColor: 'var(--gray-dark-3)' }}
         >
           <div className="text-sm uppercase tracking-widest mb-2" style={{ color: 'var(--gray-dark-11)' }}>
-            Deal-Alter
+            Stage
           </div>
-          <div className="text-4xl font-bold text-white" style={{ fontFamily: 'var(--font-primary)' }}>
-            {deal.dealAge}d
+          <div
+            className="text-2xl font-bold"
+            style={{ color: stageDarkText, fontFamily: 'var(--font-primary)' }}
+          >
+            {deal.dealStage}
           </div>
         </motion.div>
 
@@ -140,9 +144,6 @@ export function DealSlide({ deal, index, total }: DealSlideProps) {
             <div>
               <div className="text-2xl font-bold text-white" style={{ fontFamily: 'var(--font-primary)' }}>
                 {nextAppointment.relative}
-              </div>
-              <div className="text-sm mt-1" style={{ color: 'var(--gray-dark-11)' }}>
-                {nextAppointment.absolute}
               </div>
             </div>
           ) : (
