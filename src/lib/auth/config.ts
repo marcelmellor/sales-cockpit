@@ -1,7 +1,7 @@
 import type { NextAuthConfig } from 'next-auth';
 import Google from 'next-auth/providers/google';
 
-const ALLOWED_DOMAIN = 'sipgate.de';
+const ALLOWED_DOMAINS = ['sipgate.de', 'sipgate.com'];
 
 export const authConfig: NextAuthConfig = {
   debug: process.env.NODE_ENV === 'development' || process.env.AUTH_DEBUG === 'true',
@@ -13,9 +13,9 @@ export const authConfig: NextAuthConfig = {
   ],
   callbacks: {
     async signIn({ user }) {
-      // Only allow users with @sipgate.de email
+      // Only allow users with @sipgate.de or @sipgate.com email
       const email = user.email;
-      if (!email || !email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+      if (!email || !ALLOWED_DOMAINS.some(domain => email.endsWith(`@${domain}`))) {
         return false;
       }
       return true;

@@ -46,7 +46,7 @@ function LoginContent() {
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-center">
             <p className="text-red-700 text-sm">
               {error === 'AccessDenied'
-                ? 'Zugriff verweigert. Bitte verwenden Sie eine @sipgate.de E-Mail-Adresse.'
+                ? 'Zugriff verweigert. Bitte verwenden Sie eine @sipgate.de oder @sipgate.com E-Mail-Adresse.'
                 : 'Ein Fehler ist aufgetreten. Bitte versuchen Sie es erneut.'}
             </p>
           </div>
@@ -61,7 +61,7 @@ function LoginContent() {
         </button>
 
         <p className="text-center text-xs text-gray-500">
-          Nur für @sipgate.de E-Mail-Adressen
+          Nur für @sipgate.de und @sipgate.com E-Mail-Adressen
         </p>
       </div>
     </div>
