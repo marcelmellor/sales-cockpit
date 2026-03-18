@@ -39,42 +39,51 @@ export async function GET(request: Request) {
     const client = getHubSpotClient();
     const now = new Date();
 
-    // Fetch meetings sequentially to avoid rate limits
-    // 10 requests per second max, getMeetingsForDeal makes 2 calls per deal
-    // So we can do ~5 deals per second, use 250ms delay to be safe
+    // Process deals in parallel batches to stay within Netlify timeout
+    // HubSpot rate limit: 10 req/s. getMeetingsForDeal makes 2 calls per deal.
+    // Batch of 4 = 8 API calls, then 300ms pause ≈ 30 deals/sec capacity
+    const BATCH_SIZE = 4;
+    const BATCH_DELAY = 300;
     const meetingsMap: DealMeetingsMap = {};
 
-    for (let i = 0; i < dealIdList.length; i++) {
-      const dealId = dealIdList[i];
-      try {
-        const meetings = await client.getMeetingsForDeal(dealId);
+    for (let i = 0; i < dealIdList.length; i += BATCH_SIZE) {
+      const batch = dealIdList.slice(i, i + BATCH_SIZE);
 
-        // Find next upcoming meeting
-        const upcomingMeetings = meetings.results
-          .filter(m => {
-            const startTime = m.properties.hs_meeting_start_time;
-            return startTime && new Date(startTime) > now;
-          })
-          .sort((a, b) => {
-            const aTime = new Date(a.properties.hs_meeting_start_time!).getTime();
-            const bTime = new Date(b.properties.hs_meeting_start_time!).getTime();
-            return aTime - bTime;
-          });
+      const results = await Promise.allSettled(
+        batch.map(async (dealId) => {
+          try {
+            const meetings = await client.getMeetingsForDeal(dealId);
+            const upcomingMeetings = meetings.results
+              .filter(m => {
+                const startTime = m.properties.hs_meeting_start_time;
+                return startTime && new Date(startTime) > now;
+              })
+              .sort((a, b) => {
+                const aTime = new Date(a.properties.hs_meeting_start_time!).getTime();
+                const bTime = new Date(b.properties.hs_meeting_start_time!).getTime();
+                return aTime - bTime;
+              });
+            const nextMeeting = upcomingMeetings[0];
+            return {
+              dealId,
+              value: nextMeeting
+                ? { date: nextMeeting.properties.hs_meeting_start_time!, title: nextMeeting.properties.hs_meeting_title || 'Meeting' }
+                : null,
+            };
+          } catch {
+            return { dealId, value: null };
+          }
+        })
+      );
 
-        const nextMeeting = upcomingMeetings[0];
-        meetingsMap[dealId] = nextMeeting
-          ? {
-              date: nextMeeting.properties.hs_meeting_start_time!,
-              title: nextMeeting.properties.hs_meeting_title || 'Meeting',
-            }
-          : null;
-      } catch {
-        meetingsMap[dealId] = null;
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          meetingsMap[result.value.dealId] = result.value.value;
+        }
       }
 
-      // 250ms delay between deals (allows ~4 deals/sec with 2 API calls each = 8 calls/sec)
-      if (i < dealIdList.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 250));
+      if (i + BATCH_SIZE < dealIdList.length) {
+        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
       }
     }
 

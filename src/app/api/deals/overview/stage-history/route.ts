@@ -51,42 +51,56 @@ export async function GET(request: Request) {
     const client = getHubSpotClient();
     const now = new Date();
 
-    // Fetch stage history sequentially to avoid rate limits
-    // Similar to meetings: 250ms delay between requests
+    // Process deals in parallel batches to stay within Netlify timeout
+    // HubSpot rate limit: 10 req/s. getDealStageHistory makes 1 call per deal.
+    // Batch of 8 = 8 API calls, then 300ms pause
+    const BATCH_SIZE = 8;
+    const BATCH_DELAY = 300;
     const stageHistoryMap: DealStageHistoryMap = {};
 
-    for (let i = 0; i < dealIdList.length; i++) {
-      const dealId = dealIdList[i];
-      try {
-        const dealWithHistory = await client.getDealStageHistory(dealId);
-        const history = dealWithHistory.propertiesWithHistory?.dealstage;
+    for (let i = 0; i < dealIdList.length; i += BATCH_SIZE) {
+      const batch = dealIdList.slice(i, i + BATCH_SIZE);
 
-        if (history && history.length > 0) {
-          // History is sorted newest first, so [0] is the most recent stage change
-          const latestEntry = history[0];
-          const stageEnteredAt = latestEntry.timestamp;
-          const entered = new Date(stageEnteredAt);
-          const diffTime = now.getTime() - entered.getTime();
-          const daysInStage = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      const results = await Promise.allSettled(
+        batch.map(async (dealId) => {
+          try {
+            const dealWithHistory = await client.getDealStageHistory(dealId);
+            const history = dealWithHistory.propertiesWithHistory?.dealstage;
 
-          stageHistoryMap[dealId] = {
-            stageEnteredAt,
-            daysInStage,
-            history: history.map(entry => ({
-              stageId: entry.value,
-              timestamp: entry.timestamp,
-            })),
-          };
-        } else {
-          stageHistoryMap[dealId] = null;
+            if (history && history.length > 0) {
+              const latestEntry = history[0];
+              const stageEnteredAt = latestEntry.timestamp;
+              const entered = new Date(stageEnteredAt);
+              const diffTime = now.getTime() - entered.getTime();
+              const daysInStage = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+              return {
+                dealId,
+                value: {
+                  stageEnteredAt,
+                  daysInStage,
+                  history: history.map(entry => ({
+                    stageId: entry.value,
+                    timestamp: entry.timestamp,
+                  })),
+                } as DealStageHistoryMap[string],
+              };
+            }
+            return { dealId, value: null };
+          } catch {
+            return { dealId, value: null };
+          }
+        })
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          stageHistoryMap[result.value.dealId] = result.value.value;
         }
-      } catch {
-        stageHistoryMap[dealId] = null;
       }
 
-      // 250ms delay between deals to respect rate limits
-      if (i < dealIdList.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 250));
+      if (i + BATCH_SIZE < dealIdList.length) {
+        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
       }
     }
 
