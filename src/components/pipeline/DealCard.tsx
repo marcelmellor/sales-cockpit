@@ -105,7 +105,7 @@ function formatClosedDate(stageEnteredAt: string | null, closedate: string | nul
 }
 
 export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoading, showAgentsMinuten, showStage, showClosedDate, closedDateLabel }: DealCardProps) {
-  const canvasUrl = `/?pipeline=${pipelineId}&deal=${deal.id}`;
+  const canvasUrl = `/canvas?pipeline=${pipelineId}&deal=${deal.id}`;
   const stageColors = showStage ? getStageColor(deal.dealStage) : null;
 
   const nextAppointmentDate = deal.nextAppointment?.date

@@ -3,7 +3,7 @@
 import { ChevronDown, ChevronUp, ArrowUpDown } from 'lucide-react';
 import { DealCard } from './DealCard';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
-import type { SortField, SortDirection } from '@/app/pipeline/page';
+import type { SortField, SortDirection } from '@/app/page';
 
 interface DealListViewProps {
   deals: DealOverviewItem[];

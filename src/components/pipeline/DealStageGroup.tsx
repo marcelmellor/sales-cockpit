@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { DealCard } from './DealCard';
 import { getStageColor } from '@/lib/stage-colors';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
-import type { SortField, SortDirection } from '@/app/pipeline/page';
+import type { SortField, SortDirection } from '@/app/page';
 
 interface DealStageGroupProps {
   stage: {

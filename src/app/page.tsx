@@ -1,26 +1,18 @@
 'use client';
 
-import { Suspense, useEffect, useState, useCallback } from 'react';
+import { Suspense, useCallback, useEffect, useState, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
-import { SalesCanvas } from '@/components/canvas/SalesCanvas';
-import { ExportButton } from '@/components/canvas/ExportButton';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { UserMenu } from '@/components/UserMenu';
 import { Autosuggest } from '@/components/ui/Autosuggest';
-import { useCanvasStore } from '@/stores/canvas-store';
-import { Loader2, ArrowLeft } from 'lucide-react';
-import Link from 'next/link';
-import type { CanvasData } from '@/types/canvas';
-
-interface Deal {
-  id: string;
-  properties: {
-    dealname: string;
-    amount?: string;
-    dealstage?: string;
-  };
-}
+import { DealStageGroup } from '@/components/pipeline/DealStageGroup';
+import { DealListView } from '@/components/pipeline/DealListView';
+import { DashboardView } from '@/components/pipeline/DashboardView';
+import { Loader2, LayoutGrid, RefreshCw, List, BarChart3 } from 'lucide-react';
+import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
+import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
+import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
 
 interface Pipeline {
   id: string;
@@ -31,60 +23,52 @@ interface Pipeline {
   }>;
 }
 
-export default function Home() {
+export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'nextAppointment' | 'closedDate';
+export type SortDirection = 'asc' | 'desc';
+export type ViewMode = 'stages' | 'list' | 'dashboard';
+
+export default function PipelineOverview() {
   return (
     <Suspense fallback={
       <div className="min-h-screen flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
       </div>
     }>
-      <HomeContent />
+      <PipelineOverviewContent />
     </Suspense>
   );
 }
 
-function HomeContent() {
+function PipelineOverviewContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { status } = useSession();
+  const queryClient = useQueryClient();
+  const { data: session, status } = useSession();
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
-  const [selectedDealId, setSelectedDealId] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
-  const { setCanvasData, clearCanvasData, canvasData, setSaving, markClean } = useCanvasStore();
+  const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
+  const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
+  const [listSortConfig, setListSortConfig] = useState<{ field: SortField; direction: SortDirection }>({ field: 'revenue', direction: 'desc' });
 
-  // Update URL when selection changes
-  const updateUrl = useCallback((pipelineId: string | null, dealId: string | null) => {
-    const params = new URLSearchParams();
-    if (pipelineId) params.set('pipeline', pipelineId);
-    if (dealId) params.set('deal', dealId);
-    const queryString = params.toString();
-    router.replace(queryString ? `?${queryString}` : '/', { scroll: false });
-  }, [router]);
-
-  // Initialize from URL params on mount – redirect to pipeline if no deal
+  // Initialize from URL params
   useEffect(() => {
     if (isInitialized) return;
-
-    const pipelineFromUrl = searchParams.get('pipeline');
-    const dealFromUrl = searchParams.get('deal');
-
-    if (!dealFromUrl) {
-      // Canvas is a detail view – redirect to pipeline hub
-      router.replace(pipelineFromUrl ? `/pipeline?id=${pipelineFromUrl}` : '/pipeline');
-      return;
-    }
-
+    const pipelineFromUrl = searchParams.get('id');
     if (pipelineFromUrl) {
       setSelectedPipelineId(pipelineFromUrl);
-      setSelectedDealId(dealFromUrl);
+      // Load cached sort settings for this pipeline
+      const cachedSort = getCachedData<Record<string, { field: SortField; direction: SortDirection }>>(`sort-${pipelineFromUrl}`);
+      if (cachedSort) {
+        setSortByStage(cachedSort);
+      }
     }
     setIsInitialized(true);
-  }, [searchParams, isInitialized, router]);
+  }, [searchParams, isInitialized]);
 
   const isAuthenticated = status === 'authenticated';
 
-  // Fetch pipelines - only when authenticated
-  const { error: pipelinesError } = useQuery({
+  // Fetch pipelines
+  const { data: pipelinesData, isLoading: pipelinesLoading } = useQuery({
     queryKey: ['pipelines'],
     queryFn: async () => {
       const response = await fetch('/api/pipelines');
@@ -95,62 +79,103 @@ function HomeContent() {
     enabled: isAuthenticated,
   });
 
-  // Fetch deals for selected pipeline
-  const { data: dealsData, isLoading: dealsLoading, error: dealsError } = useQuery({
-    queryKey: ['deals', selectedPipelineId],
+  // Get cached data for initial render
+  const cachedOverview = useMemo(
+    () => selectedPipelineId ? getCachedData<PipelineOverviewResponse>(`overview-${selectedPipelineId}`) : null,
+    [selectedPipelineId]
+  );
+
+  // Fetch pipeline overview (fast - no meetings)
+  const { data: overviewData, isLoading: overviewLoading, error: overviewError } = useQuery({
+    queryKey: ['pipeline-overview', selectedPipelineId],
     queryFn: async () => {
-      const url = selectedPipelineId
-        ? `/api/deals?pipelineId=${selectedPipelineId}`
-        : '/api/deals';
-      const response = await fetch(url);
-      if (!response.ok) throw new Error('Failed to fetch deals');
+      const response = await fetch(`/api/deals/overview?pipelineId=${selectedPipelineId}`);
+      if (!response.ok) throw new Error('Failed to fetch pipeline overview');
       const data = await response.json();
-      return data.data as Deal[];
+      const result = data.data as PipelineOverviewResponse;
+      // Save to localStorage cache
+      setCachedData(`overview-${selectedPipelineId}`, result);
+      return result;
     },
     enabled: isAuthenticated && !!selectedPipelineId,
+    staleTime: 5 * 60 * 1000, // 5 minutes cache
+    initialData: cachedOverview ?? undefined,
   });
 
-  // Fetch selected deal canvas data
-  const { data: dealData, isLoading: dealLoading } = useQuery({
-    queryKey: ['deal', selectedDealId],
+  // Extract deal IDs for meetings query
+  const dealIds = useMemo(() => overviewData?.deals.map(d => d.id) || [], [overviewData]);
+
+  // Get cached meetings data
+  const cachedMeetings = useMemo(
+    () => selectedPipelineId ? getCachedData<DealMeetingsMap>(`meetings-${selectedPipelineId}`) : null,
+    [selectedPipelineId]
+  );
+
+  // Fetch meetings separately (slower - sequential API calls)
+  const { data: meetingsData, isLoading: meetingsLoading, isFetching: meetingsFetching } = useQuery({
+    queryKey: ['pipeline-meetings', selectedPipelineId, dealIds.join(',')],
     queryFn: async () => {
-      const response = await fetch(`/api/deals/${selectedDealId}`);
-      if (!response.ok) throw new Error('Failed to fetch deal');
+      if (dealIds.length === 0) return {} as DealMeetingsMap;
+      const response = await fetch(`/api/deals/overview/meetings?dealIds=${dealIds.join(',')}`);
+      if (!response.ok) throw new Error('Failed to fetch meetings');
       const data = await response.json();
-      return data.data as CanvasData;
+      const result = data.data as DealMeetingsMap;
+      // Save to localStorage cache
+      setCachedData(`meetings-${selectedPipelineId}`, result);
+      return result;
     },
-    enabled: isAuthenticated && !!selectedDealId,
+    enabled: isAuthenticated && dealIds.length > 0,
+    staleTime: 5 * 60 * 1000, // 5 minutes cache
+    initialData: cachedMeetings ?? undefined,
   });
 
-  // Update canvas store when deal data changes
-  useEffect(() => {
-    // Only set data if it matches the currently selected deal
-    if (dealData && dealData.dealId === selectedDealId) {
-      const processedData: CanvasData = {
-        ...dealData,
-        lastSaved: dealData.lastSaved ? new Date(dealData.lastSaved) : undefined,
-        header: {
-          ...dealData.header,
-          nextAppointment: dealData.header.nextAppointment
-            ? {
-                ...dealData.header.nextAppointment,
-                date: new Date(dealData.header.nextAppointment.date),
-              }
-            : null,
-        },
-        roadmap: {
-          ...dealData.roadmap,
-          startDate: new Date(dealData.roadmap.startDate),
-          endDate: new Date(dealData.roadmap.endDate),
-          milestones: dealData.roadmap.milestones.map((m) => ({
-            ...m,
-            date: new Date(m.date),
-          })),
-        },
-      };
-      setCanvasData(processedData);
+  // Get cached stage history data
+  const cachedStageHistory = useMemo(
+    () => selectedPipelineId ? getCachedData<DealStageHistoryMap>(`stage-history-${selectedPipelineId}`) : null,
+    [selectedPipelineId]
+  );
+
+  // Fetch stage history separately (slower - sequential API calls)
+  const { data: stageHistoryData, isLoading: stageHistoryLoading, isFetching: stageHistoryFetching } = useQuery({
+    queryKey: ['pipeline-stage-history', selectedPipelineId, dealIds.join(',')],
+    queryFn: async () => {
+      if (dealIds.length === 0) return {} as DealStageHistoryMap;
+      const response = await fetch(`/api/deals/overview/stage-history?dealIds=${dealIds.join(',')}`);
+      if (!response.ok) throw new Error('Failed to fetch stage history');
+      const data = await response.json();
+      const result = data.data as DealStageHistoryMap;
+      // Save to localStorage cache
+      setCachedData(`stage-history-${selectedPipelineId}`, result);
+      return result;
+    },
+    enabled: isAuthenticated && dealIds.length > 0,
+    staleTime: 5 * 60 * 1000, // 5 minutes cache
+    initialData: cachedStageHistory ?? undefined,
+  });
+
+  // Merge meetings and stage history into deals
+  const dealsWithMeetings: DealOverviewItem[] = useMemo(() => {
+    if (!overviewData?.deals) return [];
+    return overviewData.deals.map(deal => ({
+      ...deal,
+      nextAppointment: meetingsData?.[deal.id] || null,
+      daysInStage: stageHistoryData?.[deal.id]?.daysInStage ?? -1,
+      stageEnteredAt: stageHistoryData?.[deal.id]?.stageEnteredAt ?? null,
+    }));
+  }, [overviewData?.deals, meetingsData, stageHistoryData]);
+
+  // Refresh all data (clears localStorage cache and React Query cache)
+  const handleRefresh = () => {
+    if (selectedPipelineId) {
+      clearPipelineCache(selectedPipelineId);
     }
-  }, [dealData, selectedDealId, setCanvasData]);
+    queryClient.invalidateQueries({ queryKey: ['pipeline-overview', selectedPipelineId] });
+    queryClient.invalidateQueries({ queryKey: ['pipeline-meetings', selectedPipelineId] });
+    queryClient.invalidateQueries({ queryKey: ['pipeline-stage-history', selectedPipelineId] });
+  };
+
+  // Combined loading state for secondary data
+  const secondaryDataLoading = meetingsFetching || stageHistoryFetching;
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -159,14 +184,161 @@ function HomeContent() {
     }
   }, [status, router]);
 
-  // Handle deal selection
-  const handleDealChange = (dealId: string | null) => {
-    clearCanvasData(); // Clear old data immediately to show empty state
-    setSelectedDealId(dealId);
-    updateUrl(selectedPipelineId, dealId);
+  const handlePipelineChange = (pipelineId: string | null) => {
+    setSelectedPipelineId(pipelineId);
+    if (pipelineId) {
+      // Load cached sort settings for this pipeline
+      const cachedSort = getCachedData<Record<string, { field: SortField; direction: SortDirection }>>(`sort-${pipelineId}`);
+      setSortByStage(cachedSort || {});
+      router.replace(`/?id=${pipelineId}`, { scroll: false });
+    } else {
+      setSortByStage({});
+      router.replace('/', { scroll: false });
+    }
   };
 
-  // Show loading while checking auth
+  const handleSortChange = (stageId: string, field: SortField) => {
+    setSortByStage(prev => {
+      const current = prev[stageId];
+      let newSort: Record<string, { field: SortField; direction: SortDirection }>;
+
+      if (current?.field === field) {
+        // Toggle direction
+        newSort = {
+          ...prev,
+          [stageId]: {
+            field,
+            direction: current.direction === 'asc' ? 'desc' : 'asc',
+          },
+        };
+      } else {
+        // New field, default to descending for revenue/seats, ascending for date
+        newSort = {
+          ...prev,
+          [stageId]: {
+            field,
+            direction: field === 'nextAppointment' ? 'asc' : 'desc',
+          },
+        };
+      }
+
+      // Save to cache
+      if (selectedPipelineId) {
+        setCachedData(`sort-${selectedPipelineId}`, newSort);
+      }
+
+      return newSort;
+    });
+  };
+
+  const sortDeals = (deals: DealOverviewItem[], stageId: string): DealOverviewItem[] => {
+    // Default: sort by revenue descending
+    const sortConfig = sortByStage[stageId] || { field: 'revenue' as SortField, direction: 'desc' as SortDirection };
+
+    return [...deals].sort((a, b) => {
+      const { field, direction } = sortConfig;
+      let comparison = 0;
+
+      if (field === 'revenue') {
+        comparison = a.revenue - b.revenue;
+      } else if (field === 'agentsMinuten') {
+        comparison = a.agentsMinuten - b.agentsMinuten;
+      } else if (field === 'dealAge') {
+        comparison = a.dealAge - b.dealAge;
+      } else if (field === 'nextAppointment') {
+        const aDate = a.nextAppointment?.date ? new Date(a.nextAppointment.date).getTime() : Infinity;
+        const bDate = b.nextAppointment?.date ? new Date(b.nextAppointment.date).getTime() : Infinity;
+        comparison = aDate - bDate;
+      } else if (field === 'closedDate') {
+        const aDate = a.stageEnteredAt ? new Date(a.stageEnteredAt).getTime() : (a.closedate ? new Date(a.closedate).getTime() : Infinity);
+        const bDate = b.stageEnteredAt ? new Date(b.stageEnteredAt).getTime() : (b.closedate ? new Date(b.closedate).getTime() : Infinity);
+        comparison = aDate - bDate;
+      }
+
+      return direction === 'asc' ? comparison : -comparison;
+    });
+  };
+
+  // Reorder stages: swap "Verloren" and "Gewonnen" (Gewonnen should come before Verloren)
+  const reorderedStages = useMemo(() => {
+    if (!overviewData?.stages) return [];
+    const stages = [...overviewData.stages];
+
+    // Find the indices of "verloren" and "gewonnen" stages
+    const verlorenIndex = stages.findIndex(s =>
+      s.label.toLowerCase().includes('verloren') || s.label.toLowerCase().includes('lost')
+    );
+    const gewonnenIndex = stages.findIndex(s =>
+      s.label.toLowerCase().includes('gewonnen') || s.label.toLowerCase().includes('won')
+    );
+
+    // If both exist and verloren comes before gewonnen, swap them
+    if (verlorenIndex !== -1 && gewonnenIndex !== -1 && verlorenIndex < gewonnenIndex) {
+      [stages[verlorenIndex], stages[gewonnenIndex]] = [stages[gewonnenIndex], stages[verlorenIndex]];
+    }
+
+    return stages;
+  }, [overviewData?.stages]);
+
+  // Helper to check if stage is closed (won or lost)
+  const isClosedStage = useCallback((label: string): boolean => {
+    const closedKeywords = ['verloren', 'lost', 'gewonnen', 'won', 'abgesagt', 'cancelled', 'storniert'];
+    return closedKeywords.some(keyword => label.toLowerCase().includes(keyword));
+  }, []);
+
+  // Group deals by stage (using dealsWithMeetings)
+  // Limit closed stages (won/lost) to 20 deals
+  const dealsByStage = reorderedStages.map(stage => {
+    const sortedDeals = sortDeals(
+      dealsWithMeetings.filter(deal => deal.dealStageId === stage.id),
+      stage.id
+    );
+    const isClosed = isClosedStage(stage.label);
+    return {
+      stage,
+      deals: isClosed ? sortedDeals.slice(0, 20) : sortedDeals,
+      totalCount: sortedDeals.length,
+    };
+  }) || [];
+
+  // Filter open deals (exclude closed/won stages) and sort for list view
+  const openDeals = useMemo(() => {
+    const filtered = dealsWithMeetings.filter(deal =>
+      !deal.dealStage.toLowerCase().includes('abgeschlossen') &&
+      !deal.dealStage.toLowerCase().includes('closed')
+    );
+
+    // Sort by listSortConfig
+    return [...filtered].sort((a, b) => {
+      const { field, direction } = listSortConfig;
+      let comparison = 0;
+
+      if (field === 'revenue') {
+        comparison = a.revenue - b.revenue;
+      } else if (field === 'agentsMinuten') {
+        comparison = a.agentsMinuten - b.agentsMinuten;
+      } else if (field === 'dealAge') {
+        comparison = a.dealAge - b.dealAge;
+      } else if (field === 'nextAppointment') {
+        const aDate = a.nextAppointment?.date ? new Date(a.nextAppointment.date).getTime() : Infinity;
+        const bDate = b.nextAppointment?.date ? new Date(b.nextAppointment.date).getTime() : Infinity;
+        comparison = aDate - bDate;
+      }
+
+      return direction === 'asc' ? comparison : -comparison;
+    });
+  }, [dealsWithMeetings, listSortConfig]);
+
+  // Handler for list view sort
+  const handleListSortChange = (field: SortField) => {
+    setListSortConfig(prev => {
+      if (prev.field === field) {
+        return { field, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { field, direction: field === 'nextAppointment' ? 'asc' : 'desc' };
+    });
+  };
+
   if (status === 'loading') {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -175,33 +347,9 @@ function HomeContent() {
     );
   }
 
-  // Don't render if not authenticated
   if (status === 'unauthenticated') {
     return null;
   }
-
-  // Save handler
-  const handleSave = async () => {
-    if (!selectedDealId || !canvasData) return;
-
-    setSaving(true);
-    try {
-      const response = await fetch(`/api/deals/${selectedDealId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(canvasData),
-      });
-
-      if (!response.ok) throw new Error('Failed to save');
-
-      markClean();
-    } catch (error) {
-      console.error('Save error:', error);
-      alert('Speichern fehlgeschlagen. Bitte versuchen Sie es erneut.');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   return (
     <div className="min-h-screen">
@@ -209,71 +357,168 @@ function HomeContent() {
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link
-              href={selectedPipelineId ? `/pipeline?id=${selectedPipelineId}` : '/pipeline'}
-              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Pipeline
-            </Link>
+            {/* Pipeline Selector – far left like an org switcher */}
+            <Autosuggest
+              options={pipelinesData?.map((pipeline) => ({
+                id: pipeline.id,
+                label: pipeline.label,
+              })) || []}
+              value={selectedPipelineId}
+              onChange={handlePipelineChange}
+              placeholder="Pipeline auswählen..."
+              disabled={pipelinesLoading}
+              isLoading={pipelinesLoading}
+              className="min-w-[220px]"
+            />
 
-            {selectedDealId && (
-              <>
-                <div className="h-5 w-px bg-gray-200" />
-                <Autosuggest
-                  options={dealsData?.map((deal) => ({
-                    id: deal.id,
-                    label: deal.properties.dealname,
-                    sublabel: deal.properties.amount
-                      ? `${parseFloat(deal.properties.amount).toLocaleString('de-DE')} EUR`
-                      : undefined,
-                  })) || []}
-                  value={selectedDealId}
-                  onChange={handleDealChange}
-                  placeholder="Deal suchen..."
-                  disabled={!selectedPipelineId || dealsLoading}
-                  isLoading={dealsLoading}
-                  className="min-w-[250px]"
-                />
-              </>
-            )}
-
-            {dealLoading && (
-              <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+            {(overviewLoading || secondaryDataLoading) && (
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {secondaryDataLoading && !overviewLoading ? 'Termine laden...' : 'Laden...'}
+              </div>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <ExportButton disabled={!selectedDealId} />
-            <UserMenu />
-          </div>
+          <UserMenu />
         </div>
       </header>
 
       {/* Main Content */}
       <main className="py-6">
-        {pipelinesError || dealsError ? (
+        {overviewError ? (
           <div className="max-w-7xl mx-auto px-4">
             <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
               <p className="text-red-700">
-                Fehler beim Laden der Daten. Bitte versuchen Sie es erneut oder melden Sie sich neu an.
+                Fehler beim Laden der Daten. Bitte versuchen Sie es erneut.
               </p>
             </div>
           </div>
-        ) : selectedDealId && canvasData && canvasData.dealId === selectedDealId ? (
-          <SalesCanvas onSave={handleSave} />
-        ) : selectedDealId ? (
+        ) : !selectedPipelineId ? (
+          <div className="max-w-7xl mx-auto px-4">
+            <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+              <LayoutGrid className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+              <h2 className="text-xl font-semibold text-gray-700 mb-2">
+                Pipeline-Übersicht
+              </h2>
+              <p className="text-gray-500 mb-4">
+                Wählen Sie eine Pipeline aus, um alle Deals nach Stage gruppiert zu sehen.
+              </p>
+              {pipelinesLoading ? (
+                <div className="flex items-center justify-center gap-2 text-gray-400">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Pipelines werden geladen...
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400">
+                  {pipelinesData?.length} Pipeline{pipelinesData?.length !== 1 ? 's' : ''} verfügbar
+                </p>
+              )}
+            </div>
+          </div>
+        ) : overviewLoading ? (
           <div className="max-w-7xl mx-auto px-4">
             <div className="flex items-center justify-center gap-2 text-gray-400 py-12">
               <Loader2 className="h-6 w-6 animate-spin" />
-              Deal wird geladen...
+              Deals werden geladen...
             </div>
           </div>
         ) : (
-          <div className="max-w-7xl mx-auto px-4">
-            <div className="flex items-center justify-center gap-2 text-gray-400 py-12">
-              <Loader2 className="h-6 w-6 animate-spin" />
-              Weiterleitung...
+          <div className="max-w-7xl mx-auto px-4 space-y-6">
+            {/* Pipeline Header + Tab bar */}
+            <div>
+              <div className="flex items-baseline justify-between mb-1">
+                <h1 className="text-lg font-semibold text-gray-900">
+                  {overviewData?.pipelineName}
+                  <span className="ml-2 text-sm font-normal text-gray-400">
+                    {dealsWithMeetings.length} Deal{dealsWithMeetings.length !== 1 ? 's' : ''}
+                    {(meetingsLoading || stageHistoryLoading) && (
+                      <Loader2 className="h-3 w-3 animate-spin inline ml-1.5 text-blue-500" />
+                    )}
+                  </span>
+                </h1>
+                <button
+                  onClick={handleRefresh}
+                  disabled={overviewLoading || secondaryDataLoading}
+                  className="text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
+                  title="Daten neu laden"
+                >
+                  <RefreshCw className={`h-4 w-4 ${secondaryDataLoading || overviewLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+              <div className="flex items-center gap-1 border-b border-gray-200">
+                <button
+                  onClick={() => setViewMode('dashboard')}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                    viewMode === 'dashboard'
+                      ? 'border-gray-900 text-gray-900 font-medium'
+                      : 'border-transparent text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  <BarChart3 className="h-3.5 w-3.5" />
+                  Dashboard
+                </button>
+                <button
+                  onClick={() => setViewMode('stages')}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                    viewMode === 'stages'
+                      ? 'border-gray-900 text-gray-900 font-medium'
+                      : 'border-transparent text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                  Stages
+                </button>
+                <button
+                  onClick={() => setViewMode('list')}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                    viewMode === 'list'
+                      ? 'border-gray-900 text-gray-900 font-medium'
+                      : 'border-transparent text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  <List className="h-3.5 w-3.5" />
+                  Offen
+                </button>
+              </div>
             </div>
+
+            {/* View Content */}
+            {viewMode === 'stages' ? (
+              /* Stage Groups */
+              dealsByStage.map(({ stage, deals, totalCount }) => (
+                <DealStageGroup
+                  key={stage.id}
+                  stage={stage}
+                  deals={deals}
+                  totalCount={totalCount}
+                  pipelineId={selectedPipelineId}
+                  pipelineName={overviewData?.pipelineName}
+                  sortConfig={sortByStage[stage.id]}
+                  onSortChange={(field) => handleSortChange(stage.id, field)}
+                  meetingsLoading={meetingsLoading}
+                  stageHistoryLoading={stageHistoryLoading}
+                />
+              ))
+            ) : viewMode === 'dashboard' ? (
+              /* Dashboard View */
+              <DashboardView
+                stages={reorderedStages}
+                deals={overviewData?.deals ?? []}
+                isClosedStage={isClosedStage}
+                stageHistory={stageHistoryData ?? {}}
+                stageHistoryLoading={stageHistoryLoading}
+                pipelineId={selectedPipelineId}
+              />
+            ) : (
+              /* Open Deals List */
+              <DealListView
+                deals={openDeals}
+                pipelineId={selectedPipelineId}
+                sortConfig={listSortConfig}
+                onSortChange={handleListSortChange}
+                meetingsLoading={meetingsLoading}
+                stageHistoryLoading={stageHistoryLoading}
+              />
+            )}
           </div>
         )}
       </main>
