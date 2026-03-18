@@ -368,6 +368,17 @@ function getCalendarWeek(date: Date): number {
   return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
 }
 
+function getWeekRange(date: Date): string {
+  const d = new Date(date);
+  const day = d.getDay() || 7; // Mon=1 … Sun=7
+  const mon = new Date(d);
+  mon.setDate(d.getDate() - day + 1);
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  const fmt = (dt: Date) => `${dt.getDate()}.${dt.getMonth() + 1}.`;
+  return `${fmt(mon)} – ${fmt(sun)}`;
+}
+
 function isLostStage(label: string): boolean {
   const l = label.toLowerCase();
   return l.includes('verloren') || l.includes('lost') || l.includes('abgesagt') || l.includes('cancelled') || l.includes('storniert');
@@ -416,11 +427,11 @@ function formatTickLabel(v: number): string {
 }
 
 function Sparkline({
-  data, color, targetValue, targetLabel, targetColor = '#94D825', invertY = false, unit, weeks, tooltipExtra,
+  data, color, targetValue, targetLabel, targetColor = '#94D825', invertY = false, unit, weeks, tooltipExtra, tooltipOverride,
   bars = false, completionRate, dashLast = false,
 }: {
   data: number[]; color: string; targetValue?: number; targetLabel?: string; targetColor?: string; invertY?: boolean;
-  unit?: string; weeks?: Date[]; tooltipExtra?: string[];
+  unit?: string; weeks?: Date[]; tooltipExtra?: string[]; tooltipOverride?: string[];
   bars?: boolean; completionRate?: number[]; dashLast?: boolean;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -567,7 +578,7 @@ function Sparkline({
         const x = idxToX(hoverIdx);
         const pctLeft = (x / totalW) * 100;
         const val = data[hoverIdx];
-        const dateStr = weeks && weeks[hoverIdx] ? `KW ${getCalendarWeek(weeks[hoverIdx])}` : `KW ${hoverIdx + 1}`;
+        const dateStr = weeks && weeks[hoverIdx] ? getWeekRange(weeks[hoverIdx]) : `KW ${hoverIdx + 1}`;
         const valStr = unit ? `${val} ${unit}` : String(val);
         return (
           <div className="absolute pointer-events-none px-2 py-1 rounded bg-[#2C3333] text-white text-[11px] whitespace-nowrap shadow-lg"
@@ -576,7 +587,7 @@ function Sparkline({
               top: '-4px',
               transform: pctLeft > 75 ? 'translate(-90%, -100%)' : pctLeft < 25 ? 'translate(-10%, -100%)' : 'translate(-50%, -100%)',
             }}>
-            <span className="font-medium">{valStr}</span>
+            <span className="font-medium">{tooltipOverride?.[hoverIdx] ?? valStr}</span>
             {tooltipExtra?.[hoverIdx] && <span className="opacity-60 ml-1.5">({tooltipExtra[hoverIdx]})</span>}
             <span className="opacity-60 ml-1.5">{dateStr}</span>
           </div>
@@ -1156,6 +1167,11 @@ export function DashboardView({
     }).length;
   }), [filteredDeals, weeks]);
 
+  const prospectsDeltas = useMemo(() => prospectsTrend.map((v, i) => {
+    const delta = i === 0 ? v : v - prospectsTrend[i - 1];
+    return `+${delta}`;
+  }), [prospectsTrend]);
+
   const wonDealsTrend = useMemo(() => weeks.map(weekEnd => {
     const endMs = weekEnd.getTime();
     return wonDeals.filter(d => {
@@ -1247,10 +1263,14 @@ export function DashboardView({
   const pipelineFunnel = useMemo(() => {
     const result = pipelineStages.map(stage => {
       const stageDeals = openDeals.filter(d => d.dealStageId === stage.id);
-      return { stage, count: stageDeals.length, deals: stageDeals };
+      const mrr = stageDeals.reduce((sum, d) => sum + d.revenue, 0);
+      return { stage, count: stageDeals.length, mrr, deals: stageDeals };
     });
     const wonStage = stages.find(s => isWonStage(s.label));
-    if (wonStage) result.push({ stage: wonStage, count: wonDeals.length, deals: wonDeals });
+    if (wonStage) {
+      const mrr = wonDeals.reduce((sum, d) => sum + d.revenue, 0);
+      result.push({ stage: wonStage, count: wonDeals.length, mrr, deals: wonDeals });
+    }
     return result;
   }, [pipelineStages, openDeals, wonDeals, stages]);
 
@@ -1299,7 +1319,7 @@ export function DashboardView({
         </div>
         <div className="grid grid-cols-2 gap-5">
           <ChartCard title="Prospects kumulativ" current={`${currentProspects}`} target="/ 50">
-            <Sparkline data={prospectsTrend} color="#E8AC68" targetValue={50} targetLabel="Ziel: 50" weeks={weeks} dashLast />
+            <Sparkline data={prospectsTrend} color="#E8AC68" targetValue={50} targetLabel="Ziel: 50" weeks={weeks} tooltipOverride={prospectsDeltas} dashLast />
             <WeekLabels weeks={weeks} />
           </ChartCard>
           <ChartCard title="Won Deals kumulativ" current={`${currentWonDeals}`} target="/ 20">
@@ -1331,8 +1351,13 @@ export function DashboardView({
               <div key={item.stage.id} className="grid items-center gap-3 py-2"
                 style={{ gridTemplateColumns: '120px 1fr 50px 50px', borderBottom: idx < pipelineFunnel.length - 1 ? '1px solid #F9F9F9' : 'none' }}>
                 <div className="text-[13px]">{item.stage.label}</div>
-                <div className="h-5 bg-[#F9F9F9] rounded overflow-hidden">
-                  <div className="h-full rounded flex items-center pl-2 text-[10px] text-white font-medium" style={{ width: `${widthPercent}%`, backgroundColor: barColor }} />
+                <div className="h-5 bg-[#F9F9F9] rounded overflow-hidden relative">
+                  <div className="h-full rounded" style={{ width: `${widthPercent}%`, backgroundColor: barColor }} />
+                  {item.mrr > 0 && (
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-[10px] font-medium" style={{ color: widthPercent > 20 ? '#fff' : '#2F0D5B' }}>
+                      {formatEUR(item.mrr)}
+                    </span>
+                  )}
                 </div>
                 <div className="text-[13px] font-medium text-right text-[#2F0D5B]">{item.count}</div>
                 <div className="text-[11px] text-right opacity-40">{convRate != null ? `${convRate} %` : ''}</div>
