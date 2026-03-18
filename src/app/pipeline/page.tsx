@@ -8,8 +8,8 @@ import { UserMenu } from '@/components/UserMenu';
 import { Autosuggest } from '@/components/ui/Autosuggest';
 import { DealStageGroup } from '@/components/pipeline/DealStageGroup';
 import { DealListView } from '@/components/pipeline/DealListView';
-import { FunnelView } from '@/components/pipeline/FunnelView';
-import { Loader2, LayoutGrid, RefreshCw, List, Filter } from 'lucide-react';
+import { DashboardView } from '@/components/pipeline/DashboardView';
+import { Loader2, LayoutGrid, RefreshCw, List, BarChart3 } from 'lucide-react';
 import Link from 'next/link';
 import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
@@ -26,7 +26,7 @@ interface Pipeline {
 
 export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
-export type ViewMode = 'stages' | 'list' | 'funnel';
+export type ViewMode = 'stages' | 'list' | 'dashboard';
 
 export default function PipelineOverview() {
   return (
@@ -419,16 +419,16 @@ function PipelineOverviewContent() {
                   Offen
                 </button>
                 <button
-                  onClick={() => setViewMode('funnel')}
+                  onClick={() => setViewMode('dashboard')}
                   className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${
-                    viewMode === 'funnel'
+                    viewMode === 'dashboard'
                       ? 'bg-white text-gray-900 shadow-sm'
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
-                  title="Funnel-Ansicht"
+                  title="Dashboard"
                 >
-                  <Filter className="h-4 w-4" />
-                  Funnel
+                  <BarChart3 className="h-4 w-4" />
+                  Dashboard
                 </button>
               </div>
             )}
@@ -529,14 +529,14 @@ function PipelineOverviewContent() {
                   stageHistoryLoading={stageHistoryLoading}
                 />
               ))
-            ) : viewMode === 'funnel' ? (
-              /* Funnel View — uses overviewData.deals directly (no meetings/stage-history needed) */
-              <FunnelView
+            ) : viewMode === 'dashboard' ? (
+              /* Dashboard View */
+              <DashboardView
                 stages={reorderedStages}
                 deals={overviewData?.deals ?? []}
                 isClosedStage={isClosedStage}
                 stageHistory={stageHistoryData ?? {}}
-                stageHistoryLoading={stageHistoryLoading || stageHistoryFetching}
+                stageHistoryLoading={stageHistoryLoading}
                 pipelineId={selectedPipelineId}
               />
             ) : (

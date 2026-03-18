@@ -340,10 +340,6 @@
 
 body {
   background: var(--background);
-  background-image: url('/background.jpg');
-  background-size: cover;
-  background-attachment: fixed;
-  background-position: center;
   color: var(--foreground);
   font-family: var(--font-primary);
 }

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
+import { DevToggle } from "@/components/DevToggle";
 
 export const metadata: Metadata = {
   title: "Sales Canvas - HubSpot Deal Visualization",
@@ -15,7 +16,10 @@ export default function RootLayout({
   return (
     <html lang="de" suppressHydrationWarning>
       <body className="antialiased">
-        <Providers>{children}</Providers>
+        <Providers>
+          {children}
+          <DevToggle />
+        </Providers>
       </body>
     </html>
   );
