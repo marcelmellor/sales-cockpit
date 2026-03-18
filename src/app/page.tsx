@@ -9,7 +9,7 @@ import { ExportButton } from '@/components/canvas/ExportButton';
 import { UserMenu } from '@/components/UserMenu';
 import { Autosuggest } from '@/components/ui/Autosuggest';
 import { useCanvasStore } from '@/stores/canvas-store';
-import { Loader2, FileText, LayoutGrid } from 'lucide-react';
+import { Loader2, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import type { CanvasData } from '@/types/canvas';
 
@@ -61,26 +61,30 @@ function HomeContent() {
     router.replace(queryString ? `?${queryString}` : '/', { scroll: false });
   }, [router]);
 
-  // Initialize from URL params on mount
+  // Initialize from URL params on mount – redirect to pipeline if no deal
   useEffect(() => {
     if (isInitialized) return;
 
     const pipelineFromUrl = searchParams.get('pipeline');
     const dealFromUrl = searchParams.get('deal');
 
+    if (!dealFromUrl) {
+      // Canvas is a detail view – redirect to pipeline hub
+      router.replace(pipelineFromUrl ? `/pipeline?id=${pipelineFromUrl}` : '/pipeline');
+      return;
+    }
+
     if (pipelineFromUrl) {
       setSelectedPipelineId(pipelineFromUrl);
-      if (dealFromUrl) {
-        setSelectedDealId(dealFromUrl);
-      }
+      setSelectedDealId(dealFromUrl);
     }
     setIsInitialized(true);
-  }, [searchParams, isInitialized]);
+  }, [searchParams, isInitialized, router]);
 
   const isAuthenticated = status === 'authenticated';
 
   // Fetch pipelines - only when authenticated
-  const { data: pipelinesData, isLoading: pipelinesLoading, error: pipelinesError } = useQuery({
+  const { error: pipelinesError } = useQuery({
     queryKey: ['pipelines'],
     queryFn: async () => {
       const response = await fetch('/api/pipelines');
@@ -155,13 +159,6 @@ function HomeContent() {
     }
   }, [status, router]);
 
-  // Reset deal selection when pipeline changes
-  const handlePipelineChange = (pipelineId: string | null) => {
-    setSelectedPipelineId(pipelineId);
-    setSelectedDealId(null);
-    updateUrl(pipelineId, null);
-  };
-
   // Handle deal selection
   const handleDealChange = (dealId: string | null) => {
     clearCanvasData(); // Clear old data immediately to show empty state
@@ -211,55 +208,35 @@ function HomeContent() {
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <h1 className="text-xl font-bold text-gray-900">Sales Canvas</h1>
+          <div className="flex items-center gap-3">
+            <Link
+              href={selectedPipelineId ? `/pipeline?id=${selectedPipelineId}` : '/pipeline'}
+              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Pipeline
+            </Link>
 
-            <nav className="flex items-center gap-2">
-              <span className="px-3 py-1.5 text-sm font-medium text-gray-900 bg-gray-100 rounded-md flex items-center gap-1.5">
-                <FileText className="h-4 w-4" />
-                Canvas
-              </span>
-              <Link
-                href={selectedPipelineId ? `/pipeline?id=${selectedPipelineId}` : '/pipeline'}
-                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors flex items-center gap-1.5"
-              >
-                <LayoutGrid className="h-4 w-4" />
-                Pipeline
-              </Link>
-            </nav>
-
-            <div className="h-6 w-px bg-gray-200" />
-
-            {/* Pipeline Selector */}
-            <Autosuggest
-              options={pipelinesData?.map((pipeline) => ({
-                id: pipeline.id,
-                label: pipeline.label,
-              })) || []}
-              value={selectedPipelineId}
-              onChange={handlePipelineChange}
-              placeholder="Pipeline suchen..."
-              disabled={pipelinesLoading}
-              isLoading={pipelinesLoading}
-              className="min-w-[200px]"
-            />
-
-            {/* Deal Selector */}
-            <Autosuggest
-              options={dealsData?.map((deal) => ({
-                id: deal.id,
-                label: deal.properties.dealname,
-                sublabel: deal.properties.amount
-                  ? `${parseFloat(deal.properties.amount).toLocaleString('de-DE')} EUR`
-                  : undefined,
-              })) || []}
-              value={selectedDealId}
-              onChange={handleDealChange}
-              placeholder="Deal suchen..."
-              disabled={!selectedPipelineId || dealsLoading}
-              isLoading={dealsLoading}
-              className="min-w-[250px]"
-            />
+            {selectedDealId && (
+              <>
+                <div className="h-5 w-px bg-gray-200" />
+                <Autosuggest
+                  options={dealsData?.map((deal) => ({
+                    id: deal.id,
+                    label: deal.properties.dealname,
+                    sublabel: deal.properties.amount
+                      ? `${parseFloat(deal.properties.amount).toLocaleString('de-DE')} EUR`
+                      : undefined,
+                  })) || []}
+                  value={selectedDealId}
+                  onChange={handleDealChange}
+                  placeholder="Deal suchen..."
+                  disabled={!selectedPipelineId || dealsLoading}
+                  isLoading={dealsLoading}
+                  className="min-w-[250px]"
+                />
+              </>
+            )}
 
             {dealLoading && (
               <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
@@ -293,38 +270,9 @@ function HomeContent() {
           </div>
         ) : (
           <div className="max-w-7xl mx-auto px-4">
-            <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
-              <h2 className="text-xl font-semibold text-gray-700 mb-2">
-                Willkommen beim Sales Canvas
-              </h2>
-              <p className="text-gray-500 mb-6">
-                {!selectedPipelineId
-                  ? 'Wählen Sie zuerst eine Pipeline aus, um die verfügbaren Deals zu sehen.'
-                  : 'Wählen Sie einen Deal aus der Liste oben aus, um das Canvas anzuzeigen.'}
-              </p>
-              {pipelinesLoading ? (
-                <div className="flex items-center justify-center gap-2 text-gray-400">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Pipelines werden geladen...
-                </div>
-              ) : dealsLoading ? (
-                <div className="flex items-center justify-center gap-2 text-gray-400">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Deals werden geladen...
-                </div>
-              ) : selectedPipelineId && dealsData?.length === 0 ? (
-                <p className="text-gray-400">
-                  Keine Deals in dieser Pipeline gefunden.
-                </p>
-              ) : selectedPipelineId ? (
-                <p className="text-sm text-gray-400">
-                  {dealsData?.length} Deal{dealsData?.length !== 1 ? 's' : ''} in dieser Pipeline
-                </p>
-              ) : (
-                <p className="text-sm text-gray-400">
-                  {pipelinesData?.length} Pipeline{pipelinesData?.length !== 1 ? 's' : ''} verfügbar
-                </p>
-              )}
+            <div className="flex items-center justify-center gap-2 text-gray-400 py-12">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              Weiterleitung...
             </div>
           </div>
         )}
