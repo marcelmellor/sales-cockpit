@@ -208,7 +208,7 @@ function matchCriterion(
     if (created === null) return false;
     return matchTimestamp(created, c);
   }
-  if (stageHistoryLoading) return false;
+  if (stageHistoryLoading) return true;
   const entry = stageHistory[deal.id];
   if (!entry?.history) return false;
   // Check stage history timestamps
@@ -417,11 +417,11 @@ function formatTickLabel(v: number): string {
 
 function Sparkline({
   data, color, targetValue, targetLabel, targetColor = '#94D825', invertY = false, unit, weeks, tooltipExtra,
-  bars = false, completionRate,
+  bars = false, completionRate, dashLast = false,
 }: {
   data: number[]; color: string; targetValue?: number; targetLabel?: string; targetColor?: string; invertY?: boolean;
   unit?: string; weeks?: Date[]; tooltipExtra?: string[];
-  bars?: boolean; completionRate?: number[];
+  bars?: boolean; completionRate?: number[]; dashLast?: boolean;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
@@ -442,9 +442,21 @@ function Sparkline({
 
   const idxToX = (i: number) => yAxisW + (data.length === 1 ? w / 2 : (i / (data.length - 1)) * w);
 
-  // Line chart path (used when bars=false)
-  const linePath = !bars ? `M ${data.map((v, i) => `${idxToX(i)},${valToY(v)}`).join(' L ')}` : '';
-  const areaPath = !bars ? `${linePath} L ${totalW},${h} L ${yAxisW},${h} Z` : '';
+  // Line chart paths (used when bars=false)
+  let solidLinePath = '';
+  let dashedLinePath = '';
+  let areaPath = '';
+  if (!bars && data.length > 0) {
+    const points = data.map((v, i) => `${idxToX(i)},${valToY(v)}`);
+    const fullPath = `M ${points.join(' L ')}`;
+    areaPath = `${fullPath} L ${totalW},${h} L ${yAxisW},${h} Z`;
+    if (dashLast && data.length >= 2) {
+      solidLinePath = `M ${points.slice(0, -1).join(' L ')}`;
+      dashedLinePath = `M ${points[points.length - 2]} L ${points[points.length - 1]}`;
+    } else {
+      solidLinePath = fullPath;
+    }
+  }
 
   // Bar chart geometry
   const barGap = 2;
@@ -516,7 +528,8 @@ function Sparkline({
           /* Line chart */
           <>
             <path d={areaPath} fill={color} opacity="0.08" />
-            <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            <path d={solidLinePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            {dashedLinePath && <path d={dashedLinePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="2 3" />}
             {/* Current value dot */}
             {data.length > 0 && (() => {
               const lastX = idxToX(data.length - 1);
@@ -1002,6 +1015,7 @@ export function DashboardView({
   );
 
   useEffect(() => {
+    setFilter(getDefaultFilterState(pipelineId));
     setSavedSets(pipelineId ? loadFilterSets(pipelineId) : []);
   }, [pipelineId]);
 
@@ -1100,7 +1114,13 @@ export function DashboardView({
   const weeks = useMemo(() => {
     const now = new Date();
     const { from: filterFrom } = getFilterDateRange(filter.children);
-    const start = filterFrom ?? new Date(now.getTime() - 11 * 7 * 86400000);
+    // Fallback: frühestes Erstelldatum der gefilterten Deals
+    const earliestDeal = filterFrom ? null : filteredDeals.reduce<Date | null>((earliest, d) => {
+      if (!d.createdate) return earliest;
+      const dt = new Date(d.createdate);
+      return !earliest || dt < earliest ? dt : earliest;
+    }, null);
+    const start = filterFrom ?? earliestDeal ?? new Date(now.getTime() - 11 * 7 * 86400000);
 
     // Find first Monday on or after start
     const firstMonday = new Date(start);
@@ -1125,7 +1145,7 @@ export function DashboardView({
       result.unshift(new Date(first.getTime() - 7 * 86400000));
     }
     return result;
-  }, [filter]);
+  }, [filter, filteredDeals]);
 
   // ── Trends ──
   const prospectsTrend = useMemo(() => weeks.map(weekEnd => {
@@ -1247,7 +1267,7 @@ export function DashboardView({
 
   if (filteredDeals.length === 0) {
     return (
-      <div className="max-w-[960px] mx-auto">
+      <div className="w-full">
         <FilterBuilder {...filterBuilderProps} totalFiltered={0} />
         <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
           <p className="text-gray-500">Keine Deals in diesem Zeitraum</p>
@@ -1257,14 +1277,8 @@ export function DashboardView({
   }
 
   return (
-    <div className="max-w-[960px] mx-auto">
+    <div className="w-full">
       <FilterBuilder {...filterBuilderProps} totalFiltered={filteredDeals.length} />
-
-      {/* Header */}
-      <div className="flex justify-between items-baseline mb-10 pb-4 border-b-2 border-[#2F0D5B]">
-        <h1 className="font-medium text-[22px] text-[#2F0D5B]">B2B Scaling – AI Agents</h1>
-        <div className="text-sm text-[#E8AC68] font-medium">Stage 4: Find Repeatable Sales Motion</div>
-      </div>
 
       {/* Headline Metrics */}
       <div className="grid grid-cols-3 gap-5 mb-9">
@@ -1285,11 +1299,11 @@ export function DashboardView({
         </div>
         <div className="grid grid-cols-2 gap-5">
           <ChartCard title="Prospects kumulativ" current={`${currentProspects}`} target="/ 50">
-            <Sparkline data={prospectsTrend} color="#E8AC68" targetValue={50} targetLabel="Ziel: 50" weeks={weeks} />
+            <Sparkline data={prospectsTrend} color="#E8AC68" targetValue={50} targetLabel="Ziel: 50" weeks={weeks} dashLast />
             <WeekLabels weeks={weeks} />
           </ChartCard>
           <ChartCard title="Won Deals kumulativ" current={`${currentWonDeals}`} target="/ 20">
-            <Sparkline data={wonDealsTrend} color="#2F0D5B" targetValue={20} targetLabel="Ziel: 20" weeks={weeks} />
+            <Sparkline data={wonDealsTrend} color="#2F0D5B" targetValue={20} targetLabel="Ziel: 20" weeks={weeks} dashLast />
             <WeekLabels weeks={weeks} />
           </ChartCard>
           <ChartCard title="Win Rate (Wochenkohorte)" current={`${currentWinRate} %`}>

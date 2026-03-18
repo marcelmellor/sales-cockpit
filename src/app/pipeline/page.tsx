@@ -10,7 +10,6 @@ import { DealStageGroup } from '@/components/pipeline/DealStageGroup';
 import { DealListView } from '@/components/pipeline/DealListView';
 import { DashboardView } from '@/components/pipeline/DashboardView';
 import { Loader2, LayoutGrid, RefreshCw, List, BarChart3 } from 'lucide-react';
-import Link from 'next/link';
 import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
@@ -48,7 +47,7 @@ function PipelineOverviewContent() {
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
-  const [viewMode, setViewMode] = useState<ViewMode>('stages');
+  const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   const [listSortConfig, setListSortConfig] = useState<{ field: SortField; direction: SortDirection }>({ field: 'revenue', direction: 'desc' });
 
   // Initialize from URL params
@@ -356,28 +355,9 @@ function PipelineOverviewContent() {
     <div className="min-h-screen">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <Link href="/" className="text-xl font-bold text-gray-900 hover:text-gray-700 transition-colors">
-              Sales Canvas
-            </Link>
-
-            <nav className="flex items-center gap-2">
-              <Link
-                href="/"
-                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
-              >
-                Canvas
-              </Link>
-              <span className="px-3 py-1.5 text-sm font-medium text-gray-900 bg-gray-100 rounded-md flex items-center gap-1.5">
-                <LayoutGrid className="h-4 w-4" />
-                Pipeline
-              </span>
-            </nav>
-
-            <div className="h-6 w-px bg-gray-200" />
-
-            {/* Pipeline Selector */}
+        <div className="px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {/* Pipeline Selector – far left like an org switcher */}
             <Autosuggest
               options={pipelinesData?.map((pipeline) => ({
                 id: pipeline.id,
@@ -388,50 +368,8 @@ function PipelineOverviewContent() {
               placeholder="Pipeline auswählen..."
               disabled={pipelinesLoading}
               isLoading={pipelinesLoading}
-              className="min-w-[200px]"
+              className="min-w-[220px]"
             />
-
-            {/* View Mode Toggle */}
-            {selectedPipelineId && (
-              <div className="flex items-center bg-gray-100 rounded-md p-0.5">
-                <button
-                  onClick={() => setViewMode('stages')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${
-                    viewMode === 'stages'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                  title="Nach Stages gruppiert"
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                  Stages
-                </button>
-                <button
-                  onClick={() => setViewMode('list')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${
-                    viewMode === 'list'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                  title="Offene Deals als Liste"
-                >
-                  <List className="h-4 w-4" />
-                  Offen
-                </button>
-                <button
-                  onClick={() => setViewMode('dashboard')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${
-                    viewMode === 'dashboard'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                  title="Dashboard"
-                >
-                  <BarChart3 className="h-4 w-4" />
-                  Dashboard
-                </button>
-              </div>
-            )}
 
             {(overviewLoading || secondaryDataLoading) && (
               <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -485,31 +423,62 @@ function PipelineOverviewContent() {
           </div>
         ) : (
           <div className="max-w-7xl mx-auto px-4 space-y-6">
-            {/* Pipeline Header */}
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-2xl font-semibold text-gray-900">
+            {/* Pipeline Header + Tab bar */}
+            <div>
+              <div className="flex items-baseline justify-between mb-1">
+                <h1 className="text-lg font-semibold text-gray-900">
                   {overviewData?.pipelineName}
+                  <span className="ml-2 text-sm font-normal text-gray-400">
+                    {dealsWithMeetings.length} Deal{dealsWithMeetings.length !== 1 ? 's' : ''}
+                    {(meetingsLoading || stageHistoryLoading) && (
+                      <Loader2 className="h-3 w-3 animate-spin inline ml-1.5 text-blue-500" />
+                    )}
+                  </span>
                 </h1>
-                <p className="text-gray-500 mt-1">
-                  {dealsWithMeetings.length} Deal{dealsWithMeetings.length !== 1 ? 's' : ''} in {overviewData?.stages.length} Stages
-                  {(meetingsLoading || stageHistoryLoading) && (
-                    <span className="ml-2 text-blue-500">
-                      <Loader2 className="h-3 w-3 animate-spin inline mr-1" />
-                      {stageHistoryLoading ? 'Stage-Daten werden geladen...' : 'Termine werden geladen...'}
-                    </span>
-                  )}
-                </p>
+                <button
+                  onClick={handleRefresh}
+                  disabled={overviewLoading || secondaryDataLoading}
+                  className="text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
+                  title="Daten neu laden"
+                >
+                  <RefreshCw className={`h-4 w-4 ${secondaryDataLoading || overviewLoading ? 'animate-spin' : ''}`} />
+                </button>
               </div>
-              <button
-                onClick={handleRefresh}
-                disabled={overviewLoading || secondaryDataLoading}
-                className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Daten neu laden"
-              >
-                <RefreshCw className={`h-4 w-4 ${secondaryDataLoading || overviewLoading ? 'animate-spin' : ''}`} />
-                Aktualisieren
-              </button>
+              <div className="flex items-center gap-1 border-b border-gray-200">
+                <button
+                  onClick={() => setViewMode('dashboard')}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                    viewMode === 'dashboard'
+                      ? 'border-gray-900 text-gray-900 font-medium'
+                      : 'border-transparent text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  <BarChart3 className="h-3.5 w-3.5" />
+                  Dashboard
+                </button>
+                <button
+                  onClick={() => setViewMode('stages')}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                    viewMode === 'stages'
+                      ? 'border-gray-900 text-gray-900 font-medium'
+                      : 'border-transparent text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                  Stages
+                </button>
+                <button
+                  onClick={() => setViewMode('list')}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                    viewMode === 'list'
+                      ? 'border-gray-900 text-gray-900 font-medium'
+                      : 'border-transparent text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  <List className="h-3.5 w-3.5" />
+                  Offen
+                </button>
+              </div>
             </div>
 
             {/* View Content */}
