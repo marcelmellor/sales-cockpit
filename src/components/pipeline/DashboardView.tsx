@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useCallback, useEffect } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { Loader2, Plus, X, Save, FolderOpen, Check, Trash2, ChevronDown, ChevronRight, Group, Eye } from 'lucide-react';
 import { useDevStore } from '@/stores/dev-store';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
@@ -435,6 +435,16 @@ function Sparkline({
   bars?: boolean; completionRate?: number[]; dashLast?: boolean;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerW, setContainerW] = useState(0);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setContainerW(entry.contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   if (data.length === 0) return <div className="h-[120px]" />;
 
@@ -443,7 +453,7 @@ function Sparkline({
   const minVal = 0;
   const range = maxVal - minVal || 1;
 
-  const totalW = 440, h = 120, padding = 6;
+  const totalW = containerW || 440, h = 120, padding = 6;
   const yAxisW = 32; // space for y-axis labels
   const w = totalW - yAxisW; // chart area width
 
@@ -479,13 +489,13 @@ function Sparkline({
   const targetY = targetValue != null ? valToY(targetValue) : null;
 
   return (
-    <div className="relative h-[120px]">
+    <div ref={containerRef} className="relative h-[120px]">
       {targetLabel && targetY != null && (
         <span className="absolute right-0 text-[10px] font-medium" style={{ top: `${targetY - 14}px`, color: targetColor }}>
           {targetLabel}
         </span>
       )}
-      <svg viewBox={`0 0 ${totalW} ${h}`} preserveAspectRatio="none" className="w-full h-full"
+      {containerW > 0 && <svg viewBox={`0 0 ${totalW} ${h}`} className="w-full h-full"
         onMouseLeave={() => setHoverIdx(null)}>
         {/* Y-axis ticks & grid lines */}
         {ticks.map(t => {
@@ -572,7 +582,7 @@ function Sparkline({
               fill="transparent" onMouseEnter={() => setHoverIdx(i)} />
           );
         })}
-      </svg>
+      </svg>}
       {/* Tooltip */}
       {hoverIdx != null && (() => {
         const x = idxToX(hoverIdx);
@@ -1276,6 +1286,31 @@ export function DashboardView({
 
   const maxFunnelCount = Math.max(...pipelineFunnel.map(f => f.count), 1);
 
+  // ── Stage conversion rates (based on stage history of filtered deals) ──
+  const { stageConversionRates, stageReachedCounts } = useMemo(() => {
+    // Count how many filtered deals have ever reached each stage
+    const reachedCount: Record<string, number> = {};
+    for (const deal of filteredDeals) {
+      const entry = stageHistory[deal.id];
+      if (!entry?.history) continue;
+      const reachedStages = new Set(entry.history.map(h => h.stageId));
+      for (const sid of reachedStages) {
+        reachedCount[sid] = (reachedCount[sid] || 0) + 1;
+      }
+    }
+
+    // Build ordered list of pipeline stages + won stage
+    const orderedStages = pipelineFunnel.map(f => f.stage.id);
+    const rates: Record<string, number | null> = {};
+    for (let i = 0; i < orderedStages.length; i++) {
+      if (i === 0) { rates[orderedStages[i]] = null; continue; }
+      const prevReached = reachedCount[orderedStages[i - 1]] || 0;
+      const currReached = reachedCount[orderedStages[i]] || 0;
+      rates[orderedStages[i]] = prevReached > 0 ? Math.round((currReached / prevReached) * 100) : null;
+    }
+    return { stageConversionRates: rates, stageReachedCounts: reachedCount };
+  }, [filteredDeals, stageHistory, pipelineFunnel]);
+
   // ── Shared filter builder props ──
   const filterBuilderProps = {
     filter, allStages: stages, onSetFilter: setFilter, quickButtons,
@@ -1319,11 +1354,11 @@ export function DashboardView({
         </div>
         <div className="grid grid-cols-2 gap-5">
           <ChartCard title="Prospects kumulativ" current={`${currentProspects}`} target="/ 50">
-            <Sparkline data={prospectsTrend} color="#E8AC68" targetValue={50} targetLabel="Ziel: 50" weeks={weeks} tooltipOverride={prospectsDeltas} dashLast />
+            <Sparkline data={prospectsTrend} color="#E8AC68" weeks={weeks} tooltipOverride={prospectsDeltas} dashLast />
             <WeekLabels weeks={weeks} />
           </ChartCard>
           <ChartCard title="Won Deals kumulativ" current={`${currentWonDeals}`} target="/ 20">
-            <Sparkline data={wonDealsTrend} color="#2F0D5B" targetValue={20} targetLabel="Ziel: 20" weeks={weeks} dashLast />
+            <Sparkline data={wonDealsTrend} color="#2F0D5B" weeks={weeks} dashLast />
             <WeekLabels weeks={weeks} />
           </ChartCard>
           <ChartCard title="Win Rate (Wochenkohorte)" current={`${currentWinRate} %`}>
@@ -1341,26 +1376,39 @@ export function DashboardView({
       <div className="mb-9">
         <div className="font-medium text-[13px] uppercase tracking-[0.08em] text-[#2F0D5B] mb-4">Aktive Pipeline</div>
         <div className="bg-white border border-[#e8e8e8] rounded-lg p-6">
-          {pipelineFunnel.map((item, idx) => {
-            const widthPercent = Math.max((item.count / maxFunnelCount) * 100, 3);
-            const prevCount = idx > 0 ? pipelineFunnel[idx - 1].count : null;
-            const convRate = prevCount != null && prevCount > 0 ? Math.round((item.count / prevCount) * 100) : null;
-            const isWon = isWonStage(item.stage.label);
-            const barColor = isWon ? '#94D825' : (idx === 0 ? '#2F0D5B' : '#E8AC68');
+          {pipelineFunnel.filter(item => !isWonStage(item.stage.label)).map((item, idx) => {
+            const activeItems = pipelineFunnel.filter(f => !isWonStage(f.stage.label));
+            const maxActive = Math.max(...activeItems.map(f => f.count), 1);
+            const widthPercent = Math.max((item.count / maxActive) * 100, 3);
+            const convRate = stageConversionRates[item.stage.id];
+            const t = activeItems.length > 1 ? idx / (activeItems.length - 1) : 0;
+            const opacity = Math.round(100 - t * 60);
+            const barColor = `color-mix(in srgb, #2F0D5B ${opacity}%, white)`;
+            const prevStageId = idx > 0 ? activeItems[idx - 1].stage.id : null;
+            const convTooltip = convRate != null && prevStageId
+              ? `${stageReachedCounts[item.stage.id] || 0} von ${stageReachedCounts[prevStageId] || 0} Deals aus "${activeItems[idx - 1].stage.label}"`
+              : undefined;
             return (
               <div key={item.stage.id} className="grid items-center gap-3 py-2"
-                style={{ gridTemplateColumns: '120px 1fr 50px 50px', borderBottom: idx < pipelineFunnel.length - 1 ? '1px solid #F9F9F9' : 'none' }}>
+                style={{ gridTemplateColumns: '120px 1fr 50px 50px', borderBottom: idx < activeItems.length - 1 ? '1px solid #F9F9F9' : 'none' }}>
                 <div className="text-[13px]">{item.stage.label}</div>
-                <div className="h-5 bg-[#F9F9F9] rounded overflow-hidden relative">
+                <div className="h-7 bg-[#F9F9F9] rounded overflow-hidden relative">
                   <div className="h-full rounded" style={{ width: `${widthPercent}%`, backgroundColor: barColor }} />
                   {item.mrr > 0 && (
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-[10px] font-medium" style={{ color: widthPercent > 20 ? '#fff' : '#2F0D5B' }}>
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-[12px] font-medium" style={{ color: widthPercent > 20 ? '#fff' : '#2F0D5B' }}>
                       {formatEUR(item.mrr)}
                     </span>
                   )}
                 </div>
                 <div className="text-[13px] font-medium text-right text-[#2F0D5B]">{item.count}</div>
-                <div className="text-[11px] text-right opacity-40">{convRate != null ? `${convRate} %` : ''}</div>
+                <div className="text-[11px] text-right opacity-40 cursor-default relative group/conv">
+                  {convRate != null ? `Ø ${convRate} %` : ''}
+                  {convTooltip && (
+                    <div className="absolute bottom-full right-0 mb-1 px-2 py-1 rounded bg-[#2C3333] text-white text-[11px] whitespace-nowrap shadow-lg opacity-0 group-hover/conv:opacity-100 pointer-events-none transition-opacity z-10">
+                      {convTooltip}
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })}
