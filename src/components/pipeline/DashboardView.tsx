@@ -1009,13 +1009,13 @@ export function DashboardView({
 }: DashboardViewProps) {
 
   // ── Filter state ──
-  const [filter, setFilter] = useState<FilterState>(() => getDefaultFilterState(pipelineId));
+  const [filter, setFilter] = useState<FilterState>(() => getDefaultFilterState(pipelineId ?? undefined));
   const [savedSets, setSavedSets] = useState<SavedFilterSet[]>(() =>
     pipelineId ? loadFilterSets(pipelineId) : []
   );
 
   useEffect(() => {
-    setFilter(getDefaultFilterState(pipelineId));
+    setFilter(getDefaultFilterState(pipelineId ?? undefined));
     setSavedSets(pipelineId ? loadFilterSets(pipelineId) : []);
   }, [pipelineId]);
 
