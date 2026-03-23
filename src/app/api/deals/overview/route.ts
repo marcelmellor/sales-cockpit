@@ -59,6 +59,7 @@ export async function GET(request: Request) {
     }
 
     const pipelineId = searchParams.get('pipelineId');
+    const produkt = searchParams.get('produkt');
 
     if (!pipelineId) {
       return NextResponse.json(
@@ -80,8 +81,8 @@ export async function GET(request: Request) {
       );
     }
 
-    // Fetch deals with associations
-    const dealsWithAssociations = await client.getDealsWithAssociations(pipelineId);
+    // Fetch deals with associations (filtered by product if specified)
+    const dealsWithAssociations = await client.getDealsWithAssociations(pipelineId, produkt || undefined);
 
     // Collect all company IDs
     const companyIds = new Set<string>();

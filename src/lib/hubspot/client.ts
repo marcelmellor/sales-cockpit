@@ -133,7 +133,7 @@ export class HubSpotClient {
   }
 
   // Deals with company associations for overview
-  async getDealsWithAssociations(pipelineId: string) {
+  async getDealsWithAssociations(pipelineId: string, produkt?: string) {
     const properties = [
       'dealname',
       'amount',
@@ -167,7 +167,10 @@ export class HubSpotClient {
       } = {
         properties,
         filterGroups: [{
-          filters: [{ propertyName: 'pipeline', operator: 'EQ', value: pipelineId }]
+          filters: [
+            { propertyName: 'pipeline', operator: 'EQ', value: pipelineId },
+            ...(produkt ? [{ propertyName: 'angebotene_produkte', operator: 'CONTAINS_TOKEN', value: produkt }] : []),
+          ]
         }],
         limit: 100,
       };

@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState, useMemo } from 'react';
+import { Suspense, useCallback, useEffect, useState, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { UserMenu } from '@/components/UserMenu';
 import { DealStageGroup } from '@/components/pipeline/DealStageGroup';
@@ -36,11 +36,25 @@ export type SortDirection = 'asc' | 'desc';
 export type ViewMode = 'stages' | 'list' | 'dashboard';
 
 export default function PipelineOverview() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+      </div>
+    }>
+      <PipelineOverviewContent />
+    </Suspense>
+  );
+}
+
+function PipelineOverviewContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { data: session, status } = useSession();
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
-  const [selectedPortfolios, setSelectedPortfolios] = useState<Set<string>>(new Set());
+  const [selectedProdukt, setSelectedProdukt] = useState<string | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
   const [minAgentMinutes, setMinAgentMinutes] = useState<number | null>(2500);
   const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
@@ -48,8 +62,21 @@ export default function PipelineOverview() {
 
   const isAuthenticated = status === 'authenticated';
 
-  // Fetch pipelines
-  const { data: pipelinesData, isLoading: pipelinesLoading } = useQuery({
+  // Initialize from URL params
+  useEffect(() => {
+    if (isInitialized) return;
+    const produktFromUrl = searchParams.get('produkt');
+    if (produktFromUrl && PORTFOLIO_OPTIONS.some(o => o.value === produktFromUrl)) {
+      setSelectedProdukt(produktFromUrl);
+    } else {
+      // Default to first option
+      setSelectedProdukt(PORTFOLIO_OPTIONS[0].value);
+    }
+    setIsInitialized(true);
+  }, [searchParams, isInitialized]);
+
+  // Fetch pipelines to find Sales Pipeline ID
+  const { data: pipelinesData } = useQuery({
     queryKey: ['pipelines'],
     queryFn: async () => {
       const response = await fetch('/api/pipelines');
@@ -60,38 +87,44 @@ export default function PipelineOverview() {
     enabled: isAuthenticated,
   });
 
-  // Auto-select "Sales Pipeline" when pipelines are loaded
+  // Auto-select "Sales Pipeline"
   useEffect(() => {
     if (pipelinesData && !selectedPipelineId) {
       const salesPipeline = pipelinesData.find(p => p.label === 'Sales Pipeline');
       if (salesPipeline) {
         setSelectedPipelineId(salesPipeline.id);
-        const cachedSort = getCachedData<Record<string, { field: SortField; direction: SortDirection }>>(`sort-${salesPipeline.id}`);
-        if (cachedSort) setSortByStage(cachedSort);
       }
     }
   }, [pipelinesData, selectedPipelineId]);
 
+  // Handle product change
+  const handleProduktChange = (produkt: string) => {
+    setSelectedProdukt(produkt);
+    router.replace(`/?produkt=${produkt}`, { scroll: false });
+  };
+
+  // Cache key includes product for separate caching per product group
+  const cacheKey = selectedPipelineId && selectedProdukt ? `${selectedPipelineId}-${selectedProdukt}` : null;
+
   // Get cached data for initial render
   const cachedOverview = useMemo(
-    () => selectedPipelineId ? getCachedData<PipelineOverviewResponse>(`overview-${selectedPipelineId}`) : null,
-    [selectedPipelineId]
+    () => cacheKey ? getCachedData<PipelineOverviewResponse>(`overview-${cacheKey}`) : null,
+    [cacheKey]
   );
 
-  // Fetch pipeline overview (fast - no meetings)
+  // Fetch pipeline overview filtered by product (server-side)
   const { data: overviewData, isLoading: overviewLoading, error: overviewError } = useQuery({
-    queryKey: ['pipeline-overview', selectedPipelineId],
+    queryKey: ['pipeline-overview', selectedPipelineId, selectedProdukt],
     queryFn: async () => {
-      const response = await fetch(`/api/deals/overview?pipelineId=${selectedPipelineId}`);
+      const response = await fetch(`/api/deals/overview?pipelineId=${selectedPipelineId}&produkt=${selectedProdukt}`);
       if (!response.ok) throw new Error('Failed to fetch pipeline overview');
       const data = await response.json();
       const result = data.data as PipelineOverviewResponse;
-      // Save to localStorage cache
-      setCachedData(`overview-${selectedPipelineId}`, result);
+      if (cacheKey) setCachedData(`overview-${cacheKey}`, result);
       return result;
     },
-    enabled: isAuthenticated && !!selectedPipelineId,
-    staleTime: 5 * 60 * 1000, // 5 minutes cache
+    enabled: isAuthenticated && !!selectedPipelineId && !!selectedProdukt,
+    staleTime: 5 * 60 * 1000,
     initialData: cachedOverview ?? undefined,
   });
 
@@ -121,95 +154,78 @@ export default function PipelineOverview() {
 
   // Get cached meetings data
   const cachedMeetings = useMemo(
-    () => selectedPipelineId ? getCachedData<DealMeetingsMap>(`meetings-${selectedPipelineId}`) : null,
-    [selectedPipelineId]
+    () => cacheKey ? getCachedData<DealMeetingsMap>(`meetings-${cacheKey}`) : null,
+    [cacheKey]
   );
 
-  // Fetch meetings separately (slower - sequential API calls)
+  // Fetch meetings separately
   const { data: meetingsData, isLoading: meetingsLoading, isFetching: meetingsFetching } = useQuery({
-    queryKey: ['pipeline-meetings', selectedPipelineId, dealIds.join(',')],
+    queryKey: ['pipeline-meetings', selectedPipelineId, selectedProdukt, dealIds.join(',')],
     queryFn: async () => {
       if (dealIds.length === 0) return {} as DealMeetingsMap;
       const result = await fetchInBatches<DealMeetingsMap>('/api/deals/overview/meetings', dealIds);
-      setCachedData(`meetings-${selectedPipelineId}`, result);
+      if (cacheKey) setCachedData(`meetings-${cacheKey}`, result);
       return result;
     },
     enabled: isAuthenticated && dealIds.length > 0,
-    staleTime: 5 * 60 * 1000, // 5 minutes cache
+    staleTime: 5 * 60 * 1000,
     initialData: cachedMeetings ?? undefined,
   });
 
   // Get cached stage history data
   const cachedStageHistory = useMemo(
-    () => selectedPipelineId ? getCachedData<DealStageHistoryMap>(`stage-history-${selectedPipelineId}`) : null,
-    [selectedPipelineId]
+    () => cacheKey ? getCachedData<DealStageHistoryMap>(`stage-history-${cacheKey}`) : null,
+    [cacheKey]
   );
 
-  // Fetch stage history separately (slower - sequential API calls)
+  // Fetch stage history separately
   const { data: stageHistoryData, isLoading: stageHistoryLoading, isFetching: stageHistoryFetching } = useQuery({
-    queryKey: ['pipeline-stage-history', selectedPipelineId, dealIds.join(',')],
+    queryKey: ['pipeline-stage-history', selectedPipelineId, selectedProdukt, dealIds.join(',')],
     queryFn: async () => {
       if (dealIds.length === 0) return {} as DealStageHistoryMap;
       const result = await fetchInBatches<DealStageHistoryMap>('/api/deals/overview/stage-history', dealIds);
-      setCachedData(`stage-history-${selectedPipelineId}`, result);
+      if (cacheKey) setCachedData(`stage-history-${cacheKey}`, result);
       return result;
     },
     enabled: isAuthenticated && dealIds.length > 0,
-    staleTime: 5 * 60 * 1000, // 5 minutes cache
+    staleTime: 5 * 60 * 1000,
     initialData: cachedStageHistory ?? undefined,
   });
 
-  // Toggle portfolio selection
-  const togglePortfolio = (portfolio: string) => {
-    setSelectedPortfolios(prev => {
-      const next = new Set(prev);
-      if (next.has(portfolio)) {
-        next.delete(portfolio);
-      } else {
-        next.add(portfolio);
-      }
-      return next;
-    });
-  };
-
-  // Merge meetings and stage history into deals, then filter by portfolio
+  // Merge meetings and stage history into deals
   const dealsWithMeetings: DealOverviewItem[] = useMemo(() => {
     if (!overviewData?.deals) return [];
-    const merged = overviewData.deals.map(deal => ({
+    return overviewData.deals.map(deal => ({
       ...deal,
       nextAppointment: meetingsData?.[deal.id] || null,
       daysInStage: stageHistoryData?.[deal.id]?.daysInStage ?? -1,
       stageEnteredAt: stageHistoryData?.[deal.id]?.stageEnteredAt ?? null,
     }));
-    // Filter by selected portfolios (empty set = show all)
-    if (selectedPortfolios.size === 0) return merged;
-    return merged.filter(deal => {
-      // angeboteneProdukte can be semicolon-separated for multi-value
-      const dealProducts = deal.angeboteneProdukte ? deal.angeboteneProdukte.split(';') : [];
-      return dealProducts.some(p => selectedPortfolios.has(p));
-    });
-  }, [overviewData?.deals, meetingsData, stageHistoryData, selectedPortfolios]);
+  }, [overviewData?.deals, meetingsData, stageHistoryData]);
 
-  // Refresh all data (clears localStorage cache and React Query cache)
+  // Refresh all data
   const handleRefresh = () => {
-    if (selectedPipelineId) {
-      clearPipelineCache(selectedPipelineId);
+    if (cacheKey) {
+      clearPipelineCache(cacheKey);
     }
-    queryClient.invalidateQueries({ queryKey: ['pipeline-overview', selectedPipelineId] });
-    queryClient.invalidateQueries({ queryKey: ['pipeline-meetings', selectedPipelineId] });
-    queryClient.invalidateQueries({ queryKey: ['pipeline-stage-history', selectedPipelineId] });
+    queryClient.invalidateQueries({ queryKey: ['pipeline-overview', selectedPipelineId, selectedProdukt] });
+    queryClient.invalidateQueries({ queryKey: ['pipeline-meetings', selectedPipelineId, selectedProdukt] });
+    queryClient.invalidateQueries({ queryKey: ['pipeline-stage-history', selectedPipelineId, selectedProdukt] });
   };
 
   // Combined loading state for secondary data
   const secondaryDataLoading = meetingsFetching || stageHistoryFetching;
 
-  // Show Agents Minuten column when AI Agent is part of the selected portfolios (or when showing all)
-  const showAgentsMinuten = selectedPortfolios.size === 0 || selectedPortfolios.has('frontdesk');
+  // Show Agents Minuten column when AI Agent is selected
+  const showAgentsMinuten = selectedProdukt === 'frontdesk';
 
-  // Show the agent minutes quick-filter only when AI Agent is the sole selected portfolio
-  const showAgentQuickFilter = selectedPortfolios.size === 1 && selectedPortfolios.has('frontdesk');
+  // Show the agent minutes quick-filter only for AI Agents
+  const showAgentQuickFilter = selectedProdukt === 'frontdesk';
 
-  // Apply agent minutes quick-filter for Stages/List views
+  // Portfolio set for DashboardView (single selection)
+  const selectedPortfolios = useMemo(() => selectedProdukt ? new Set([selectedProdukt]) : new Set<string>(), [selectedProdukt]);
+
+  // Apply agent minutes quick-filter
   const filteredDeals = useMemo(() => {
     if (!showAgentQuickFilter || minAgentMinutes === null) return dealsWithMeetings;
     return dealsWithMeetings.filter(deal => deal.agentsMinuten >= minAgentMinutes);
@@ -228,7 +244,6 @@ export default function PipelineOverview() {
       let newSort: Record<string, { field: SortField; direction: SortDirection }>;
 
       if (current?.field === field) {
-        // Toggle direction
         newSort = {
           ...prev,
           [stageId]: {
@@ -237,7 +252,6 @@ export default function PipelineOverview() {
           },
         };
       } else {
-        // New field, default to descending for revenue/seats, ascending for date
         newSort = {
           ...prev,
           [stageId]: {
@@ -247,9 +261,8 @@ export default function PipelineOverview() {
         };
       }
 
-      // Save to cache
-      if (selectedPipelineId) {
-        setCachedData(`sort-${selectedPipelineId}`, newSort);
+      if (cacheKey) {
+        setCachedData(`sort-${cacheKey}`, newSort);
       }
 
       return newSort;
@@ -257,7 +270,6 @@ export default function PipelineOverview() {
   };
 
   const sortDeals = (deals: DealOverviewItem[], stageId: string): DealOverviewItem[] => {
-    // Default: sort by revenue descending
     const sortConfig = sortByStage[stageId] || { field: 'revenue' as SortField, direction: 'desc' as SortDirection };
 
     return [...deals].sort((a, b) => {
@@ -284,12 +296,11 @@ export default function PipelineOverview() {
     });
   };
 
-  // Reorder stages: swap "Verloren" and "Gewonnen" (Gewonnen should come before Verloren)
+  // Reorder stages: swap "Verloren" and "Gewonnen"
   const reorderedStages = useMemo(() => {
     if (!overviewData?.stages) return [];
     const stages = [...overviewData.stages];
 
-    // Find the indices of "verloren" and "gewonnen" stages
     const verlorenIndex = stages.findIndex(s =>
       s.label.toLowerCase().includes('closed lost') || s.label.toLowerCase().includes('verloren') || s.label.toLowerCase().includes('lost')
     );
@@ -297,7 +308,6 @@ export default function PipelineOverview() {
       s.label.toLowerCase().includes('closed won') || s.label.toLowerCase().includes('gewonnen') || s.label.toLowerCase().includes('won')
     );
 
-    // If both exist and verloren comes before gewonnen, swap them
     if (verlorenIndex !== -1 && gewonnenIndex !== -1 && verlorenIndex < gewonnenIndex) {
       [stages[verlorenIndex], stages[gewonnenIndex]] = [stages[gewonnenIndex], stages[verlorenIndex]];
     }
@@ -305,14 +315,13 @@ export default function PipelineOverview() {
     return stages;
   }, [overviewData?.stages]);
 
-  // Helper to check if stage is closed (won or lost)
+  // Helper to check if stage is closed
   const isClosedStage = useCallback((label: string): boolean => {
     const closedKeywords = ['closed won', 'closed lost', 'verloren', 'lost', 'gewonnen', 'won', 'abgesagt', 'cancelled', 'storniert'];
     return closedKeywords.some(keyword => label.toLowerCase().includes(keyword));
   }, []);
 
-  // Group deals by stage (using dealsWithMeetings)
-  // Limit closed stages (won/lost) to 20 deals
+  // Group deals by stage
   const dealsByStage = reorderedStages.map(stage => {
     const sortedDeals = sortDeals(
       filteredDeals.filter(deal => deal.dealStageId === stage.id),
@@ -326,7 +335,7 @@ export default function PipelineOverview() {
     };
   }) || [];
 
-  // Filter open deals (exclude closed/won stages) and sort for list view
+  // Filter open deals and sort for list view
   const openDeals = useMemo(() => {
     const filtered = filteredDeals.filter(deal =>
       !deal.dealStage.toLowerCase().includes('closed won') &&
@@ -335,7 +344,6 @@ export default function PipelineOverview() {
       !deal.dealStage.toLowerCase().includes('closed')
     );
 
-    // Sort by listSortConfig
     return [...filtered].sort((a, b) => {
       const { field, direction } = listSortConfig;
       let comparison = 0;
@@ -354,7 +362,7 @@ export default function PipelineOverview() {
 
       return direction === 'asc' ? comparison : -comparison;
     });
-  }, [dealsWithMeetings, listSortConfig]);
+  }, [filteredDeals, listSortConfig]);
 
   // Handler for list view sort
   const handleListSortChange = (field: SortField) => {
@@ -378,30 +386,22 @@ export default function PipelineOverview() {
     return null;
   }
 
+  const currentLabel = PORTFOLIO_OPTIONS.find(o => o.value === selectedProdukt)?.label || '';
+
   return (
     <div className="min-h-screen">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Portfolio Filter Pills */}
+            {/* Portfolio Selection Pills (single select, no "Alle") */}
             <span className="text-xs font-medium text-gray-400 uppercase tracking-wide mr-1">Portfolio</span>
-            <button
-              onClick={() => setSelectedPortfolios(new Set())}
-              className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                selectedPortfolios.size === 0
-                  ? 'bg-gray-900 text-white'
-                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-              }`}
-            >
-              Alle
-            </button>
             {PORTFOLIO_OPTIONS.map(({ value, label }) => (
               <button
                 key={value}
-                onClick={() => togglePortfolio(value)}
+                onClick={() => handleProduktChange(value)}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                  selectedPortfolios.has(value)
+                  selectedProdukt === value
                     ? 'bg-gray-900 text-white'
                     : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                 }`}
@@ -431,7 +431,7 @@ export default function PipelineOverview() {
               </p>
             </div>
           </div>
-        ) : !selectedPipelineId || overviewLoading ? (
+        ) : !selectedPipelineId || !selectedProdukt || overviewLoading ? (
           <div className="max-w-7xl mx-auto px-4">
             <div className="flex items-center justify-center gap-2 text-gray-400 py-12">
               <Loader2 className="h-6 w-6 animate-spin" />
@@ -440,11 +440,11 @@ export default function PipelineOverview() {
           </div>
         ) : (
           <div className="max-w-7xl mx-auto px-4 space-y-6">
-            {/* Pipeline Header + Tab bar */}
+            {/* Header + Tab bar */}
             <div>
               <div className="flex items-baseline justify-between mb-1">
                 <h1 className="text-lg font-semibold text-gray-900">
-                  {overviewData?.pipelineName}
+                  {currentLabel}
                   <span className="ml-2 text-sm font-normal text-gray-400">
                     {filteredDeals.length} Deal{filteredDeals.length !== 1 ? 's' : ''}
                     {(meetingsLoading || stageHistoryLoading) && (
