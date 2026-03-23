@@ -17,6 +17,7 @@ interface DealStageGroupProps {
   totalCount?: number; // Total deals in stage (before limiting)
   pipelineId: string;
   pipelineName?: string;
+  showAgentsMinuten?: boolean;
   sortConfig?: {
     field: SortField;
     direction: SortDirection;
@@ -27,13 +28,18 @@ interface DealStageGroupProps {
 }
 
 function isLostStage(label: string): boolean {
+  const l = label.toLowerCase();
+  if (l.includes('closed lost')) return true;
   const lostKeywords = ['verloren', 'lost', 'abgesagt', 'cancelled', 'storniert'];
-  return lostKeywords.some(keyword => label.toLowerCase().includes(keyword));
+  return lostKeywords.some(keyword => l.includes(keyword));
 }
 
 function isWonStage(label: string): boolean {
-  const wonKeywords = ['gewonnen', 'won', 'closed won'];
-  return wonKeywords.some(keyword => label.toLowerCase().includes(keyword));
+  if (isLostStage(label)) return false;
+  const l = label.toLowerCase();
+  if (l.includes('closed won')) return true;
+  const wonKeywords = ['gewonnen', 'won'];
+  return wonKeywords.some(keyword => l.includes(keyword));
 }
 
 export function DealStageGroup({
@@ -46,8 +52,9 @@ export function DealStageGroup({
   onSortChange,
   meetingsLoading,
   stageHistoryLoading,
+  showAgentsMinuten: showAgentsMinutenProp,
 }: DealStageGroupProps) {
-  const showAgentsMinuten = pipelineName === 'AI Agents';
+  const showAgentsMinuten = showAgentsMinutenProp ?? pipelineName === 'AI Agents';
   const [isExpanded, setIsExpanded] = useState(true);
   const stageColors = getStageColor(stage.label);
 

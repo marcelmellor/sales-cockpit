@@ -57,15 +57,18 @@ function formatRelativeDate(date: Date): { relative: string; absolute: string } 
 }
 
 function isLostDeal(dealStage: string): boolean {
+  const l = dealStage.toLowerCase();
+  if (l.includes('closed lost')) return true;
   const lostKeywords = ['verloren', 'lost', 'abgesagt', 'cancelled', 'storniert'];
-  const normalizedStage = dealStage.toLowerCase();
-  return lostKeywords.some(keyword => normalizedStage.includes(keyword));
+  return lostKeywords.some(keyword => l.includes(keyword));
 }
 
 function isWonDeal(dealStage: string): boolean {
-  const wonKeywords = ['gewonnen', 'won', 'closed won'];
-  const normalizedStage = dealStage.toLowerCase();
-  return wonKeywords.some(keyword => normalizedStage.includes(keyword));
+  if (isLostDeal(dealStage)) return false;
+  const l = dealStage.toLowerCase();
+  if (l.includes('closed won')) return true;
+  const wonKeywords = ['gewonnen', 'won'];
+  return wonKeywords.some(keyword => l.includes(keyword));
 }
 
 function getDaysSinceLost(stageEnteredAt: string | null, closedate: string | null): number | null {
@@ -241,7 +244,7 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
               >
                 {stageHistoryLoading ? (
                   <Loader2 className="h-7 w-7 animate-spin text-gray-300" />
-                ) : !deal.dealStage.toLowerCase().includes('abgeschlossen') && (
+                ) : !deal.dealStage.toLowerCase().includes('closed') && !deal.dealStage.toLowerCase().includes('abgeschlossen') && (
                   <Image
                     src={deal.daysInStage >= 0
                       ? getStageAgeIcon(deal.daysInStage).src

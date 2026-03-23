@@ -64,7 +64,7 @@ export function TopBar() {
           <div className="flex items-center gap-2">
             <span className="text-gray-400 text-xs uppercase tracking-wide">Alter</span>
             <span className="font-medium text-gray-700">{canvasData.topBar.dealAge} Tage</span>
-            {!canvasData.topBar.dealStage?.toLowerCase().includes('abgeschlossen') && (
+            {!canvasData.topBar.dealStage?.toLowerCase().includes('closed') && !canvasData.topBar.dealStage?.toLowerCase().includes('abgeschlossen') && (
               <Image
                 src={getDealAgeIcon(canvasData.topBar.dealAge).src}
                 alt={getDealAgeIcon(canvasData.topBar.dealAge).alt}

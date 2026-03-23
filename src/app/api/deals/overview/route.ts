@@ -8,6 +8,7 @@ export interface DealOverviewItem {
   revenue: number;
   agentsMinuten: number;
   productManager: string;
+  angeboteneProdukte: string;
   dealStage: string;
   dealStageId: string;
   dealAge: number; // Alter des Deals in Tagen
@@ -111,6 +112,26 @@ export async function GET(request: Request) {
       return Math.floor(diffTime / (1000 * 60 * 60 * 24));
     };
 
+    // Calculate AI Agent MRR from agent minutes using package pricing
+    // Each package has included minutes + a per-minute rate for overage
+    // Pick the cheapest package for the given minute volume
+    function calculateAgentMrr(minutes: number): number {
+      if (minutes <= 0) return 0;
+
+      const packages = [
+        { included: 300, price: 74.95, perMinute: 0.25 },
+        { included: 1000, price: 199.95, perMinute: 0.20 },
+        { included: 2500, price: 449.95, perMinute: 0.18 },
+        { included: 10000, price: 1499.95, perMinute: 0.15 },
+      ];
+
+      return Math.min(
+        ...packages.map(pkg =>
+          pkg.price + Math.max(0, minutes - pkg.included) * pkg.perMinute
+        )
+      );
+    }
+
     // Build the overview items (without meetings - those are loaded separately)
     const deals: DealOverviewItem[] = dealsWithAssociations.results.map((deal) => {
       const companyId = deal.associations?.companies?.results?.[0]?.id;
@@ -120,12 +141,23 @@ export async function GET(request: Request) {
         id: deal.id,
         companyName: company?.name || deal.properties.dealname || 'Unknown',
         revenue: (() => {
+          const products = deal.properties.angebotene_produkte || '';
+          const agentMinuten = parseInt(deal.properties.agents_minuten) || 0;
+          const isAiAgent = products.split(';').includes('frontdesk');
+
+          // AI Agent deals: MRR always from agent minutes (0 if no minutes)
+          if (isAiAgent) {
+            return calculateAgentMrr(agentMinuten);
+          }
+
+          // Other deals: MRR from TCV / Laufzeit
           const tcv = parseFloat(deal.properties.tcv) || 0;
           const laufzeit = parseFloat(deal.properties.vertragsdauer) || 0;
           return laufzeit > 0 ? tcv / laufzeit : 0;
         })(),
         agentsMinuten: parseInt(deal.properties.agents_minuten) || 0,
         productManager: deal.properties.deal_po || '',
+        angeboteneProdukte: deal.properties.angebotene_produkte || '',
         dealStage: pipeline.stages.find(s => s.id === deal.properties.dealstage)?.label || deal.properties.dealstage || 'Unknown',
         dealStageId: deal.properties.dealstage || '',
         dealAge: calculateDealAge(deal.properties.createdate),

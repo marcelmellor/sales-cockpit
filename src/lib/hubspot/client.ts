@@ -145,6 +145,7 @@ export class HubSpotClient {
       'deal_po',
       'createdate',
       'closedate',
+      'angebotene_produkte',
     ];
 
     // Fetch all deals with pagination (HubSpot search API returns max 100 per request)

@@ -8,7 +8,7 @@ import { formatDistanceToNow, format } from 'date-fns';
 import { de } from 'date-fns/locale';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 
-const WON_KEYWORDS = ['gewonnen', 'won', 'closed won'];
+const WON_KEYWORDS = ['closed won', 'gewonnen', 'won'];
 
 interface DealSlideProps {
   deal: DealOverviewItem;

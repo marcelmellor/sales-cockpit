@@ -1,11 +1,10 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { UserMenu } from '@/components/UserMenu';
-import { Autosuggest } from '@/components/ui/Autosuggest';
 import { DealStageGroup } from '@/components/pipeline/DealStageGroup';
 import { DealListView } from '@/components/pipeline/DealListView';
 import { DashboardView } from '@/components/pipeline/DashboardView';
@@ -23,47 +22,29 @@ interface Pipeline {
   }>;
 }
 
+const PORTFOLIO_OPTIONS = [
+  { value: 'neo', label: 'Cloud PBX' },
+  { value: 'frontdesk', label: 'AI Agents' },
+  { value: 'flow', label: 'AI Flow' },
+  { value: 'cx', label: 'Contact Center' },
+  { value: 'trunking', label: 'Trunking' },
+  { value: 'easy', label: 'satellite Business' },
+] as const;
+
 export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
 export type ViewMode = 'stages' | 'list' | 'dashboard';
 
 export default function PipelineOverview() {
-  return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-      </div>
-    }>
-      <PipelineOverviewContent />
-    </Suspense>
-  );
-}
-
-function PipelineOverviewContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { data: session, status } = useSession();
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
-  const [isInitialized, setIsInitialized] = useState(false);
+  const [selectedPortfolios, setSelectedPortfolios] = useState<Set<string>>(new Set());
+  const [minAgentMinutes, setMinAgentMinutes] = useState<number | null>(2500);
   const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   const [listSortConfig, setListSortConfig] = useState<{ field: SortField; direction: SortDirection }>({ field: 'revenue', direction: 'desc' });
-
-  // Initialize from URL params
-  useEffect(() => {
-    if (isInitialized) return;
-    const pipelineFromUrl = searchParams.get('id');
-    if (pipelineFromUrl) {
-      setSelectedPipelineId(pipelineFromUrl);
-      // Load cached sort settings for this pipeline
-      const cachedSort = getCachedData<Record<string, { field: SortField; direction: SortDirection }>>(`sort-${pipelineFromUrl}`);
-      if (cachedSort) {
-        setSortByStage(cachedSort);
-      }
-    }
-    setIsInitialized(true);
-  }, [searchParams, isInitialized]);
 
   const isAuthenticated = status === 'authenticated';
 
@@ -78,6 +59,18 @@ function PipelineOverviewContent() {
     },
     enabled: isAuthenticated,
   });
+
+  // Auto-select "Sales Pipeline" when pipelines are loaded
+  useEffect(() => {
+    if (pipelinesData && !selectedPipelineId) {
+      const salesPipeline = pipelinesData.find(p => p.label === 'Sales Pipeline');
+      if (salesPipeline) {
+        setSelectedPipelineId(salesPipeline.id);
+        const cachedSort = getCachedData<Record<string, { field: SortField; direction: SortDirection }>>(`sort-${salesPipeline.id}`);
+        if (cachedSort) setSortByStage(cachedSort);
+      }
+    }
+  }, [pipelinesData, selectedPipelineId]);
 
   // Get cached data for initial render
   const cachedOverview = useMemo(
@@ -153,16 +146,36 @@ function PipelineOverviewContent() {
     initialData: cachedStageHistory ?? undefined,
   });
 
-  // Merge meetings and stage history into deals
+  // Toggle portfolio selection
+  const togglePortfolio = (portfolio: string) => {
+    setSelectedPortfolios(prev => {
+      const next = new Set(prev);
+      if (next.has(portfolio)) {
+        next.delete(portfolio);
+      } else {
+        next.add(portfolio);
+      }
+      return next;
+    });
+  };
+
+  // Merge meetings and stage history into deals, then filter by portfolio
   const dealsWithMeetings: DealOverviewItem[] = useMemo(() => {
     if (!overviewData?.deals) return [];
-    return overviewData.deals.map(deal => ({
+    const merged = overviewData.deals.map(deal => ({
       ...deal,
       nextAppointment: meetingsData?.[deal.id] || null,
       daysInStage: stageHistoryData?.[deal.id]?.daysInStage ?? -1,
       stageEnteredAt: stageHistoryData?.[deal.id]?.stageEnteredAt ?? null,
     }));
-  }, [overviewData?.deals, meetingsData, stageHistoryData]);
+    // Filter by selected portfolios (empty set = show all)
+    if (selectedPortfolios.size === 0) return merged;
+    return merged.filter(deal => {
+      // angeboteneProdukte can be semicolon-separated for multi-value
+      const dealProducts = deal.angeboteneProdukte ? deal.angeboteneProdukte.split(';') : [];
+      return dealProducts.some(p => selectedPortfolios.has(p));
+    });
+  }, [overviewData?.deals, meetingsData, stageHistoryData, selectedPortfolios]);
 
   // Refresh all data (clears localStorage cache and React Query cache)
   const handleRefresh = () => {
@@ -177,25 +190,24 @@ function PipelineOverviewContent() {
   // Combined loading state for secondary data
   const secondaryDataLoading = meetingsFetching || stageHistoryFetching;
 
+  // Show Agents Minuten column when AI Agent is part of the selected portfolios (or when showing all)
+  const showAgentsMinuten = selectedPortfolios.size === 0 || selectedPortfolios.has('frontdesk');
+
+  // Show the agent minutes quick-filter only when AI Agent is the sole selected portfolio
+  const showAgentQuickFilter = selectedPortfolios.size === 1 && selectedPortfolios.has('frontdesk');
+
+  // Apply agent minutes quick-filter for Stages/List views
+  const filteredDeals = useMemo(() => {
+    if (!showAgentQuickFilter || minAgentMinutes === null) return dealsWithMeetings;
+    return dealsWithMeetings.filter(deal => deal.agentsMinuten >= minAgentMinutes);
+  }, [dealsWithMeetings, showAgentQuickFilter, minAgentMinutes]);
+
   // Redirect to login if not authenticated
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/login');
     }
   }, [status, router]);
-
-  const handlePipelineChange = (pipelineId: string | null) => {
-    setSelectedPipelineId(pipelineId);
-    if (pipelineId) {
-      // Load cached sort settings for this pipeline
-      const cachedSort = getCachedData<Record<string, { field: SortField; direction: SortDirection }>>(`sort-${pipelineId}`);
-      setSortByStage(cachedSort || {});
-      router.replace(`/?id=${pipelineId}`, { scroll: false });
-    } else {
-      setSortByStage({});
-      router.replace('/', { scroll: false });
-    }
-  };
 
   const handleSortChange = (stageId: string, field: SortField) => {
     setSortByStage(prev => {
@@ -266,10 +278,10 @@ function PipelineOverviewContent() {
 
     // Find the indices of "verloren" and "gewonnen" stages
     const verlorenIndex = stages.findIndex(s =>
-      s.label.toLowerCase().includes('verloren') || s.label.toLowerCase().includes('lost')
+      s.label.toLowerCase().includes('closed lost') || s.label.toLowerCase().includes('verloren') || s.label.toLowerCase().includes('lost')
     );
     const gewonnenIndex = stages.findIndex(s =>
-      s.label.toLowerCase().includes('gewonnen') || s.label.toLowerCase().includes('won')
+      s.label.toLowerCase().includes('closed won') || s.label.toLowerCase().includes('gewonnen') || s.label.toLowerCase().includes('won')
     );
 
     // If both exist and verloren comes before gewonnen, swap them
@@ -282,7 +294,7 @@ function PipelineOverviewContent() {
 
   // Helper to check if stage is closed (won or lost)
   const isClosedStage = useCallback((label: string): boolean => {
-    const closedKeywords = ['verloren', 'lost', 'gewonnen', 'won', 'abgesagt', 'cancelled', 'storniert'];
+    const closedKeywords = ['closed won', 'closed lost', 'verloren', 'lost', 'gewonnen', 'won', 'abgesagt', 'cancelled', 'storniert'];
     return closedKeywords.some(keyword => label.toLowerCase().includes(keyword));
   }, []);
 
@@ -290,7 +302,7 @@ function PipelineOverviewContent() {
   // Limit closed stages (won/lost) to 20 deals
   const dealsByStage = reorderedStages.map(stage => {
     const sortedDeals = sortDeals(
-      dealsWithMeetings.filter(deal => deal.dealStageId === stage.id),
+      filteredDeals.filter(deal => deal.dealStageId === stage.id),
       stage.id
     );
     const isClosed = isClosedStage(stage.label);
@@ -303,7 +315,9 @@ function PipelineOverviewContent() {
 
   // Filter open deals (exclude closed/won stages) and sort for list view
   const openDeals = useMemo(() => {
-    const filtered = dealsWithMeetings.filter(deal =>
+    const filtered = filteredDeals.filter(deal =>
+      !deal.dealStage.toLowerCase().includes('closed won') &&
+      !deal.dealStage.toLowerCase().includes('closed lost') &&
       !deal.dealStage.toLowerCase().includes('abgeschlossen') &&
       !deal.dealStage.toLowerCase().includes('closed')
     );
@@ -356,23 +370,35 @@ function PipelineOverviewContent() {
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Pipeline Selector – far left like an org switcher */}
-            <Autosuggest
-              options={pipelinesData?.map((pipeline) => ({
-                id: pipeline.id,
-                label: pipeline.label,
-              })) || []}
-              value={selectedPipelineId}
-              onChange={handlePipelineChange}
-              placeholder="Pipeline auswählen..."
-              disabled={pipelinesLoading}
-              isLoading={pipelinesLoading}
-              className="min-w-[220px]"
-            />
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Portfolio Filter Pills */}
+            <span className="text-xs font-medium text-gray-400 uppercase tracking-wide mr-1">Portfolio</span>
+            <button
+              onClick={() => setSelectedPortfolios(new Set())}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                selectedPortfolios.size === 0
+                  ? 'bg-gray-900 text-white'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}
+            >
+              Alle
+            </button>
+            {PORTFOLIO_OPTIONS.map(({ value, label }) => (
+              <button
+                key={value}
+                onClick={() => togglePortfolio(value)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                  selectedPortfolios.has(value)
+                    ? 'bg-gray-900 text-white'
+                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
 
             {(overviewLoading || secondaryDataLoading) && (
-              <div className="flex items-center gap-2 text-sm text-gray-500">
+              <div className="flex items-center gap-2 text-sm text-gray-500 ml-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {secondaryDataLoading && !overviewLoading ? 'Termine laden...' : 'Laden...'}
               </div>
@@ -392,29 +418,7 @@ function PipelineOverviewContent() {
               </p>
             </div>
           </div>
-        ) : !selectedPipelineId ? (
-          <div className="max-w-7xl mx-auto px-4">
-            <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
-              <LayoutGrid className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-              <h2 className="text-xl font-semibold text-gray-700 mb-2">
-                Pipeline-Übersicht
-              </h2>
-              <p className="text-gray-500 mb-4">
-                Wählen Sie eine Pipeline aus, um alle Deals nach Stage gruppiert zu sehen.
-              </p>
-              {pipelinesLoading ? (
-                <div className="flex items-center justify-center gap-2 text-gray-400">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Pipelines werden geladen...
-                </div>
-              ) : (
-                <p className="text-sm text-gray-400">
-                  {pipelinesData?.length} Pipeline{pipelinesData?.length !== 1 ? 's' : ''} verfügbar
-                </p>
-              )}
-            </div>
-          </div>
-        ) : overviewLoading ? (
+        ) : !selectedPipelineId || overviewLoading ? (
           <div className="max-w-7xl mx-auto px-4">
             <div className="flex items-center justify-center gap-2 text-gray-400 py-12">
               <Loader2 className="h-6 w-6 animate-spin" />
@@ -429,7 +433,7 @@ function PipelineOverviewContent() {
                 <h1 className="text-lg font-semibold text-gray-900">
                   {overviewData?.pipelineName}
                   <span className="ml-2 text-sm font-normal text-gray-400">
-                    {dealsWithMeetings.length} Deal{dealsWithMeetings.length !== 1 ? 's' : ''}
+                    {filteredDeals.length} Deal{filteredDeals.length !== 1 ? 's' : ''}
                     {(meetingsLoading || stageHistoryLoading) && (
                       <Loader2 className="h-3 w-3 animate-spin inline ml-1.5 text-blue-500" />
                     )}
@@ -444,40 +448,67 @@ function PipelineOverviewContent() {
                   <RefreshCw className={`h-4 w-4 ${secondaryDataLoading || overviewLoading ? 'animate-spin' : ''}`} />
                 </button>
               </div>
-              <div className="flex items-center gap-1 border-b border-gray-200">
-                <button
-                  onClick={() => setViewMode('dashboard')}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
-                    viewMode === 'dashboard'
-                      ? 'border-gray-900 text-gray-900 font-medium'
-                      : 'border-transparent text-gray-400 hover:text-gray-600'
-                  }`}
-                >
-                  <BarChart3 className="h-3.5 w-3.5" />
-                  Dashboard
-                </button>
-                <button
-                  onClick={() => setViewMode('stages')}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
-                    viewMode === 'stages'
-                      ? 'border-gray-900 text-gray-900 font-medium'
-                      : 'border-transparent text-gray-400 hover:text-gray-600'
-                  }`}
-                >
-                  <LayoutGrid className="h-3.5 w-3.5" />
-                  Stages
-                </button>
-                <button
-                  onClick={() => setViewMode('list')}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
-                    viewMode === 'list'
-                      ? 'border-gray-900 text-gray-900 font-medium'
-                      : 'border-transparent text-gray-400 hover:text-gray-600'
-                  }`}
-                >
-                  <List className="h-3.5 w-3.5" />
-                  Offen
-                </button>
+              <div className="flex items-center justify-between border-b border-gray-200">
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setViewMode('dashboard')}
+                    className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                      viewMode === 'dashboard'
+                        ? 'border-gray-900 text-gray-900 font-medium'
+                        : 'border-transparent text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    <BarChart3 className="h-3.5 w-3.5" />
+                    Dashboard
+                  </button>
+                  <button
+                    onClick={() => setViewMode('stages')}
+                    className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                      viewMode === 'stages'
+                        ? 'border-gray-900 text-gray-900 font-medium'
+                        : 'border-transparent text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5" />
+                    Stages
+                  </button>
+                  <button
+                    onClick={() => setViewMode('list')}
+                    className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                      viewMode === 'list'
+                        ? 'border-gray-900 text-gray-900 font-medium'
+                        : 'border-transparent text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    <List className="h-3.5 w-3.5" />
+                    Offen
+                  </button>
+                </div>
+                {showAgentQuickFilter && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-gray-400">Minuten</span>
+                    <button
+                      onClick={() => setMinAgentMinutes(2500)}
+                      className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                        minAgentMinutes === 2500
+                          ? 'bg-gray-900 text-white'
+                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}
+                    >
+                      ≥ 2.500
+                    </button>
+                    <button
+                      onClick={() => setMinAgentMinutes(null)}
+                      className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                        minAgentMinutes === null
+                          ? 'bg-gray-900 text-white'
+                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}
+                    >
+                      Alle
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -492,6 +523,7 @@ function PipelineOverviewContent() {
                   totalCount={totalCount}
                   pipelineId={selectedPipelineId}
                   pipelineName={overviewData?.pipelineName}
+                  showAgentsMinuten={showAgentsMinuten}
                   sortConfig={sortByStage[stage.id]}
                   onSortChange={(field) => handleSortChange(stage.id, field)}
                   meetingsLoading={meetingsLoading}
@@ -502,11 +534,12 @@ function PipelineOverviewContent() {
               /* Dashboard View */
               <DashboardView
                 stages={reorderedStages}
-                deals={overviewData?.deals ?? []}
+                deals={filteredDeals}
                 isClosedStage={isClosedStage}
                 stageHistory={stageHistoryData ?? {}}
                 stageHistoryLoading={stageHistoryLoading}
                 pipelineId={selectedPipelineId}
+                selectedPortfolios={selectedPortfolios}
               />
             ) : (
               /* Open Deals List */

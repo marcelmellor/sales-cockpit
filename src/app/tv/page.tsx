@@ -14,7 +14,7 @@ interface Pipeline {
 }
 
 // Lost/cancelled stage keywords - these deals are filtered out
-const LOST_KEYWORDS = ['verloren', 'lost', 'abgesagt', 'cancelled', 'storniert'];
+const LOST_KEYWORDS = ['closed lost', 'verloren', 'lost', 'abgesagt', 'cancelled', 'storniert'];
 
 function isLostStage(stageName: string): boolean {
   const lower = stageName.toLowerCase();

@@ -19,6 +19,7 @@ interface DashboardViewProps {
   stageHistory: DealStageHistoryMap;
   stageHistoryLoading?: boolean;
   pipelineId?: string | null;
+  selectedPortfolios?: Set<string>;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -91,10 +92,9 @@ function makeGroup(logic: FilterLogic = 'AND'): FilterGroup {
   return { kind: 'group', id: makeId(), logic, children: [makeCriterion(), makeCriterion()] };
 }
 
-// ── Pipeline-specific default filters ──
-const PIPELINE_DEFAULT_FILTERS: Record<string, () => FilterState> = {
-  // AI Agents
-  '2326312177': () => ({
+// ── Portfolio-specific default filters ──
+const PORTFOLIO_DEFAULT_FILTERS: Record<string, () => FilterState> = {
+  'frontdesk': () => ({
     logic: 'AND',
     children: [
       makeCriterion({ type: 'mrr', operator: 'after', numberFrom: 450, dateFrom: '' }),
@@ -102,17 +102,21 @@ const PIPELINE_DEFAULT_FILTERS: Record<string, () => FilterState> = {
         kind: 'group', id: makeId(), logic: 'OR',
         children: [
           makeCriterion({ type: 'createdate', operator: 'after', dateFrom: '2026-01-01' }),
-          makeCriterion({ type: 'stage_reached', stageId: '3177741538', operator: 'after', dateFrom: '2026-01-01' }),
-          makeCriterion({ type: 'stage_reached', stageId: '3177741539', operator: 'after', dateFrom: '2026-01-01' }),
+          makeCriterion({ type: 'stage_reached', stageId: '4897329344', operator: 'after', dateFrom: '2026-01-01' }),
+          makeCriterion({ type: 'stage_reached', stageId: '4897329345', operator: 'after', dateFrom: '2026-01-01' }),
         ],
       },
     ],
   }),
 };
 
-function getDefaultFilterState(pipelineId?: string): FilterState {
-  if (pipelineId && PIPELINE_DEFAULT_FILTERS[pipelineId]) {
-    return PIPELINE_DEFAULT_FILTERS[pipelineId]();
+function getDefaultFilterState(selectedPortfolios?: Set<string>): FilterState {
+  // If exactly one portfolio is selected, check for a specific default filter
+  if (selectedPortfolios && selectedPortfolios.size === 1) {
+    const portfolio = [...selectedPortfolios][0];
+    if (PORTFOLIO_DEFAULT_FILTERS[portfolio]) {
+      return PORTFOLIO_DEFAULT_FILTERS[portfolio]();
+    }
   }
   return {
     logic: 'AND',
@@ -381,12 +385,14 @@ function getWeekRange(date: Date): string {
 
 function isLostStage(label: string): boolean {
   const l = label.toLowerCase();
+  if (l.includes('closed lost')) return true;
   return l.includes('verloren') || l.includes('lost') || l.includes('abgesagt') || l.includes('cancelled') || l.includes('storniert');
 }
 
 function isWonStage(label: string): boolean {
   if (isLostStage(label)) return false;
   const l = label.toLowerCase();
+  if (l.includes('closed won')) return true;
   return l.includes('gewonnen') || l.includes('won') || l.includes('abgeschlossen') || l.includes('aktiv') || l.includes('active');
 }
 
@@ -1026,19 +1032,22 @@ function FilterBuilder({
 // ══════════════════════════════════════════════
 
 export function DashboardView({
-  stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId,
+  stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId, selectedPortfolios,
 }: DashboardViewProps) {
 
+  // Stable key for portfolio selection to detect changes
+  const portfolioKey = useMemo(() => selectedPortfolios ? [...selectedPortfolios].sort().join(',') : '', [selectedPortfolios]);
+
   // ── Filter state ──
-  const [filter, setFilter] = useState<FilterState>(() => getDefaultFilterState(pipelineId ?? undefined));
+  const [filter, setFilter] = useState<FilterState>(() => getDefaultFilterState(selectedPortfolios));
   const [savedSets, setSavedSets] = useState<SavedFilterSet[]>(() =>
     pipelineId ? loadFilterSets(pipelineId) : []
   );
 
   useEffect(() => {
-    setFilter(getDefaultFilterState(pipelineId ?? undefined));
+    setFilter(getDefaultFilterState(selectedPortfolios));
     setSavedSets(pipelineId ? loadFilterSets(pipelineId) : []);
-  }, [pipelineId]);
+  }, [portfolioKey, pipelineId]);
 
   const hasStageReached = hasStageReachedInTree(filter.children);
 
@@ -1287,29 +1296,119 @@ export function DashboardView({
   const maxFunnelCount = Math.max(...pipelineFunnel.map(f => f.count), 1);
 
   // ── Stage conversion rates (based on stage history of filtered deals) ──
-  const { stageConversionRates, stageReachedCounts } = useMemo(() => {
-    // Count how many filtered deals have ever reached each stage
+  const { stageConversionRates, stageReachedCounts, stageConvCounts } = useMemo(() => {
+    // Map old pipeline stage IDs to new Sales Pipeline stage IDs
+    const STAGE_ID_MAP: Record<string, string> = {
+      // Old AI Agents pipeline
+      '3177741533': '4897329341', // Demo Termin vereinbart → Demo / Business Case
+      '3983818954': '4897329342', // Onboarding Termin vereinbart → PoC / Pitch
+      '3177741537': '4897329343', // Negotiation → Commercial Negotiation
+      '3177741538': '4897329344', // Abgeschlossen und gewonnen → Closed won
+      '3177741539': '4897329345', // Abgeschlossen und verloren → Closed lost
+      // Old Sales pipeline
+      '164471537': '4897329340',  // Discovery → Discovery scheduled
+      '699747530': '4897329341',  // Demo / Business Case → Demo / Business Case
+      '699747531': '4897329342',  // PoC / Pitch → PoC / Pitch
+      '699747532': '4897329343',  // Closing → Commercial Negotiation
+      '699747533': '4897329344',  // Closed won → Closed won
+      '699747534': '4897329345',  // Closed lost → Closed lost
+      // Old pipeline 3
+      '1340330225': '4897329340', // Erstkontakt AE → Discovery scheduled
+      '1340330226': '4897329341', // Demo → Demo / Business Case
+      '1340330227': '4897329343', // Negotiation → Commercial Negotiation
+      '1340330228': '4897329343', // Closing → Commercial Negotiation
+      '1340330230': '4897329344', // Closed won → Closed won
+      '1340330231': '4897329345', // Closed lost → Closed lost
+    };
+
+    const mapStageId = (id: string): string => STAGE_ID_MAP[id] || id;
+
+    // Only count stage history entries for stages that exist in the current pipeline
+    const validStageIds = new Set(pipelineFunnel.map(f => f.stage.id));
+
+    // Per-deal: collect the set of (mapped) stages each deal reached
+    const dealReachedMap = new Map<string, Set<string>>();
     const reachedCount: Record<string, number> = {};
+
     for (const deal of filteredDeals) {
+      const reachedStages = new Set<string>();
+
       const entry = stageHistory[deal.id];
-      if (!entry?.history) continue;
-      const reachedStages = new Set(entry.history.map(h => h.stageId));
+      if (entry?.history) {
+        for (const h of entry.history) {
+          const mapped = mapStageId(h.stageId);
+          if (validStageIds.has(mapped)) {
+            reachedStages.add(mapped);
+          }
+        }
+      }
+
+      const mappedCurrent = mapStageId(deal.dealStageId);
+      if (validStageIds.has(mappedCurrent)) {
+        reachedStages.add(mappedCurrent);
+      }
+
+      dealReachedMap.set(deal.id, reachedStages);
       for (const sid of reachedStages) {
         reachedCount[sid] = (reachedCount[sid] || 0) + 1;
       }
     }
 
-    // Build ordered list of pipeline stages + won stage
-    const orderedStages = pipelineFunnel.map(f => f.stage.id);
+    // Build ordered list — only stages that were actually reached
+    const allStageIds = pipelineFunnel.map(f => f.stage.id);
+    const orderedStages = allStageIds.filter(sid => (reachedCount[sid] || 0) > 0);
+
+    // Conversion A→B: of deals that reached A, how many also reached B?
     const rates: Record<string, number | null> = {};
+    // Store "X von Y" per stage for tooltips: convCounts[stageB] = { reached: X, fromPrev: Y }
+    const convCounts: Record<string, { reached: number; fromPrev: number }> = {};
     for (let i = 0; i < orderedStages.length; i++) {
       if (i === 0) { rates[orderedStages[i]] = null; continue; }
-      const prevReached = reachedCount[orderedStages[i - 1]] || 0;
-      const currReached = reachedCount[orderedStages[i]] || 0;
-      rates[orderedStages[i]] = prevReached > 0 ? Math.round((currReached / prevReached) * 100) : null;
+      const prevId = orderedStages[i - 1];
+      const currId = orderedStages[i];
+      let reachedPrev = 0;
+      let reachedBoth = 0;
+      for (const stages of dealReachedMap.values()) {
+        if (stages.has(prevId)) {
+          reachedPrev++;
+          if (stages.has(currId)) reachedBoth++;
+        }
+      }
+      rates[currId] = reachedPrev > 0 ? Math.round((reachedBoth / reachedPrev) * 100) : null;
+      convCounts[currId] = { reached: reachedBoth, fromPrev: reachedPrev };
     }
-    return { stageConversionRates: rates, stageReachedCounts: reachedCount };
+    return { stageConversionRates: rates, stageReachedCounts: reachedCount, stageConvCounts: convCounts };
   }, [filteredDeals, stageHistory, pipelineFunnel]);
+
+  // ── Average dwell time per stage (in days) ──
+  const avgDaysInStage = useMemo(() => {
+    const totalDays: Record<string, number> = {};
+    const count: Record<string, number> = {};
+    const now = Date.now();
+    for (const deal of filteredDeals) {
+      const entry = stageHistory[deal.id];
+      if (!entry?.history || entry.history.length === 0) continue;
+      // History is newest-first, reverse to chronological
+      const sorted = [...entry.history].sort((a, b) =>
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      );
+      for (let i = 0; i < sorted.length; i++) {
+        const stageId = sorted[i].stageId;
+        const enteredAt = new Date(sorted[i].timestamp).getTime();
+        const exitedAt = i < sorted.length - 1
+          ? new Date(sorted[i + 1].timestamp).getTime()
+          : now;
+        const days = (exitedAt - enteredAt) / (1000 * 60 * 60 * 24);
+        totalDays[stageId] = (totalDays[stageId] || 0) + days;
+        count[stageId] = (count[stageId] || 0) + 1;
+      }
+    }
+    const avg: Record<string, number> = {};
+    for (const sid of Object.keys(totalDays)) {
+      avg[sid] = Math.round(totalDays[sid] / count[sid]);
+    }
+    return avg;
+  }, [filteredDeals, stageHistory]);
 
   // ── Shared filter builder props ──
   const filterBuilderProps = {
@@ -1376,8 +1475,8 @@ export function DashboardView({
       <div className="mb-9">
         <div className="font-medium text-[13px] uppercase tracking-[0.08em] text-[#2F0D5B] mb-4">Aktive Pipeline</div>
         <div className="bg-white border border-[#e8e8e8] rounded-lg p-6">
-          {pipelineFunnel.filter(item => !isWonStage(item.stage.label)).map((item, idx) => {
-            const activeItems = pipelineFunnel.filter(f => !isWonStage(f.stage.label));
+          {pipelineFunnel.filter(item => !isWonStage(item.stage.label) && item.count > 0).map((item, idx) => {
+            const activeItems = pipelineFunnel.filter(f => !isWonStage(f.stage.label) && f.count > 0);
             const maxActive = Math.max(...activeItems.map(f => f.count), 1);
             const widthPercent = Math.max((item.count / maxActive) * 100, 3);
             const convRate = stageConversionRates[item.stage.id];
@@ -1385,33 +1484,60 @@ export function DashboardView({
             const opacity = Math.round(100 - t * 60);
             const barColor = `color-mix(in srgb, #2F0D5B ${opacity}%, white)`;
             const prevStageId = idx > 0 ? activeItems[idx - 1].stage.id : null;
-            const convTooltip = convRate != null && prevStageId
-              ? `${stageReachedCounts[item.stage.id] || 0} von ${stageReachedCounts[prevStageId] || 0} Deals aus "${activeItems[idx - 1].stage.label}"`
+            const conv = stageConvCounts[item.stage.id];
+            const convTooltip = convRate != null && conv
+              ? `${conv.reached} von ${conv.fromPrev} Deals`
               : undefined;
             return (
-              <div key={item.stage.id} className="grid items-center gap-3 py-2"
-                style={{ gridTemplateColumns: '120px 1fr 50px 50px', borderBottom: idx < activeItems.length - 1 ? '1px solid #F9F9F9' : 'none' }}>
-                <div className="text-[13px]">{item.stage.label}</div>
-                <div className="h-7 bg-[#F9F9F9] rounded overflow-hidden relative">
-                  <div className="h-full rounded" style={{ width: `${widthPercent}%`, backgroundColor: barColor }} />
-                  {item.mrr > 0 && (
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-[12px] font-medium" style={{ color: widthPercent > 20 ? '#fff' : '#2F0D5B' }}>
-                      {formatEUR(item.mrr)}
-                    </span>
-                  )}
-                </div>
-                <div className="text-[13px] font-medium text-right text-[#2F0D5B]">{item.count}</div>
-                <div className="text-[11px] text-right opacity-40 cursor-default relative group/conv">
-                  {convRate != null ? `Ø ${convRate} %` : ''}
-                  {convTooltip && (
-                    <div className="absolute bottom-full right-0 mb-1 px-2 py-1 rounded bg-[#2C3333] text-white text-[11px] whitespace-nowrap shadow-lg opacity-0 group-hover/conv:opacity-100 pointer-events-none transition-opacity z-10">
-                      {convTooltip}
-                    </div>
-                  )}
+              <div key={item.stage.id}>
+                {convRate != null && (
+                  <div className="flex items-center gap-2 py-1 pl-[132px] cursor-default relative group/conv">
+                    <div className="text-[11px] text-[#2F0D5B] opacity-30">↓ Ø {convRate} %</div>
+                    {convTooltip && (
+                      <div className="absolute left-[132px] top-full mt-1 px-2 py-1 rounded bg-[#2C3333] text-white text-[11px] whitespace-nowrap shadow-lg opacity-0 group-hover/conv:opacity-100 pointer-events-none transition-opacity z-20">
+                        {convTooltip}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div className="grid items-center gap-3 py-2"
+                  style={{ gridTemplateColumns: '120px 1fr 50px 60px' }}>
+                  <div className="text-[13px]">{item.stage.label}</div>
+                  <div className="h-7 bg-[#F9F9F9] rounded overflow-hidden relative">
+                    <div className="h-full rounded" style={{ width: `${widthPercent}%`, backgroundColor: barColor }} />
+                    {item.mrr > 0 && (
+                      <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-[12px] font-medium" style={{ color: widthPercent > 20 ? '#fff' : '#2F0D5B' }}>
+                        {formatEUR(item.mrr)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[13px] font-medium text-right text-[#2F0D5B]">{item.count}</div>
+                  <div className="text-[11px] text-right opacity-30">
+                    {avgDaysInStage[item.stage.id] != null ? `Ø ${avgDaysInStage[item.stage.id]} d` : ''}
+                  </div>
                 </div>
               </div>
             );
           })}
+          {(() => {
+            const activeItems = pipelineFunnel.filter(f => !isWonStage(f.stage.label) && f.count > 0);
+            const wonStageItem = pipelineFunnel.find(f => isWonStage(f.stage.label));
+            const wonConv = wonStageItem ? stageConvCounts[wonStageItem.stage.id] : null;
+            const winRate = wonConv && wonConv.fromPrev > 0 ? Math.round((wonConv.reached / wonConv.fromPrev) * 100) : null;
+            const winTooltip = wonConv
+              ? `${wonConv.reached} von ${wonConv.fromPrev} Deals`
+              : undefined;
+            return winRate != null ? (
+              <div className="flex items-center gap-2 py-1 pl-[132px] cursor-default relative group/win">
+                <div className="text-[11px] text-[#2F0D5B] opacity-30">↓ Ø {winRate} % Win Rate</div>
+                {winTooltip && (
+                  <div className="absolute left-[132px] top-full mt-1 px-2 py-1 rounded bg-[#2C3333] text-white text-[11px] whitespace-nowrap shadow-lg opacity-0 group-hover/win:opacity-100 pointer-events-none transition-opacity z-20">
+                    {winTooltip}
+                  </div>
+                )}
+              </div>
+            ) : null;
+          })()}
         </div>
       </div>
 
