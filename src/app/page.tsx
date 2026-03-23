@@ -98,6 +98,27 @@ export default function PipelineOverview() {
   // Extract deal IDs for meetings query
   const dealIds = useMemo(() => overviewData?.deals.map(d => d.id) || [], [overviewData]);
 
+  // Helper: fetch in batches to avoid URI Too Long (414) errors
+  async function fetchInBatches<T extends Record<string, unknown>>(
+    endpoint: string,
+    ids: string[],
+    batchSize = 100,
+  ): Promise<T> {
+    const batches: string[][] = [];
+    for (let i = 0; i < ids.length; i += batchSize) {
+      batches.push(ids.slice(i, i + batchSize));
+    }
+    const results = await Promise.all(
+      batches.map(async (batch) => {
+        const response = await fetch(`${endpoint}?dealIds=${batch.join(',')}`);
+        if (!response.ok) throw new Error(`Failed to fetch ${endpoint}`);
+        const data = await response.json();
+        return data.data as T;
+      })
+    );
+    return Object.assign({}, ...results) as T;
+  }
+
   // Get cached meetings data
   const cachedMeetings = useMemo(
     () => selectedPipelineId ? getCachedData<DealMeetingsMap>(`meetings-${selectedPipelineId}`) : null,
@@ -109,11 +130,7 @@ export default function PipelineOverview() {
     queryKey: ['pipeline-meetings', selectedPipelineId, dealIds.join(',')],
     queryFn: async () => {
       if (dealIds.length === 0) return {} as DealMeetingsMap;
-      const response = await fetch(`/api/deals/overview/meetings?dealIds=${dealIds.join(',')}`);
-      if (!response.ok) throw new Error('Failed to fetch meetings');
-      const data = await response.json();
-      const result = data.data as DealMeetingsMap;
-      // Save to localStorage cache
+      const result = await fetchInBatches<DealMeetingsMap>('/api/deals/overview/meetings', dealIds);
       setCachedData(`meetings-${selectedPipelineId}`, result);
       return result;
     },
@@ -133,11 +150,7 @@ export default function PipelineOverview() {
     queryKey: ['pipeline-stage-history', selectedPipelineId, dealIds.join(',')],
     queryFn: async () => {
       if (dealIds.length === 0) return {} as DealStageHistoryMap;
-      const response = await fetch(`/api/deals/overview/stage-history?dealIds=${dealIds.join(',')}`);
-      if (!response.ok) throw new Error('Failed to fetch stage history');
-      const data = await response.json();
-      const result = data.data as DealStageHistoryMap;
-      // Save to localStorage cache
+      const result = await fetchInBatches<DealStageHistoryMap>('/api/deals/overview/stage-history', dealIds);
       setCachedData(`stage-history-${selectedPipelineId}`, result);
       return result;
     },
