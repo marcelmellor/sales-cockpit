@@ -142,6 +142,7 @@ export class HubSpotClient {
       'dealstage',
       'pipeline',
       'agents_minuten',
+      'agents_minuten_qualifiziert',
       'deal_po',
       'createdate',
       'closedate',

@@ -138,12 +138,14 @@ export async function GET(request: Request) {
       const companyId = deal.associations?.companies?.results?.[0]?.id;
       const company = companyId ? companiesMap.get(companyId) : undefined;
 
+      // Prefer qualified minutes, fall back to old field
+      const agentMinuten = parseInt(deal.properties.agents_minuten_qualifiziert) || parseInt(deal.properties.agents_minuten) || 0;
+
       return {
         id: deal.id,
         companyName: company?.name || deal.properties.dealname || 'Unknown',
         revenue: (() => {
           const products = deal.properties.angebotene_produkte || '';
-          const agentMinuten = parseInt(deal.properties.agents_minuten) || 0;
           const isAiAgent = products.split(';').includes('frontdesk');
 
           // AI Agent deals: MRR always from agent minutes (0 if no minutes)
@@ -156,7 +158,7 @@ export async function GET(request: Request) {
           const laufzeit = parseFloat(deal.properties.vertragsdauer) || 0;
           return laufzeit > 0 ? tcv / laufzeit : 0;
         })(),
-        agentsMinuten: parseInt(deal.properties.agents_minuten) || 0,
+        agentsMinuten: agentMinuten,
         productManager: deal.properties.deal_po || '',
         angeboteneProdukte: deal.properties.angebotene_produkte || '',
         dealStage: pipeline.stages.find(s => s.id === deal.properties.dealstage)?.label || deal.properties.dealstage || 'Unknown',
