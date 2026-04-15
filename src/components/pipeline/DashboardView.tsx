@@ -12,6 +12,31 @@ interface Stage {
   displayOrder: number;
 }
 
+// Map old pipeline stage IDs to new Sales Pipeline stage IDs
+const STAGE_ID_MAP: Record<string, string> = {
+  // Old AI Agents pipeline
+  '3177741533': '4897329341', // Demo Termin vereinbart → Demo / Business Case
+  '3983818954': '4897329342', // Onboarding Termin vereinbart → PoC / Pitch
+  '3177741537': '4897329343', // Negotiation → Commercial Negotiation
+  '3177741538': '4897329344', // Abgeschlossen und gewonnen → Closed won
+  '3177741539': '4897329345', // Abgeschlossen und verloren → Closed lost
+  // Old Sales pipeline
+  '164471537': '4897329340',  // Discovery → Discovery scheduled
+  '699747530': '4897329341',  // Demo / Business Case → Demo / Business Case
+  '699747531': '4897329342',  // PoC / Pitch → PoC / Pitch
+  '699747532': '4897329343',  // Closing → Commercial Negotiation
+  '699747533': '4897329344',  // Closed won → Closed won
+  '699747534': '4897329345',  // Closed lost → Closed lost
+  // Old pipeline 3
+  '1340330225': '4897329340', // Erstkontakt AE → Discovery scheduled
+  '1340330226': '4897329341', // Demo → Demo / Business Case
+  '1340330227': '4897329343', // Negotiation → Commercial Negotiation
+  '1340330228': '4897329343', // Closing → Commercial Negotiation
+  '1340330230': '4897329344', // Closed won → Closed won
+  '1340330231': '4897329345', // Closed lost → Closed lost
+};
+const mapStageId = (id: string): string => STAGE_ID_MAP[id] || id;
+
 interface DashboardViewProps {
   stages: Stage[];
   deals: DealOverviewItem[];
@@ -1295,34 +1320,14 @@ export function DashboardView({
 
   const maxFunnelCount = Math.max(...pipelineFunnel.map(f => f.count), 1);
 
+  // ── Displayed active stages (non-won with open deals) + won stage ──
+  const activeStages = useMemo(() =>
+    pipelineFunnel.filter(f => !isWonStage(f.stage.label) && f.count > 0),
+    [pipelineFunnel],
+  );
+
   // ── Stage conversion rates (based on stage history of filtered deals) ──
   const { stageConversionRates, stageReachedCounts, stageConvCounts } = useMemo(() => {
-    // Map old pipeline stage IDs to new Sales Pipeline stage IDs
-    const STAGE_ID_MAP: Record<string, string> = {
-      // Old AI Agents pipeline
-      '3177741533': '4897329341', // Demo Termin vereinbart → Demo / Business Case
-      '3983818954': '4897329342', // Onboarding Termin vereinbart → PoC / Pitch
-      '3177741537': '4897329343', // Negotiation → Commercial Negotiation
-      '3177741538': '4897329344', // Abgeschlossen und gewonnen → Closed won
-      '3177741539': '4897329345', // Abgeschlossen und verloren → Closed lost
-      // Old Sales pipeline
-      '164471537': '4897329340',  // Discovery → Discovery scheduled
-      '699747530': '4897329341',  // Demo / Business Case → Demo / Business Case
-      '699747531': '4897329342',  // PoC / Pitch → PoC / Pitch
-      '699747532': '4897329343',  // Closing → Commercial Negotiation
-      '699747533': '4897329344',  // Closed won → Closed won
-      '699747534': '4897329345',  // Closed lost → Closed lost
-      // Old pipeline 3
-      '1340330225': '4897329340', // Erstkontakt AE → Discovery scheduled
-      '1340330226': '4897329341', // Demo → Demo / Business Case
-      '1340330227': '4897329343', // Negotiation → Commercial Negotiation
-      '1340330228': '4897329343', // Closing → Commercial Negotiation
-      '1340330230': '4897329344', // Closed won → Closed won
-      '1340330231': '4897329345', // Closed lost → Closed lost
-    };
-
-    const mapStageId = (id: string): string => STAGE_ID_MAP[id] || id;
-
     // Only count stage history entries for stages that exist in the current pipeline
     const validStageIds = new Set(pipelineFunnel.map(f => f.stage.id));
 
@@ -1354,18 +1359,22 @@ export function DashboardView({
       }
     }
 
-    // Build ordered list — only stages that were actually reached
-    const allStageIds = pipelineFunnel.map(f => f.stage.id);
-    const orderedStages = allStageIds.filter(sid => (reachedCount[sid] || 0) > 0);
+    // Build displayed stage sequence: active (non-won, count>0) stages + won stage
+    const wonStage = pipelineFunnel.find(f => isWonStage(f.stage.label));
+    const displayedStageIds = [
+      ...activeStages.map(f => f.stage.id),
+      ...(wonStage ? [wonStage.stage.id] : []),
+    ];
 
     // Conversion A→B: of deals that reached A, how many also reached B?
+    // Computed between consecutive DISPLAYED stages so the rate matches
+    // what the user sees, regardless of hidden intermediate stages.
     const rates: Record<string, number | null> = {};
-    // Store "X von Y" per stage for tooltips: convCounts[stageB] = { reached: X, fromPrev: Y }
     const convCounts: Record<string, { reached: number; fromPrev: number }> = {};
-    for (let i = 0; i < orderedStages.length; i++) {
-      if (i === 0) { rates[orderedStages[i]] = null; continue; }
-      const prevId = orderedStages[i - 1];
-      const currId = orderedStages[i];
+    for (let i = 0; i < displayedStageIds.length; i++) {
+      if (i === 0) { rates[displayedStageIds[i]] = null; continue; }
+      const prevId = displayedStageIds[i - 1];
+      const currId = displayedStageIds[i];
       let reachedPrev = 0;
       let reachedBoth = 0;
       for (const stages of dealReachedMap.values()) {
@@ -1378,7 +1387,7 @@ export function DashboardView({
       convCounts[currId] = { reached: reachedBoth, fromPrev: reachedPrev };
     }
     return { stageConversionRates: rates, stageReachedCounts: reachedCount, stageConvCounts: convCounts };
-  }, [filteredDeals, stageHistory, pipelineFunnel]);
+  }, [filteredDeals, stageHistory, pipelineFunnel, activeStages]);
 
   // ── Average dwell time per stage (in days) ──
   const avgDaysInStage = useMemo(() => {
@@ -1393,7 +1402,7 @@ export function DashboardView({
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       );
       for (let i = 0; i < sorted.length; i++) {
-        const stageId = sorted[i].stageId;
+        const stageId = mapStageId(sorted[i].stageId);
         const enteredAt = new Date(sorted[i].timestamp).getTime();
         const exitedAt = i < sorted.length - 1
           ? new Date(sorted[i + 1].timestamp).getTime()
@@ -1475,15 +1484,14 @@ export function DashboardView({
       <div className="mb-9">
         <div className="font-medium text-[13px] uppercase tracking-[0.08em] text-[#2F0D5B] mb-4">Aktive Pipeline</div>
         <div className="bg-white border border-[#e8e8e8] rounded-lg p-6">
-          {pipelineFunnel.filter(item => !isWonStage(item.stage.label) && item.count > 0).map((item, idx) => {
-            const activeItems = pipelineFunnel.filter(f => !isWonStage(f.stage.label) && f.count > 0);
-            const maxActive = Math.max(...activeItems.map(f => f.count), 1);
+          {activeStages.map((item, idx) => {
+            const maxActive = Math.max(...activeStages.map(f => f.count), 1);
             const widthPercent = Math.max((item.count / maxActive) * 100, 3);
             const convRate = stageConversionRates[item.stage.id];
-            const t = activeItems.length > 1 ? idx / (activeItems.length - 1) : 0;
+            const t = activeStages.length > 1 ? idx / (activeStages.length - 1) : 0;
             const opacity = Math.round(100 - t * 60);
             const barColor = `color-mix(in srgb, #2F0D5B ${opacity}%, white)`;
-            const prevStageId = idx > 0 ? activeItems[idx - 1].stage.id : null;
+            const prevStageId = idx > 0 ? activeStages[idx - 1].stage.id : null;
             const conv = stageConvCounts[item.stage.id];
             const convTooltip = convRate != null && conv
               ? `${conv.reached} von ${conv.fromPrev} Deals`
@@ -1520,7 +1528,6 @@ export function DashboardView({
             );
           })}
           {(() => {
-            const activeItems = pipelineFunnel.filter(f => !isWonStage(f.stage.label) && f.count > 0);
             const wonStageItem = pipelineFunnel.find(f => isWonStage(f.stage.label));
             const wonConv = wonStageItem ? stageConvCounts[wonStageItem.stage.id] : null;
             const winRate = wonConv && wonConv.fromPrev > 0 ? Math.round((wonConv.reached / wonConv.fromPrev) * 100) : null;
