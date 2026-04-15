@@ -90,7 +90,7 @@ function PipelineOverviewContent() {
   // Auto-select "Sales Pipeline"
   useEffect(() => {
     if (pipelinesData && !selectedPipelineId) {
-      const salesPipeline = pipelinesData.find(p => p.label === 'Sales Pipeline');
+      const salesPipeline = pipelinesData.find(p => p.label === 'Sales sipgate Portfolio');
       if (salesPipeline) {
         setSelectedPipelineId(salesPipeline.id);
       }
