@@ -459,10 +459,11 @@ function formatTickLabel(v: number): string {
 
 function Sparkline({
   data, color, targetValue, targetLabel, targetColor = '#94D825', invertY = false, unit, weeks, tooltipExtra, tooltipOverride,
+  tooltipLines,
   bars = false, completionRate, dashLast = false,
 }: {
   data: number[]; color: string; targetValue?: number; targetLabel?: string; targetColor?: string; invertY?: boolean;
-  unit?: string; weeks?: Date[]; tooltipExtra?: string[]; tooltipOverride?: string[];
+  unit?: string; weeks?: Date[]; tooltipExtra?: string[]; tooltipOverride?: string[]; tooltipLines?: string[][];
   bars?: boolean; completionRate?: number[]; dashLast?: boolean;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -628,9 +629,20 @@ function Sparkline({
               top: '-4px',
               transform: pctLeft > 75 ? 'translate(-90%, -100%)' : pctLeft < 25 ? 'translate(-10%, -100%)' : 'translate(-50%, -100%)',
             }}>
-            <span className="font-medium">{tooltipOverride?.[hoverIdx] ?? valStr}</span>
-            {tooltipExtra?.[hoverIdx] && <span className="opacity-60 ml-1.5">({tooltipExtra[hoverIdx]})</span>}
-            <span className="opacity-60 ml-1.5">{dateStr}</span>
+            <div>
+              <span className="font-medium">{tooltipOverride?.[hoverIdx] ?? valStr}</span>
+              {tooltipExtra?.[hoverIdx] && <span className="opacity-60 ml-1.5">({tooltipExtra[hoverIdx]})</span>}
+              <span className="opacity-60 ml-1.5">{dateStr}</span>
+            </div>
+            {tooltipLines?.[hoverIdx]?.length ? (
+              <div className="mt-1.5 space-y-0.5 border-t border-white/10 pt-1.5">
+                {tooltipLines[hoverIdx].map((line, lineIdx) => (
+                  <div key={`${hoverIdx}-${lineIdx}`} className="max-w-[220px] truncate text-[10px] leading-4 text-white/80">
+                    {line}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         );
       })()}
@@ -1059,6 +1071,7 @@ function FilterBuilder({
 export function DashboardView({
   stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId, selectedPortfolios,
 }: DashboardViewProps) {
+  const { devMode } = useDevStore();
 
   // Stable key for portfolio selection to detect changes
   const portfolioKey = useMemo(() => selectedPortfolios ? [...selectedPortfolios].sort().join(',') : '', [selectedPortfolios]);
@@ -1215,6 +1228,34 @@ export function DashboardView({
     const delta = i === 0 ? v : v - prospectsTrend[i - 1];
     return `+${delta}`;
   }), [prospectsTrend]);
+
+  const prospectTooltipLines = useMemo(() => {
+    if (!devMode) return undefined;
+
+    return weeks.map((weekEnd, i) => {
+      const endMs = weekEnd.getTime();
+      const startMs = i > 0 ? weeks[i - 1].getTime() : null;
+      const dealsInRange = filteredDeals
+        .filter(d => {
+          const created = d.createdate ? new Date(d.createdate).getTime() : null;
+          if (created == null) return false;
+          return startMs == null ? created <= endMs : created > startMs && created <= endMs;
+        })
+        .sort((a, b) => {
+          const aTs = a.createdate ? new Date(a.createdate).getTime() : 0;
+          const bTs = b.createdate ? new Date(b.createdate).getTime() : 0;
+          return aTs - bTs;
+        });
+
+      if (dealsInRange.length === 0) return ['Keine neuen Deals'];
+
+      const visibleDeals = dealsInRange.slice(0, 6).map(d => d.companyName);
+      if (dealsInRange.length > 6) {
+        visibleDeals.push(`+${dealsInRange.length - 6} weitere`);
+      }
+      return visibleDeals;
+    });
+  }, [devMode, filteredDeals, weeks]);
 
   const wonDealsTrend = useMemo(() => weeks.map(weekEnd => {
     const endMs = weekEnd.getTime();
@@ -1462,7 +1503,14 @@ export function DashboardView({
         </div>
         <div className="grid grid-cols-2 gap-5">
           <ChartCard title="Prospects kumulativ" current={`${currentProspects}`} target="/ 50">
-            <Sparkline data={prospectsTrend} color="#E8AC68" weeks={weeks} tooltipOverride={prospectsDeltas} dashLast />
+            <Sparkline
+              data={prospectsTrend}
+              color="#E8AC68"
+              weeks={weeks}
+              tooltipOverride={prospectsDeltas}
+              tooltipLines={prospectTooltipLines}
+              dashLast
+            />
             <WeekLabels weeks={weeks} />
           </ChartCard>
           <ChartCard title="Won Deals kumulativ" current={`${currentWonDeals}`} target="/ 20">
