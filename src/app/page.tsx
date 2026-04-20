@@ -55,7 +55,9 @@ function PipelineOverviewContent() {
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
   const [selectedProdukt, setSelectedProdukt] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
-  const [minAgentMinutes, setMinAgentMinutes] = useState<number | null>(2500);
+  // 449 (not 450) because the Enterprise package (2500 Min.) prices at
+  // exactly 449,95 €. A 450 threshold would drop Enterprise-fit deals.
+  const [minAgentMrr, setMinAgentMrr] = useState<number | null>(449);
   const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   const [listSortConfig, setListSortConfig] = useState<{ field: SortField; direction: SortDirection }>({ field: 'revenue', direction: 'desc' });
@@ -222,11 +224,13 @@ function PipelineOverviewContent() {
   // Show the agent minutes quick-filter only for AI Agents
   const showAgentQuickFilter = selectedProdukt === 'frontdesk';
 
-  // Apply agent minutes quick-filter
+  // Apply AI Agent MRR quick-filter. MRR is the right lens because it captures
+  // both fixed-seat deals and minute-based pricing uniformly (≥450 € ≈ the
+  // smallest commercially relevant AI Agent package).
   const filteredDeals = useMemo(() => {
-    if (!showAgentQuickFilter || minAgentMinutes === null) return dealsWithMeetings;
-    return dealsWithMeetings.filter(deal => deal.agentsMinuten >= minAgentMinutes);
-  }, [dealsWithMeetings, showAgentQuickFilter, minAgentMinutes]);
+    if (!showAgentQuickFilter || minAgentMrr === null) return dealsWithMeetings;
+    return dealsWithMeetings.filter(deal => deal.revenue >= minAgentMrr);
+  }, [dealsWithMeetings, showAgentQuickFilter, minAgentMrr]);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -496,21 +500,21 @@ function PipelineOverviewContent() {
                 </div>
                 {showAgentQuickFilter && (
                   <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-gray-400">Minuten</span>
+                    <span className="text-xs text-gray-400">MRR</span>
                     <button
-                      onClick={() => setMinAgentMinutes(2500)}
+                      onClick={() => setMinAgentMrr(449)}
                       className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                        minAgentMinutes === 2500
+                        minAgentMrr === 449
                           ? 'bg-gray-900 text-white'
                           : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                       }`}
                     >
-                      ≥ 2.500
+                      ≥ 450 €
                     </button>
                     <button
-                      onClick={() => setMinAgentMinutes(null)}
+                      onClick={() => setMinAgentMrr(null)}
                       className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                        minAgentMinutes === null
+                        minAgentMrr === null
                           ? 'bg-gray-900 text-white'
                           : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                       }`}

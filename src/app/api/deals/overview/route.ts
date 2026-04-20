@@ -170,21 +170,27 @@ export async function GET(request: Request) {
         id: deal.id,
         companyName: company?.name || deal.properties.dealname || 'Unknown',
         revenue: (() => {
-          // Prefer HubSpot's hs_mrr (summed from line items) when line items exist
-          const lineItemCount = parseInt(deal.properties.hs_num_of_associated_line_items) || 0;
-          if (lineItemCount > 0) {
-            return parseFloat(deal.properties.hs_mrr) || 0;
-          }
-
+          // We compute MRR from whichever signal is available — line items
+          // (hs_mrr) and agent minutes can each be incomplete for a given
+          // deal:
+          //  - hs_mrr is 0 if the line items aren't marked recurring or the
+          //    property is simply unset
+          //  - agents_minuten_qualifiziert is 0 if the deal predates that
+          //    qualification step
+          // So for AI Agent deals we take the max of both (either signal is
+          // better than dropping the deal to 0). For non-AI-Agent deals we
+          // fall back to TCV/Laufzeit only when there's no line-item MRR.
           const products = deal.properties.angebotene_produkte || '';
           const isAiAgent = products.split(';').includes('frontdesk');
+          const lineItemCount = parseInt(deal.properties.hs_num_of_associated_line_items) || 0;
+          const lineItemMrr = lineItemCount > 0 ? (parseFloat(deal.properties.hs_mrr) || 0) : 0;
 
-          // AI Agent deals: MRR always from agent minutes (0 if no minutes)
           if (isAiAgent) {
-            return calculateAgentMrr(agentMinuten);
+            return Math.max(lineItemMrr, calculateAgentMrr(agentMinuten));
           }
 
-          // Other deals: MRR from TCV / Laufzeit
+          if (lineItemMrr > 0) return lineItemMrr;
+
           const tcv = parseFloat(deal.properties.tcv) || 0;
           const laufzeit = parseFloat(deal.properties.vertragsdauer) || 0;
           return laufzeit > 0 ? tcv / laufzeit : 0;
