@@ -2,10 +2,17 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getHubSpotClient } from '@/lib/hubspot/client';
 
+// How `revenue` (MRR) was derived. Shown in the spreadsheet view so the user
+// can see whether the MRR came from an actual line-item `hs_mrr`, from the
+// AI-Agent package price (computed from qualified minutes), from the legacy
+// TCV / Vertragsdauer fallback, or could not be computed at all.
+export type RevenueSource = 'line_items' | 'agents_package' | 'tcv_laufzeit' | 'none';
+
 export interface DealOverviewItem {
   id: string;
   companyName: string;
   revenue: number;
+  revenueSource: RevenueSource;
   agentsMinuten: number;
   productManager: string;
   angeboteneProdukte: string;
@@ -166,35 +173,48 @@ export async function GET(request: Request) {
       // Prefer qualified minutes, fall back to old field
       const agentMinuten = parseInt(deal.properties.agents_minuten_qualifiziert) || parseInt(deal.properties.agents_minuten) || 0;
 
+      // We compute MRR from whichever signal is available — line items
+      // (hs_mrr) and agent minutes can each be incomplete for a given deal:
+      //  - hs_mrr is 0 if the line items aren't marked recurring or the
+      //    property is simply unset
+      //  - agents_minuten_qualifiziert is 0 if the deal predates that
+      //    qualification step
+      // So for AI Agent deals we take the max of both (either signal is
+      // better than dropping the deal to 0). For non-AI-Agent deals we fall
+      // back to TCV/Laufzeit only when there's no line-item MRR. The
+      // `revenueSource` surfaces which branch won, so users can audit the
+      // MRR in the spreadsheet view.
+      const { revenue, revenueSource } = ((): { revenue: number; revenueSource: RevenueSource } => {
+        const products = deal.properties.angebotene_produkte || '';
+        const isAiAgent = products.split(';').includes('frontdesk');
+        const lineItemCount = parseInt(deal.properties.hs_num_of_associated_line_items) || 0;
+        const lineItemMrr = lineItemCount > 0 ? (parseFloat(deal.properties.hs_mrr) || 0) : 0;
+
+        if (isAiAgent) {
+          const packageMrr = calculateAgentMrr(agentMinuten);
+          if (packageMrr > lineItemMrr) {
+            return { revenue: packageMrr, revenueSource: 'agents_package' };
+          }
+          if (lineItemMrr > 0) {
+            return { revenue: lineItemMrr, revenueSource: 'line_items' };
+          }
+          return { revenue: 0, revenueSource: 'none' };
+        }
+
+        if (lineItemMrr > 0) return { revenue: lineItemMrr, revenueSource: 'line_items' };
+
+        const tcv = parseFloat(deal.properties.tcv) || 0;
+        const laufzeit = parseFloat(deal.properties.vertragsdauer) || 0;
+        if (laufzeit > 0) return { revenue: tcv / laufzeit, revenueSource: 'tcv_laufzeit' };
+
+        return { revenue: 0, revenueSource: 'none' };
+      })();
+
       return {
         id: deal.id,
         companyName: company?.name || deal.properties.dealname || 'Unknown',
-        revenue: (() => {
-          // We compute MRR from whichever signal is available — line items
-          // (hs_mrr) and agent minutes can each be incomplete for a given
-          // deal:
-          //  - hs_mrr is 0 if the line items aren't marked recurring or the
-          //    property is simply unset
-          //  - agents_minuten_qualifiziert is 0 if the deal predates that
-          //    qualification step
-          // So for AI Agent deals we take the max of both (either signal is
-          // better than dropping the deal to 0). For non-AI-Agent deals we
-          // fall back to TCV/Laufzeit only when there's no line-item MRR.
-          const products = deal.properties.angebotene_produkte || '';
-          const isAiAgent = products.split(';').includes('frontdesk');
-          const lineItemCount = parseInt(deal.properties.hs_num_of_associated_line_items) || 0;
-          const lineItemMrr = lineItemCount > 0 ? (parseFloat(deal.properties.hs_mrr) || 0) : 0;
-
-          if (isAiAgent) {
-            return Math.max(lineItemMrr, calculateAgentMrr(agentMinuten));
-          }
-
-          if (lineItemMrr > 0) return lineItemMrr;
-
-          const tcv = parseFloat(deal.properties.tcv) || 0;
-          const laufzeit = parseFloat(deal.properties.vertragsdauer) || 0;
-          return laufzeit > 0 ? tcv / laufzeit : 0;
-        })(),
+        revenue,
+        revenueSource,
         agentsMinuten: agentMinuten,
         productManager: deal.properties.deal_po || '',
         angeboteneProdukte: deal.properties.angebotene_produkte || '',

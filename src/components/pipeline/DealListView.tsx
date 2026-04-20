@@ -8,6 +8,7 @@ import type { SortField, SortDirection } from '@/app/page';
 interface DealListViewProps {
   deals: DealOverviewItem[];
   pipelineId: string;
+  onlyOpen?: boolean;
   sortConfig?: {
     field: SortField;
     direction: SortDirection;
@@ -20,6 +21,7 @@ interface DealListViewProps {
 export function DealListView({
   deals,
   pipelineId,
+  onlyOpen = false,
   sortConfig,
   onSortChange,
   meetingsLoading,
@@ -55,7 +57,7 @@ export function DealListView({
       {/* List Header */}
       <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h3 className="font-semibold text-gray-900">Offene Deals</h3>
+          <h3 className="font-semibold text-gray-900">{onlyOpen ? 'Offene Deals' : 'Deals'}</h3>
           <span className="px-2 py-0.5 text-sm rounded-full bg-blue-100 text-blue-700">
             {deals.length}
           </span>
@@ -109,7 +111,7 @@ export function DealListView({
           </>
         ) : (
           <div className="px-4 py-8 text-center text-gray-400">
-            Keine offenen Deals vorhanden
+            {onlyOpen ? 'Keine offenen Deals vorhanden' : 'Keine Deals vorhanden'}
           </div>
         )}
       </div>

@@ -8,7 +8,8 @@ import { UserMenu } from '@/components/UserMenu';
 import { DealStageGroup } from '@/components/pipeline/DealStageGroup';
 import { DealListView } from '@/components/pipeline/DealListView';
 import { DashboardView } from '@/components/pipeline/DashboardView';
-import { Loader2, LayoutGrid, RefreshCw, List, BarChart3 } from 'lucide-react';
+import { SpreadsheetView } from '@/components/pipeline/SpreadsheetView';
+import { Loader2, LayoutGrid, RefreshCw, BarChart3, Table2 } from 'lucide-react';
 import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
@@ -33,7 +34,8 @@ const PORTFOLIO_OPTIONS = [
 
 export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
-export type ViewMode = 'stages' | 'list' | 'dashboard';
+export type ViewMode = 'deals' | 'dashboard' | 'spreadsheet';
+export type DealsGrouping = 'stage' | 'none';
 
 export default function PipelineOverview() {
   return (
@@ -60,6 +62,8 @@ function PipelineOverviewContent() {
   const [minAgentMrr, setMinAgentMrr] = useState<number | null>(449);
   const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
+  const [grouping, setGrouping] = useState<DealsGrouping>('stage');
+  const [onlyOpen, setOnlyOpen] = useState<boolean>(false);
   const [listSortConfig, setListSortConfig] = useState<{ field: SortField; direction: SortDirection }>({ field: 'revenue', direction: 'desc' });
 
   const isAuthenticated = status === 'authenticated';
@@ -322,10 +326,17 @@ function PipelineOverviewContent() {
     return closedKeywords.some(keyword => label.toLowerCase().includes(keyword));
   }, []);
 
+  // Apply "nur offene Deals" filter as an independent toggle on top of the
+  // product + MRR filters. Used by both grouping modes.
+  const dealsForDealsView = useMemo(() => {
+    if (!onlyOpen) return filteredDeals;
+    return filteredDeals.filter(deal => !isClosedStage(deal.dealStage));
+  }, [filteredDeals, onlyOpen, isClosedStage]);
+
   // Group deals by stage
   const dealsByStage = reorderedStages.map(stage => {
     const sortedDeals = sortDeals(
-      filteredDeals.filter(deal => deal.dealStageId === stage.id),
+      dealsForDealsView.filter(deal => deal.dealStageId === stage.id),
       stage.id
     );
     const isClosed = isClosedStage(stage.label);
@@ -336,16 +347,9 @@ function PipelineOverviewContent() {
     };
   }) || [];
 
-  // Filter open deals and sort for list view
-  const openDeals = useMemo(() => {
-    const filtered = filteredDeals.filter(deal =>
-      !deal.dealStage.toLowerCase().includes('closed won') &&
-      !deal.dealStage.toLowerCase().includes('closed lost') &&
-      !deal.dealStage.toLowerCase().includes('abgeschlossen') &&
-      !deal.dealStage.toLowerCase().includes('closed')
-    );
-
-    return [...filtered].sort((a, b) => {
+  // Flat list for grouping="none" — globally sorted
+  const flatSortedDeals = useMemo(() => {
+    return [...dealsForDealsView].sort((a, b) => {
       const { field, direction } = listSortConfig;
       let comparison = 0;
 
@@ -363,7 +367,7 @@ function PipelineOverviewContent() {
 
       return direction === 'asc' ? comparison : -comparison;
     });
-  }, [filteredDeals, listSortConfig]);
+  }, [dealsForDealsView, listSortConfig]);
 
   // Handler for list view sort
   const handleListSortChange = (field: SortField) => {
@@ -476,59 +480,111 @@ function PipelineOverviewContent() {
                     Dashboard
                   </button>
                   <button
-                    onClick={() => setViewMode('stages')}
+                    onClick={() => setViewMode('deals')}
                     className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
-                      viewMode === 'stages'
+                      viewMode === 'deals'
                         ? 'border-gray-900 text-gray-900 font-medium'
                         : 'border-transparent text-gray-400 hover:text-gray-600'
                     }`}
                   >
                     <LayoutGrid className="h-3.5 w-3.5" />
-                    Stages
+                    Deals
                   </button>
                   <button
-                    onClick={() => setViewMode('list')}
+                    onClick={() => setViewMode('spreadsheet')}
                     className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
-                      viewMode === 'list'
+                      viewMode === 'spreadsheet'
                         ? 'border-gray-900 text-gray-900 font-medium'
                         : 'border-transparent text-gray-400 hover:text-gray-600'
                     }`}
                   >
-                    <List className="h-3.5 w-3.5" />
-                    Offen
+                    <Table2 className="h-3.5 w-3.5" />
+                    Spreadsheet
                   </button>
                 </div>
-                {showAgentQuickFilter && (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-gray-400">MRR</span>
-                    <button
-                      onClick={() => setMinAgentMrr(449)}
-                      className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                        minAgentMrr === 449
-                          ? 'bg-gray-900 text-white'
-                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                      }`}
-                    >
-                      ≥ 450 €
-                    </button>
-                    <button
-                      onClick={() => setMinAgentMrr(null)}
-                      className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                        minAgentMrr === null
-                          ? 'bg-gray-900 text-white'
-                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                      }`}
-                    >
-                      Alle
-                    </button>
-                  </div>
-                )}
+                <div className="flex items-center gap-4">
+                  {viewMode === 'deals' && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-gray-400">Gruppierung</span>
+                      <button
+                        onClick={() => setGrouping('stage')}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          grouping === 'stage'
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        Nach Stage
+                      </button>
+                      <button
+                        onClick={() => setGrouping('none')}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          grouping === 'none'
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        Keine
+                      </button>
+                    </div>
+                  )}
+                  {(viewMode === 'deals' || viewMode === 'spreadsheet') && (
+                    <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={onlyOpen}
+                        onChange={(e) => setOnlyOpen(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                      />
+                      Nur offene Deals
+                    </label>
+                  )}
+                  {showAgentQuickFilter && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-gray-400">MRR</span>
+                      <button
+                        onClick={() => setMinAgentMrr(449)}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          minAgentMrr === 449
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        ≥ 450 €
+                      </button>
+                      <button
+                        onClick={() => setMinAgentMrr(null)}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          minAgentMrr === null
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        Alle
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
             {/* View Content */}
-            {viewMode === 'stages' ? (
-              /* Stage Groups */
+            {viewMode === 'dashboard' ? (
+              /* Dashboard View */
+              <DashboardView
+                key={`${selectedPipelineId ?? 'none'}-${selectedProdukt ?? 'none'}`}
+                stages={reorderedStages}
+                deals={filteredDeals}
+                isClosedStage={isClosedStage}
+                stageHistory={stageHistoryData ?? {}}
+                stageHistoryLoading={stageHistoryLoading}
+                pipelineId={selectedPipelineId}
+              />
+            ) : viewMode === 'spreadsheet' ? (
+              /* Spreadsheet View */
+              <SpreadsheetView deals={dealsForDealsView} />
+            ) : grouping === 'stage' ? (
+              /* Deals, grouped by stage */
               dealsByStage.map(({ stage, deals, totalCount }) => (
                 <DealStageGroup
                   key={stage.id}
@@ -544,22 +600,12 @@ function PipelineOverviewContent() {
                   stageHistoryLoading={stageHistoryLoading}
                 />
               ))
-            ) : viewMode === 'dashboard' ? (
-              /* Dashboard View */
-              <DashboardView
-                key={`${selectedPipelineId ?? 'none'}-${selectedProdukt ?? 'none'}`}
-                stages={reorderedStages}
-                deals={filteredDeals}
-                isClosedStage={isClosedStage}
-                stageHistory={stageHistoryData ?? {}}
-                stageHistoryLoading={stageHistoryLoading}
-                pipelineId={selectedPipelineId}
-              />
             ) : (
-              /* Open Deals List */
+              /* Deals, flat list */
               <DealListView
-                deals={openDeals}
+                deals={flatSortedDeals}
                 pipelineId={selectedPipelineId}
+                onlyOpen={onlyOpen}
                 sortConfig={listSortConfig}
                 onSortChange={handleListSortChange}
                 meetingsLoading={meetingsLoading}
