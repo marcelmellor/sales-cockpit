@@ -222,9 +222,6 @@ function PipelineOverviewContent() {
   // Show the agent minutes quick-filter only for AI Agents
   const showAgentQuickFilter = selectedProdukt === 'frontdesk';
 
-  // Portfolio set for DashboardView (single selection)
-  const selectedPortfolios = useMemo(() => selectedProdukt ? new Set([selectedProdukt]) : new Set<string>(), [selectedProdukt]);
-
   // Apply agent minutes quick-filter
   const filteredDeals = useMemo(() => {
     if (!showAgentQuickFilter || minAgentMinutes === null) return dealsWithMeetings;
@@ -546,13 +543,13 @@ function PipelineOverviewContent() {
             ) : viewMode === 'dashboard' ? (
               /* Dashboard View */
               <DashboardView
+                key={`${selectedPipelineId ?? 'none'}-${selectedProdukt ?? 'none'}`}
                 stages={reorderedStages}
                 deals={filteredDeals}
                 isClosedStage={isClosedStage}
                 stageHistory={stageHistoryData ?? {}}
                 stageHistoryLoading={stageHistoryLoading}
                 pipelineId={selectedPipelineId}
-                selectedPortfolios={selectedPortfolios}
               />
             ) : (
               /* Open Deals List */

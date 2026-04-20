@@ -44,7 +44,6 @@ interface DashboardViewProps {
   stageHistory: DealStageHistoryMap;
   stageHistoryLoading?: boolean;
   pipelineId?: string | null;
-  selectedPortfolios?: Set<string>;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -103,12 +102,6 @@ function saveFilterSets(pipelineId: string, sets: SavedFilterSet[]): void {
 
 function makeId(): string { return Math.random().toString(36).slice(2, 9); }
 
-function getDefaultSinceDate(): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - 6);
-  return d.toISOString().slice(0, 10);
-}
-
 function makeCriterion(partial?: Partial<FilterCriterion>): FilterCriterion {
   return { kind: 'criterion', id: makeId(), type: 'createdate', operator: 'after', dateFrom: '', ...partial };
 }
@@ -117,35 +110,10 @@ function makeGroup(logic: FilterLogic = 'AND'): FilterGroup {
   return { kind: 'group', id: makeId(), logic, children: [makeCriterion(), makeCriterion()] };
 }
 
-// ── Portfolio-specific default filters ──
-const PORTFOLIO_DEFAULT_FILTERS: Record<string, () => FilterState> = {
-  'frontdesk': () => ({
-    logic: 'AND',
-    children: [
-      makeCriterion({ type: 'mrr', operator: 'after', numberFrom: 450, dateFrom: '' }),
-      {
-        kind: 'group', id: makeId(), logic: 'OR',
-        children: [
-          makeCriterion({ type: 'createdate', operator: 'after', dateFrom: '2026-01-01' }),
-          makeCriterion({ type: 'stage_reached', stageId: '4897329344', operator: 'after', dateFrom: '2026-01-01' }),
-          makeCriterion({ type: 'stage_reached', stageId: '4897329345', operator: 'after', dateFrom: '2026-01-01' }),
-        ],
-      },
-    ],
-  }),
-};
-
-function getDefaultFilterState(selectedPortfolios?: Set<string>): FilterState {
-  // If exactly one portfolio is selected, check for a specific default filter
-  if (selectedPortfolios && selectedPortfolios.size === 1) {
-    const portfolio = [...selectedPortfolios][0];
-    if (PORTFOLIO_DEFAULT_FILTERS[portfolio]) {
-      return PORTFOLIO_DEFAULT_FILTERS[portfolio]();
-    }
-  }
+function getDefaultFilterState(): FilterState {
   return {
     logic: 'AND',
-    children: [makeCriterion({ dateFrom: getDefaultSinceDate() })],
+    children: [],
   };
 }
 
@@ -1069,23 +1037,13 @@ function FilterBuilder({
 // ══════════════════════════════════════════════
 
 export function DashboardView({
-  stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId, selectedPortfolios,
+  stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId,
 }: DashboardViewProps) {
-  const { devMode } = useDevStore();
-
-  // Stable key for portfolio selection to detect changes
-  const portfolioKey = useMemo(() => selectedPortfolios ? [...selectedPortfolios].sort().join(',') : '', [selectedPortfolios]);
-
   // ── Filter state ──
-  const [filter, setFilter] = useState<FilterState>(() => getDefaultFilterState(selectedPortfolios));
+  const [filter, setFilter] = useState<FilterState>(() => getDefaultFilterState());
   const [savedSets, setSavedSets] = useState<SavedFilterSet[]>(() =>
     pipelineId ? loadFilterSets(pipelineId) : []
   );
-
-  useEffect(() => {
-    setFilter(getDefaultFilterState(selectedPortfolios));
-    setSavedSets(pipelineId ? loadFilterSets(pipelineId) : []);
-  }, [portfolioKey, pipelineId]);
 
   const hasStageReached = hasStageReachedInTree(filter.children);
 
@@ -1215,6 +1173,8 @@ export function DashboardView({
     return result;
   }, [filter, filteredDeals]);
 
+  const referenceNow = weeks[weeks.length - 1]?.getTime() ?? 0;
+
   // ── Trends ──
   const prospectsTrend = useMemo(() => weeks.map(weekEnd => {
     const endMs = weekEnd.getTime();
@@ -1230,8 +1190,6 @@ export function DashboardView({
   }), [prospectsTrend]);
 
   const prospectTooltipLines = useMemo(() => {
-    if (!devMode) return undefined;
-
     return weeks.map((weekEnd, i) => {
       const endMs = weekEnd.getTime();
       const startMs = i > 0 ? weeks[i - 1].getTime() : null;
@@ -1255,7 +1213,7 @@ export function DashboardView({
       }
       return visibleDeals;
     });
-  }, [devMode, filteredDeals, weeks]);
+  }, [filteredDeals, weeks]);
 
   const wonDealsTrend = useMemo(() => weeks.map(weekEnd => {
     const endMs = weekEnd.getTime();
@@ -1265,6 +1223,60 @@ export function DashboardView({
       return (closed ?? created) != null && (closed ?? created)! <= endMs;
     }).length;
   }), [wonDeals, weeks]);
+
+  const wonDealsDeltas = useMemo(() => wonDealsTrend.map((v, i) => {
+    const delta = i === 0 ? v : v - wonDealsTrend[i - 1];
+    return `+${delta}`;
+  }), [wonDealsTrend]);
+
+  const wonDealsTooltipLines = useMemo(() => {
+    return weeks.map((weekEnd, i) => {
+      const endMs = weekEnd.getTime();
+      const startMs = i > 0 ? weeks[i - 1].getTime() : null;
+      const dealsInRange = wonDeals
+        .filter(d => {
+          const closed = d.closedate ? new Date(d.closedate).getTime() : null;
+          const created = d.createdate ? new Date(d.createdate).getTime() : null;
+          const ts = closed ?? created;
+          if (ts == null) return false;
+          return startMs == null ? ts <= endMs : ts > startMs && ts <= endMs;
+        })
+        .sort((a, b) => {
+          const aTs = (a.closedate ? new Date(a.closedate).getTime() : null) ?? (a.createdate ? new Date(a.createdate).getTime() : 0);
+          const bTs = (b.closedate ? new Date(b.closedate).getTime() : null) ?? (b.createdate ? new Date(b.createdate).getTime() : 0);
+          return aTs - bTs;
+        });
+
+      if (dealsInRange.length === 0) return ['Keine neuen Won Deals'];
+
+      const visibleDeals = dealsInRange.slice(0, 6).map(d => d.companyName);
+      if (dealsInRange.length > 6) {
+        visibleDeals.push(`+${dealsInRange.length - 6} weitere`);
+      }
+      return visibleDeals;
+    });
+  }, [wonDeals, weeks]);
+
+  const newArrData = useMemo(() => weeks.map((weekEnd, i) => {
+    const endMs = weekEnd.getTime();
+    const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - 7 * 86400000;
+    const wonThisWeek = wonDeals.filter(d => {
+      const closed = d.closedate ? new Date(d.closedate).getTime() : null;
+      const created = d.createdate ? new Date(d.createdate).getTime() : null;
+      const wonAt = closed ?? created;
+      return wonAt != null && wonAt > startMs && wonAt <= endMs;
+    });
+    const arr = wonThisWeek.reduce((sum, deal) => sum + deal.revenue * 12, 0);
+    return { arr, wonCount: wonThisWeek.length };
+  }), [wonDeals, weeks]);
+
+  const newArrTrend = useMemo(() => newArrData.map(d => d.arr), [newArrData]);
+  const newArrTooltip = useMemo(() => newArrData.map(d => d.arr > 0 ? formatEUR(d.arr) : '0 €'), [newArrData]);
+  const newArrExtra = useMemo(() => newArrData.map(d => `${d.wonCount} Won Deal${d.wonCount === 1 ? '' : 's'}`), [newArrData]);
+  const newArrAvg = useMemo(() => {
+    if (newArrTrend.length === 0) return 0;
+    return Math.round(newArrTrend.reduce((sum, value) => sum + value, 0) / newArrTrend.length);
+  }, [newArrTrend]);
 
   const winRateData = useMemo(() => weeks.map((weekEnd, i) => {
     const endMs = weekEnd.getTime();
@@ -1294,7 +1306,7 @@ export function DashboardView({
   const closedDeals = useMemo(() => [...wonDeals, ...lostDeals], [wonDeals, lostDeals]);
 
   const salesCycleData = useMemo(() => {
-    const now = Date.now();
+    const now = referenceNow;
     // Sales Cycle in Tagen: closed → createdate→closedate, open → createdate→now
     const cycleDays = (d: DealOverviewItem): number => {
       const created = d.createdate ? new Date(d.createdate).getTime() : null;
@@ -1320,7 +1332,7 @@ export function DashboardView({
       const completion = cohort.length > 0 ? closed.length / cohort.length : 1;
       return { avgWeeks, created: cohort.length, closed: closed.length, open: open.length, completion };
     });
-  }, [filteredDeals, weeks]);
+  }, [filteredDeals, weeks, referenceNow]);
 
   const salesCycleTrend = useMemo(() => salesCycleData.map(d => d.avgWeeks), [salesCycleData]);
   const salesCycleCompletion = useMemo(() => salesCycleData.map(d => d.completion), [salesCycleData]);
@@ -1330,19 +1342,6 @@ export function DashboardView({
 
   const currentProspects = prospectsTrend[prospectsTrend.length - 1] || 0;
   const currentWonDeals = wonDealsTrend[wonDealsTrend.length - 1] || 0;
-  // Gesamtwerte über alle Kohorten (nicht nur letzte Woche)
-  const currentWinRate = useMemo(() => {
-    const totalWon = winRateData.reduce((s, d) => s + d.won, 0);
-    const totalDeals = winRateData.reduce((s, d) => s + d.total, 0);
-    return totalDeals > 0 ? Math.round((totalWon / totalDeals) * 100) : 0;
-  }, [winRateData]);
-  const currentSalesCycle = useMemo(() => {
-    const withData = salesCycleData.filter(d => d.created > 0);
-    if (withData.length === 0) return 0;
-    const totalWeeks = withData.reduce((s, d) => s + d.avgWeeks * d.created, 0);
-    const totalDeals = withData.reduce((s, d) => s + d.created, 0);
-    return totalDeals > 0 ? Math.round((totalWeeks / totalDeals) * 10) / 10 : 0;
-  }, [salesCycleData]);
 
   // ── Active Pipeline ──
   const pipelineFunnel = useMemo(() => {
@@ -1434,7 +1433,7 @@ export function DashboardView({
   const avgDaysInStage = useMemo(() => {
     const totalDays: Record<string, number> = {};
     const count: Record<string, number> = {};
-    const now = Date.now();
+    const now = referenceNow;
     for (const deal of filteredDeals) {
       const entry = stageHistory[deal.id];
       if (!entry?.history || entry.history.length === 0) continue;
@@ -1458,7 +1457,7 @@ export function DashboardView({
       avg[sid] = Math.round(totalDays[sid] / count[sid]);
     }
     return avg;
-  }, [filteredDeals, stageHistory]);
+  }, [filteredDeals, stageHistory, referenceNow]);
 
   // ── Shared filter builder props ──
   const filterBuilderProps = {
@@ -1488,8 +1487,8 @@ export function DashboardView({
       <div className="grid grid-cols-3 gap-5 mb-9">
         <MetricCard label="MRR" value={formatEUR(mrr)} sub={mrr > 0 ? `${wonCount} Kunden` : '–'}
           deals={wonDeals} />
-        <MetricCard label="Won Deals kumulativ" value={`${wonCount}`} unit=" / 20"
-          sub={wonCount > 0 ? `${Math.round((wonCount / 20) * 100)}% vom Ziel` : '–'} subPositive={wonCount >= 10}
+        <MetricCard label="Won Deals kumulativ" value={`${wonCount}`} unit=" / 25"
+          sub={wonCount > 0 ? `${Math.round((wonCount / 25) * 100)}% vom Ziel` : '–'} subPositive={wonCount >= 10}
           deals={wonDeals} />
         <MetricCard label="ACV" value={acv > 0 ? formatEUR(acv) : '–'} unit=" ARR"
           sub="Ø über alle Won Deals" subNeutral
@@ -1513,15 +1512,26 @@ export function DashboardView({
             />
             <WeekLabels weeks={weeks} />
           </ChartCard>
-          <ChartCard title="Won Deals kumulativ" current={`${currentWonDeals}`} target="/ 20">
-            <Sparkline data={wonDealsTrend} color="#2F0D5B" weeks={weeks} dashLast />
+          <ChartCard title="Won Deals kumulativ" current={`${currentWonDeals}`} target="/ 25">
+            <Sparkline
+              data={wonDealsTrend}
+              color="#2F0D5B"
+              weeks={weeks}
+              tooltipOverride={wonDealsDeltas}
+              tooltipLines={wonDealsTooltipLines}
+              dashLast
+            />
             <WeekLabels weeks={weeks} />
           </ChartCard>
-          <ChartCard title="Win Rate (Wochenkohorte)" current={`${currentWinRate} %`}>
+          <ChartCard title="New ARR / Woche">
+            <Sparkline data={newArrTrend} color="#94D825" weeks={weeks} tooltipOverride={newArrTooltip} tooltipExtra={newArrExtra} bars targetValue={newArrAvg} targetLabel={`Ø ${formatEUR(newArrAvg)}`} targetColor="#2C3333" />
+            <WeekLabels weeks={weeks} />
+          </ChartCard>
+          <ChartCard title="Win Rate (Wochenkohorte)">
             <Sparkline data={winRateTrend} color="#E8AC68" unit="%" weeks={weeks} tooltipExtra={winRateExtra} targetValue={winRateAvg} targetLabel={`Ø ${winRateAvg} %`} targetColor="#2C3333" bars completionRate={winRateCompletion} />
             <WeekLabels weeks={weeks} />
           </ChartCard>
-          <ChartCard title="Ø Sales Cycle (Wochenkohorte)" current={`${currentSalesCycle} Wochen`}>
+          <ChartCard title="Ø Sales Cycle (Wochenkohorte)">
             <Sparkline data={salesCycleTrend} color="#2F0D5B" unit="W" weeks={weeks} tooltipExtra={salesCycleExtra} bars completionRate={salesCycleCompletion} />
             <WeekLabels weeks={weeks} />
           </ChartCard>
@@ -1652,16 +1662,18 @@ function MetricCard({ label, value, unit, sub, subPositive, subNeutral, deals }:
 }
 
 function ChartCard({ title, current, target, children }: {
-  title: string; current: string; target?: string; children: React.ReactNode;
+  title: string; current?: string; target?: string; children: React.ReactNode;
 }) {
   return (
     <div className="bg-white border border-[#e8e8e8] rounded-lg p-6">
       <div className="flex justify-between items-baseline mb-4">
         <span className="text-[13px] font-medium text-[#2F0D5B]">{title}</span>
-        <span>
-          <span className="text-[13px] text-[#E8AC68] font-medium">{current}</span>
-          {target && <span className="text-[11px] opacity-40 ml-1">{target}</span>}
-        </span>
+        {(current || target) && (
+          <span>
+            {current && <span className="text-[13px] text-[#E8AC68] font-medium">{current}</span>}
+            {target && <span className="text-[11px] opacity-40 ml-1">{target}</span>}
+          </span>
+        )}
       </div>
       <div className="border-b border-[#F0F0F0]">{children}</div>
     </div>

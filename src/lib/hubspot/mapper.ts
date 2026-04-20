@@ -104,6 +104,11 @@ export function mapHubSpotToCanvas(data: HubSpotDealData): CanvasData {
       companyDescription: textToHtml(company?.properties.description),
       revenue: {
         mrr: (() => {
+          // Prefer HubSpot's hs_mrr (summed from line items) when line items exist
+          const lineItemCount = parseInt(properties.hs_num_of_associated_line_items) || 0;
+          if (lineItemCount > 0) {
+            return parseFloat(properties.hs_mrr) || 0;
+          }
           const tcv = parseFloat(properties.tcv) || 0;
           const laufzeit = parseFloat(properties.vertragsdauer) || 0;
           return laufzeit > 0 ? tcv / laufzeit : 0;

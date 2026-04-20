@@ -84,9 +84,34 @@ export async function GET(request: Request) {
     // Fetch deals with associations (filtered by product if specified)
     const dealsWithAssociations = await client.getDealsWithAssociations(pipelineId, produkt || undefined);
 
+    // For deals with line items, fetch the HubSpot product `category` so we can
+    // verify the actual product mix. Line items are the source of truth;
+    // `angebotene_produkte` may be stale. Using `category` is robust against
+    // SKU renames (e.g. "AI Agent – Enterprise ab 2.500 Min" → "Enterprise ab 2.500 Min").
+    const dealsWithLineItems = dealsWithAssociations.results.filter(
+      d => (parseInt(d.properties.hs_num_of_associated_line_items) || 0) > 0
+    );
+    const lineItemCategoriesByDeal = await client.getLineItemCategoriesForDeals(
+      dealsWithLineItems.map(d => d.id)
+    );
+
+    // Filter: if product filter is active, drop deals that have line items but none
+    // of them match the selected product. Mapping from portfolio key → category value.
+    const PRODUCT_CATEGORY: Record<string, string> = {
+      frontdesk: 'AI Agent',
+    };
+    const requiredCategory = produkt ? PRODUCT_CATEGORY[produkt] : undefined;
+    const filteredDeals = requiredCategory
+      ? dealsWithAssociations.results.filter(deal => {
+          const categories = lineItemCategoriesByDeal.get(deal.id);
+          if (!categories) return true; // no line items → keep (legacy field was enough)
+          return categories.some(cat => cat === requiredCategory);
+        })
+      : dealsWithAssociations.results;
+
     // Collect all company IDs
     const companyIds = new Set<string>();
-    for (const deal of dealsWithAssociations.results) {
+    for (const deal of filteredDeals) {
       const companyAssoc = deal.associations?.companies?.results?.[0];
       if (companyAssoc) {
         companyIds.add(companyAssoc.id);
@@ -134,7 +159,7 @@ export async function GET(request: Request) {
     }
 
     // Build the overview items (without meetings - those are loaded separately)
-    const deals: DealOverviewItem[] = dealsWithAssociations.results.map((deal) => {
+    const deals: DealOverviewItem[] = filteredDeals.map((deal) => {
       const companyId = deal.associations?.companies?.results?.[0]?.id;
       const company = companyId ? companiesMap.get(companyId) : undefined;
 
@@ -145,6 +170,12 @@ export async function GET(request: Request) {
         id: deal.id,
         companyName: company?.name || deal.properties.dealname || 'Unknown',
         revenue: (() => {
+          // Prefer HubSpot's hs_mrr (summed from line items) when line items exist
+          const lineItemCount = parseInt(deal.properties.hs_num_of_associated_line_items) || 0;
+          if (lineItemCount > 0) {
+            return parseFloat(deal.properties.hs_mrr) || 0;
+          }
+
           const products = deal.properties.angebotene_produkte || '';
           const isAiAgent = products.split(';').includes('frontdesk');
 
