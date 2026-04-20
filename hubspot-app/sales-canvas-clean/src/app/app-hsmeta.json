@@ -18,7 +18,9 @@
         "crm.objects.contacts.read",
         "crm.objects.companies.read",
         "crm.objects.owners.read",
-        "crm.schemas.deals.read"
+        "crm.objects.line_items.read",
+        "crm.schemas.deals.read",
+        "e-commerce"
       ],
       "optionalScopes": [],
       "conditionallyRequiredScopes": []

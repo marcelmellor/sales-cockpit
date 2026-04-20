@@ -1,32 +1,42 @@
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
 
+// ---------------------------------------------------------------------------
+// Token management
+//
+// The app authenticates against HubSpot via a Private App Token (pat-eu1-…)
+// set in HUBSPOT_PRIVATE_APP_TOKEN. Private App tokens do not expire, so there
+// is no refresh flow. See AGENTS.md → "HubSpot authentication" for why we're
+// on this path and who owns the token in sipgate's HubSpot (27058496).
+// ---------------------------------------------------------------------------
+
+function getAccessToken(): string {
+  const pat = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
+  if (!pat) {
+    throw new Error(
+      'HUBSPOT_PRIVATE_APP_TOKEN is not set. Ask Phil (sipgate HubSpot admin) to issue a Private App Token — see AGENTS.md.'
+    );
+  }
+  return pat;
+}
+
 /**
- * Creates a HubSpotClient using the private app token from environment variables.
- * Throws if the token is not configured.
+ * Creates a HubSpotClient. Reads the token lazily from env on each request.
  */
 export function getHubSpotClient(): HubSpotClient {
-  const token = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
-  if (!token) {
-    throw new Error('HUBSPOT_PRIVATE_APP_TOKEN is not configured');
-  }
-  return new HubSpotClient(token);
+  return new HubSpotClient();
 }
 
 export class HubSpotClient {
-  private accessToken: string;
-
-  constructor(accessToken: string) {
-    this.accessToken = accessToken;
-  }
-
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
+    const token = getAccessToken();
+
     const response = await fetch(`${HUBSPOT_API_BASE}${endpoint}`, {
       ...options,
       headers: {
-        'Authorization': `Bearer ${this.accessToken}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
         ...options.headers,
       },
@@ -147,6 +157,8 @@ export class HubSpotClient {
       'createdate',
       'closedate',
       'angebotene_produkte',
+      'hs_mrr',
+      'hs_num_of_associated_line_items',
     ];
 
     // Fetch all deals with pagination (HubSpot search API returns max 100 per request)
@@ -163,6 +175,7 @@ export class HubSpotClient {
       const searchBody: {
         properties: string[];
         filterGroups: Array<{ filters: Array<{ propertyName: string; operator: string; value: string }> }>;
+        sorts: Array<{ propertyName: string; direction: string }>;
         limit: number;
         after?: string;
       } = {
@@ -173,6 +186,9 @@ export class HubSpotClient {
             ...(produkt ? [{ propertyName: 'angebotene_produkte', operator: 'CONTAINS_TOKEN', value: produkt }] : []),
           ]
         }],
+        // Stable sort is required for reliable pagination — without it, HubSpot's
+        // search API can skip or duplicate records across pages when deals mutate.
+        sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
         limit: 100,
       };
 
@@ -249,6 +265,83 @@ export class HubSpotClient {
     return { results: dealsWithAssociations };
   }
 
+  // Fetch line item categories for a batch of deals.
+  // `category` is HubSpot's product category on the line item (e.g. "AI Agent",
+  // "Cloud Telefonanlage", "Mobilfunk"). It's the most reliable classifier —
+  // more robust than SKU prefix parsing.
+  // Returns a Map<dealId, string[]> of category values. Deals without line items are absent.
+  async getLineItemCategoriesForDeals(dealIds: string[]): Promise<Map<string, string[]>> {
+    const result = new Map<string, string[]>();
+    if (dealIds.length === 0) return result;
+
+    // Step 1: batch-read deal → line_item associations
+    const batchSize = 100;
+    const dealToLineItems = new Map<string, string[]>();
+
+    for (let i = 0; i < dealIds.length; i += batchSize) {
+      const batchIds = dealIds.slice(i, i + batchSize);
+      try {
+        const response = await this.request<{
+          results: Array<{
+            from: { id: string };
+            to: Array<{ toObjectId: number }>;
+          }>;
+        }>('/crm/v4/associations/deals/line_items/batch/read', {
+          method: 'POST',
+          body: JSON.stringify({
+            inputs: batchIds.map(id => ({ id })),
+          }),
+        });
+        for (const r of response.results) {
+          dealToLineItems.set(r.from.id, r.to.map(t => String(t.toObjectId)));
+        }
+      } catch (err) {
+        console.error('[getLineItemCategoriesForDeals] deal→line_item assoc batch failed:', err);
+      }
+    }
+
+    // Step 2: batch-read line items to get categories
+    const allLineItemIds = Array.from(new Set(Array.from(dealToLineItems.values()).flat()));
+    if (allLineItemIds.length === 0) return result;
+
+    const categoryById = new Map<string, string>();
+    // Track line-item IDs for which we failed to read the category (e.g. missing
+    // e-commerce scope → 403). We can't trust the category filter for deals whose
+    // line items are in this set — treat them as "unknown" and keep the deal.
+    const failedLineItemIds = new Set<string>();
+    for (let i = 0; i < allLineItemIds.length; i += batchSize) {
+      const batchIds = allLineItemIds.slice(i, i + batchSize);
+      try {
+        const response = await this.request<{
+          results: Array<{ id: string; properties: { category?: string } }>;
+        }>('/crm/v3/objects/line_items/batch/read', {
+          method: 'POST',
+          body: JSON.stringify({
+            properties: ['category'],
+            inputs: batchIds.map(id => ({ id })),
+          }),
+        });
+        for (const li of response.results) {
+          categoryById.set(li.id, li.properties.category || '');
+        }
+      } catch (err) {
+        console.error('[getLineItemCategoriesForDeals] line_items batch read failed — keeping affected deals unfiltered:', err);
+        for (const id of batchIds) failedLineItemIds.add(id);
+      }
+    }
+
+    for (const [dealId, lineItemIds] of dealToLineItems.entries()) {
+      // If ANY of the deal's line items failed to read, we can't reliably classify
+      // the deal — skip it from the result map so the caller's `!categories` branch
+      // keeps the deal rather than silently dropping it.
+      const anyFailed = lineItemIds.some(id => failedLineItemIds.has(id));
+      if (anyFailed) continue;
+      result.set(dealId, lineItemIds.map(id => categoryById.get(id) || ''));
+    }
+
+    return result;
+  }
+
   async getDeal(dealId: string) {
     const properties = [
       'dealname',
@@ -275,6 +368,8 @@ export class HubSpotClient {
       'canvas_roadmap',
       'canvas_next_appointment',
       'frontdesk_deal_tags',
+      'hs_mrr',
+      'hs_num_of_associated_line_items',
     ].join(',');
 
     return this.request<{
