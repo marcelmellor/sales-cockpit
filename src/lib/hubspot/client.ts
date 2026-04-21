@@ -511,6 +511,116 @@ export class HubSpotClient {
     });
   }
 
+  // Batch-fetch meetings for many deals at once. Uses HubSpot's batch
+  // association read + batch object read, so a pipeline of N deals costs 2
+  // API calls (plus one extra per 100 deals/meetings for pagination) rather
+  // than 2×N. This is the only way to stay inside HubSpot's ~10 req/s rate
+  // limit when rendering large pipelines. Returns a map dealId → meetings[].
+  async getMeetingsForDeals(dealIds: string[]): Promise<
+    Map<
+      string,
+      Array<{
+        id: string;
+        properties: {
+          hs_meeting_title?: string;
+          hs_meeting_start_time?: string;
+          hs_meeting_end_time?: string;
+          hs_meeting_outcome?: string;
+        };
+      }>
+    >
+  > {
+    const result = new Map<
+      string,
+      Array<{
+        id: string;
+        properties: {
+          hs_meeting_title?: string;
+          hs_meeting_start_time?: string;
+          hs_meeting_end_time?: string;
+          hs_meeting_outcome?: string;
+        };
+      }>
+    >();
+    if (dealIds.length === 0) return result;
+
+    // Step 1: batch association read (deals → meetings), 100 deals per call.
+    const dealToMeetingIds = new Map<string, string[]>();
+    const allMeetingIds = new Set<string>();
+    for (let i = 0; i < dealIds.length; i += 100) {
+      const batch = dealIds.slice(i, i + 100);
+      const resp = await this.request<{
+        results: Array<{
+          from: { id: string };
+          to: Array<{ toObjectId: number }>;
+        }>;
+      }>('/crm/v4/associations/deals/meetings/batch/read', {
+        method: 'POST',
+        body: JSON.stringify({ inputs: batch.map(id => ({ id })) }),
+      });
+      for (const r of resp.results) {
+        const ids = r.to.map(t => String(t.toObjectId));
+        dealToMeetingIds.set(r.from.id, ids);
+        ids.forEach(id => allMeetingIds.add(id));
+      }
+    }
+
+    // Step 2: batch read meeting details, 100 meeting IDs per call.
+    const meetingById = new Map<
+      string,
+      {
+        id: string;
+        properties: {
+          hs_meeting_title?: string;
+          hs_meeting_start_time?: string;
+          hs_meeting_end_time?: string;
+          hs_meeting_outcome?: string;
+        };
+      }
+    >();
+    const allIdsList = Array.from(allMeetingIds);
+    for (let i = 0; i < allIdsList.length; i += 100) {
+      const batch = allIdsList.slice(i, i + 100);
+      const resp = await this.request<{
+        results: Array<{
+          id: string;
+          properties: {
+            hs_meeting_title?: string;
+            hs_meeting_start_time?: string;
+            hs_meeting_end_time?: string;
+            hs_meeting_outcome?: string;
+          };
+        }>;
+      }>('/crm/v3/objects/meetings/batch/read', {
+        method: 'POST',
+        body: JSON.stringify({
+          properties: [
+            'hs_meeting_title',
+            'hs_meeting_start_time',
+            'hs_meeting_end_time',
+            'hs_meeting_outcome',
+          ],
+          inputs: batch.map(id => ({ id })),
+        }),
+      });
+      for (const m of resp.results) {
+        meetingById.set(m.id, m);
+      }
+    }
+
+    // Step 3: assemble per-deal meeting lists. Deals without associations get
+    // an empty array (they are present in the map, so callers can distinguish
+    // "no meetings" from "not queried").
+    for (const dealId of dealIds) {
+      const ids = dealToMeetingIds.get(dealId) || [];
+      result.set(
+        dealId,
+        ids.map(id => meetingById.get(id)).filter((m): m is NonNullable<typeof m> => m !== undefined),
+      );
+    }
+    return result;
+  }
+
   // Owners (internal contacts)
   async getOwners() {
     return this.request<{
@@ -558,6 +668,264 @@ export class HubSpotClient {
     });
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Leads
+  //
+  // HubSpot's Lead object (objectType 0-136) is a separate CRM object from
+  // Deal. It lives in its own pipelines. For sipgate the portfolio leads
+  // pipeline is "sipgate Portfolio" (id 3591532731). Leads carry a `product`
+  // property (multi-select enumeration with values neo/frontdesk/cx/trunking/
+  // easy/flow) that mirrors the deals `angebotene_produkte` filter.
+  // Requires the `crm.objects.leads.read` scope on the Private App Token.
+  // ─────────────────────────────────────────────────────────────────────────
+  async getLeadsWithAssociations(pipelineId: string, produkt?: string) {
+    const properties = [
+      'hs_lead_name',
+      'hs_pipeline',
+      'hs_pipeline_stage',
+      'hubspot_owner_id',
+      'hs_createdate',
+      'hs_lastmodifieddate',
+      'product',
+      'lead_source',
+      'source',
+      'agents_minuten',
+      'anrufvolumen',
+      'inbound_volumen',
+    ];
+
+    let allLeads: Array<{
+      id: string;
+      properties: Record<string, string>;
+    }> = [];
+    let after: string | undefined;
+
+    do {
+      const searchBody: {
+        properties: string[];
+        filterGroups: Array<{ filters: Array<{ propertyName: string; operator: string; value: string }> }>;
+        sorts: Array<{ propertyName: string; direction: string }>;
+        limit: number;
+        after?: string;
+      } = {
+        properties,
+        filterGroups: [{
+          filters: [
+            { propertyName: 'hs_pipeline', operator: 'EQ', value: pipelineId },
+            ...(produkt ? [{ propertyName: 'product', operator: 'CONTAINS_TOKEN', value: produkt }] : []),
+          ],
+        }],
+        sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
+        limit: 100,
+      };
+
+      if (after) searchBody.after = after;
+
+      const response = await this.request<{
+        results: Array<{ id: string; properties: Record<string, string> }>;
+        paging?: { next?: { after: string } };
+      }>('/crm/v3/objects/leads/search', {
+        method: 'POST',
+        body: JSON.stringify(searchBody),
+      });
+
+      allLeads = allLeads.concat(response.results);
+      after = response.paging?.next?.after;
+    } while (after);
+
+    // Batch-read lead → company and lead → contact associations. Leads
+    // typically associate to a primary contact and (transitively) to a
+    // company. Contacts are preferred for deep-linking the lead row in the
+    // UI, because HubSpot Leads have no dedicated record page — contact
+    // records do.
+    const leadIds = allLeads.map(l => l.id);
+    const companyAssocMap = new Map<string, string[]>();
+    const contactAssocMap = new Map<string, string[]>();
+
+    const readAssoc = async (
+      toObject: 'companies' | 'contacts',
+      target: Map<string, string[]>,
+    ) => {
+      const batchSize = 100;
+      for (let i = 0; i < leadIds.length; i += batchSize) {
+        const batchIds = leadIds.slice(i, i + batchSize);
+        try {
+          const batch = await this.request<{
+            results: Array<{ from: { id: string }; to: Array<{ toObjectId: number }> }>;
+          }>(`/crm/v4/associations/leads/${toObject}/batch/read`, {
+            method: 'POST',
+            body: JSON.stringify({ inputs: batchIds.map(id => ({ id })) }),
+          });
+          for (const r of batch.results) {
+            target.set(r.from.id, r.to.map(t => String(t.toObjectId)));
+          }
+        } catch (err) {
+          console.error(`[getLeadsWithAssociations] leads→${toObject} batch failed:`, err);
+        }
+      }
+    };
+
+    if (leadIds.length > 0) {
+      await Promise.all([
+        readAssoc('companies', companyAssocMap),
+        readAssoc('contacts', contactAssocMap),
+      ]);
+    }
+
+    return {
+      results: allLeads.map(l => ({
+        ...l,
+        associations: {
+          companies: { results: (companyAssocMap.get(l.id) || []).map(id => ({ id, type: 'company' })) },
+          contacts: { results: (contactAssocMap.get(l.id) || []).map(id => ({ id, type: 'contact' })) },
+        },
+      })),
+    };
+  }
+
+  // Analog zu `getDealStageHistories`: batch-read mit
+  // `propertiesWithHistory: ['hs_pipeline_stage']`, um pro Lead die
+  // Stage-Wechsel-Historie zu bekommen. Damit lässt sich "Tage in aktueller
+  // Stage" berechnen. Batch-Limit: 50 (HubSpot-Limit für history-Reads).
+  async getLeadStageHistories(
+    leadIds: string[],
+  ): Promise<Map<string, Array<{ value: string; timestamp: string; sourceType: string }>>> {
+    const result = new Map<
+      string,
+      Array<{ value: string; timestamp: string; sourceType: string }>
+    >();
+    if (leadIds.length === 0) return result;
+
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < leadIds.length; i += BATCH_SIZE) {
+      const batch = leadIds.slice(i, i + BATCH_SIZE);
+      try {
+        const resp = await this.request<{
+          results: Array<{
+            id: string;
+            propertiesWithHistory?: {
+              hs_pipeline_stage?: Array<{
+                value: string;
+                timestamp: string;
+                sourceType: string;
+              }>;
+            };
+          }>;
+        }>('/crm/v3/objects/leads/batch/read', {
+          method: 'POST',
+          body: JSON.stringify({
+            properties: ['hs_pipeline_stage'],
+            propertiesWithHistory: ['hs_pipeline_stage'],
+            inputs: batch.map(id => ({ id })),
+          }),
+        });
+        for (const r of resp.results) {
+          result.set(r.id, r.propertiesWithHistory?.hs_pipeline_stage || []);
+        }
+      } catch (err) {
+        console.error('[getLeadStageHistories] batch read failed:', err);
+      }
+    }
+    return result;
+  }
+
+  // Findet alle Kontakte, die an einem Deal in der gegebenen Pipeline mit
+  // passendem `angebotene_produkte` (CONTAINS_TOKEN) hängen. Wird genutzt,
+  // um in der Leads-Übersicht einen Tag "Bestehender Deal" zu setzen: wenn
+  // der primäre Kontakt eines Leads bereits an einem Deal im gleichen
+  // Produkt-Bucket hängt, ist das relevant fürs Sales (Duplicate/Upsell-
+  // Signal). Rückgabe: Map contactId → erster passender Deal (für Link).
+  async getContactsWithDealInProdukt(
+    dealPipelineId: string,
+    produkt: string,
+  ): Promise<Map<string, { dealId: string; dealName: string }>> {
+    // 1. Search deals matching pipeline + produkt
+    let allDeals: Array<{ id: string; properties: Record<string, string> }> = [];
+    let after: string | undefined;
+    do {
+      const searchBody: {
+        properties: string[];
+        filterGroups: Array<{ filters: Array<{ propertyName: string; operator: string; value: string }> }>;
+        sorts: Array<{ propertyName: string; direction: string }>;
+        limit: number;
+        after?: string;
+      } = {
+        properties: ['dealname'],
+        filterGroups: [{
+          filters: [
+            { propertyName: 'pipeline', operator: 'EQ', value: dealPipelineId },
+            { propertyName: 'angebotene_produkte', operator: 'CONTAINS_TOKEN', value: produkt },
+          ],
+        }],
+        sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
+        limit: 100,
+      };
+      if (after) searchBody.after = after;
+      const resp = await this.request<{
+        results: Array<{ id: string; properties: Record<string, string> }>;
+        paging?: { next?: { after: string } };
+      }>('/crm/v3/objects/deals/search', {
+        method: 'POST',
+        body: JSON.stringify(searchBody),
+      });
+      allDeals = allDeals.concat(resp.results);
+      after = resp.paging?.next?.after;
+    } while (after);
+
+    if (allDeals.length === 0) return new Map();
+
+    // 2. Batch-read deal → contacts associations
+    const dealIds = allDeals.map(d => d.id);
+    const dealToContacts = new Map<string, string[]>();
+    const batchSize = 100;
+    for (let i = 0; i < dealIds.length; i += batchSize) {
+      const batch = dealIds.slice(i, i + batchSize);
+      try {
+        const resp = await this.request<{
+          results: Array<{ from: { id: string }; to: Array<{ toObjectId: number }> }>;
+        }>('/crm/v4/associations/deals/contacts/batch/read', {
+          method: 'POST',
+          body: JSON.stringify({ inputs: batch.map(id => ({ id })) }),
+        });
+        for (const r of resp.results) {
+          dealToContacts.set(r.from.id, r.to.map(t => String(t.toObjectId)));
+        }
+      } catch (err) {
+        console.error('[getContactsWithDealInProdukt] deal→contact assoc batch failed:', err);
+      }
+    }
+
+    // 3. Reverse-Map contactId → erster passender Deal (für Tag-Link)
+    const result = new Map<string, { dealId: string; dealName: string }>();
+    for (const deal of allDeals) {
+      const contactIds = dealToContacts.get(deal.id) || [];
+      for (const cid of contactIds) {
+        if (!result.has(cid)) {
+          result.set(cid, {
+            dealId: deal.id,
+            dealName: deal.properties.dealname || 'Deal',
+          });
+        }
+      }
+    }
+    return result;
+  }
+
+  async getLeadPipelines() {
+    return this.request<{
+      results: Array<{
+        id: string;
+        label: string;
+        stages: Array<{
+          id: string;
+          label: string;
+          displayOrder: number;
+          metadata?: { isClosed?: string; leadState?: string };
+        }>;
+      }>;
+    }>('/crm/v3/pipelines/0-136');
+  }
+
   // Get deal stage history to determine when deal entered current stage
   async getDealStageHistory(dealId: string) {
     return this.request<{
@@ -571,6 +939,56 @@ export class HubSpotClient {
         }>;
       };
     }>(`/crm/v3/objects/deals/${dealId}?properties=dealstage&propertiesWithHistory=dealstage`);
+  }
+
+  // Batch-fetch stage history for many deals at once. Uses HubSpot's deals
+  // batch read with `propertiesWithHistory`, so a pipeline of N deals costs
+  // ceil(N/100) calls (one per 100-deal batch) instead of N per-deal GETs.
+  // Same motivation as `getMeetingsForDeals` — the per-deal fan-out used to
+  // exceed the 10 req/s rate limit and silently cached nulls in the client.
+  async getDealStageHistories(
+    dealIds: string[],
+  ): Promise<
+    Map<
+      string,
+      Array<{ value: string; timestamp: string; sourceType: string }>
+    >
+  > {
+    const result = new Map<
+      string,
+      Array<{ value: string; timestamp: string; sourceType: string }>
+    >();
+    if (dealIds.length === 0) return result;
+
+    // HubSpot limits batch reads that include `propertiesWithHistory` to
+    // 50 inputs per call (not the usual 100).
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < dealIds.length; i += BATCH_SIZE) {
+      const batch = dealIds.slice(i, i + BATCH_SIZE);
+      const resp = await this.request<{
+        results: Array<{
+          id: string;
+          propertiesWithHistory?: {
+            dealstage?: Array<{
+              value: string;
+              timestamp: string;
+              sourceType: string;
+            }>;
+          };
+        }>;
+      }>('/crm/v3/objects/deals/batch/read', {
+        method: 'POST',
+        body: JSON.stringify({
+          properties: ['dealstage'],
+          propertiesWithHistory: ['dealstage'],
+          inputs: batch.map(id => ({ id })),
+        }),
+      });
+      for (const r of resp.results) {
+        result.set(r.id, r.propertiesWithHistory?.dealstage || []);
+      }
+    }
+    return result;
   }
 }
 

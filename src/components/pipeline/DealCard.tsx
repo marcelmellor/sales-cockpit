@@ -1,25 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import Image from 'next/image';
 import { ExternalLink, Loader2 } from 'lucide-react';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import { getStageColor } from '@/lib/stage-colors';
+import { AgeTomato } from './AgeTomato';
 
 const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
 
 function getHubSpotDealUrl(dealId: string): string {
   return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-3/${dealId}`;
-}
-
-function getStageAgeIcon(daysInStage: number): { src: string; alt: string } {
-  if (daysInStage <= 14) {
-    return { src: '/tomato-fresh.svg', alt: 'Frisch' };
-  } else if (daysInStage <= 45) {
-    return { src: '/tomato-half-fresh.svg', alt: 'Halb frisch' };
-  } else {
-    return { src: '/tomato-rotten.svg', alt: 'Alt' };
-  }
 }
 
 function formatRelativeDate(date: Date): { relative: string; absolute: string } {
@@ -245,18 +235,7 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
                 {stageHistoryLoading ? (
                   <Loader2 className="h-7 w-7 animate-spin text-gray-300" />
                 ) : !deal.dealStage.toLowerCase().includes('closed') && !deal.dealStage.toLowerCase().includes('abgeschlossen') && (
-                  <Image
-                    src={deal.daysInStage >= 0
-                      ? getStageAgeIcon(deal.daysInStage).src
-                      : '/tomato-fresh.svg'
-                    }
-                    alt={deal.daysInStage >= 0
-                      ? getStageAgeIcon(deal.daysInStage).alt
-                      : 'Unbekannt'
-                    }
-                    width={28}
-                    height={28}
-                  />
+                  <AgeTomato days={deal.daysInStage >= 0 ? deal.daysInStage : 0} />
                 )}
               </div>
 

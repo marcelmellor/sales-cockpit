@@ -9,9 +9,11 @@ import { DealStageGroup } from '@/components/pipeline/DealStageGroup';
 import { DealListView } from '@/components/pipeline/DealListView';
 import { DashboardView } from '@/components/pipeline/DashboardView';
 import { SpreadsheetView } from '@/components/pipeline/SpreadsheetView';
-import { Loader2, LayoutGrid, RefreshCw, BarChart3, Table2 } from 'lucide-react';
+import { LeadsSection } from '@/components/pipeline/LeadsSection';
+import { Loader2, LayoutGrid, RefreshCw, BarChart3, Table2, Users } from 'lucide-react';
 import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
+import type { LeadsOverviewResponse } from '@/app/api/leads/overview/route';
 import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
 
 interface Pipeline {
@@ -34,7 +36,7 @@ const PORTFOLIO_OPTIONS = [
 
 export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
-export type ViewMode = 'deals' | 'dashboard' | 'spreadsheet';
+export type ViewMode = 'deals' | 'dashboard' | 'spreadsheet' | 'leads';
 export type DealsGrouping = 'stage' | 'none';
 
 export default function PipelineOverview() {
@@ -64,6 +66,13 @@ function PipelineOverviewContent() {
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   const [grouping, setGrouping] = useState<DealsGrouping>('stage');
   const [onlyOpen, setOnlyOpen] = useState<boolean>(false);
+  // Minuten-Quickfilter für den Leads-Tab. Wirkt auf `agents_minuten` (Zahl)
+  // und als Fallback auf die Untergrenze von `inbound_volumen` (Range-Select).
+  const [minLeadMinuten, setMinLeadMinuten] = useState<number | null>(1000);
+  // Leads-Quickfilter: nur Leads zeigen, deren primärer Kontakt noch nicht an
+  // einem passenden Deal im selben Produkt-Bucket hängt. Default = true, weil
+  // "bereits als Deal erfasst" meist uninteressant für das Lead-Triage ist.
+  const [hideLeadsWithDeal, setHideLeadsWithDeal] = useState<boolean>(true);
   const [listSortConfig, setListSortConfig] = useState<{ field: SortField; direction: SortDirection }>({ field: 'revenue', direction: 'desc' });
 
   const isAuthenticated = status === 'authenticated';
@@ -132,6 +141,21 @@ function PipelineOverviewContent() {
     enabled: isAuthenticated && !!selectedPipelineId && !!selectedProdukt,
     staleTime: 5 * 60 * 1000,
     initialData: cachedOverview ?? undefined,
+  });
+
+  // Fetch leads for the selected portfolio (separate CRM object, own pipeline).
+  // Leads are cheaper to fetch than deals so we don't bother with localStorage
+  // cache — react-query's staleTime is enough.
+  const { data: leadsData, isLoading: leadsLoading } = useQuery({
+    queryKey: ['pipeline-leads', selectedProdukt],
+    queryFn: async () => {
+      const response = await fetch(`/api/leads/overview?produkt=${selectedProdukt}`);
+      if (!response.ok) throw new Error('Failed to fetch leads overview');
+      const data = await response.json();
+      return data.data as LeadsOverviewResponse;
+    },
+    enabled: isAuthenticated && !!selectedProdukt,
+    staleTime: 5 * 60 * 1000,
   });
 
   // Extract deal IDs for meetings query
@@ -217,6 +241,7 @@ function PipelineOverviewContent() {
     queryClient.invalidateQueries({ queryKey: ['pipeline-overview', selectedPipelineId, selectedProdukt] });
     queryClient.invalidateQueries({ queryKey: ['pipeline-meetings', selectedPipelineId, selectedProdukt] });
     queryClient.invalidateQueries({ queryKey: ['pipeline-stage-history', selectedPipelineId, selectedProdukt] });
+    queryClient.invalidateQueries({ queryKey: ['pipeline-leads', selectedProdukt] });
   };
 
   // Combined loading state for secondary data
@@ -451,9 +476,20 @@ function PipelineOverviewContent() {
                 <h1 className="text-lg font-semibold text-gray-900">
                   {currentLabel}
                   <span className="ml-2 text-sm font-normal text-gray-400">
-                    {filteredDeals.length} Deal{filteredDeals.length !== 1 ? 's' : ''}
-                    {(meetingsLoading || stageHistoryLoading) && (
-                      <Loader2 className="h-3 w-3 animate-spin inline ml-1.5 text-blue-500" />
+                    {viewMode === 'leads' ? (
+                      <>
+                        {(leadsData?.leads.length ?? 0)} Lead{(leadsData?.leads.length ?? 0) !== 1 ? 's' : ''}
+                        {leadsLoading && (
+                          <Loader2 className="h-3 w-3 animate-spin inline ml-1.5 text-blue-500" />
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {filteredDeals.length} Deal{filteredDeals.length !== 1 ? 's' : ''}
+                        {(meetingsLoading || stageHistoryLoading) && (
+                          <Loader2 className="h-3 w-3 animate-spin inline ml-1.5 text-blue-500" />
+                        )}
+                      </>
                     )}
                   </span>
                 </h1>
@@ -501,9 +537,25 @@ function PipelineOverviewContent() {
                     <Table2 className="h-3.5 w-3.5" />
                     Spreadsheet
                   </button>
+                  <button
+                    onClick={() => setViewMode('leads')}
+                    className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                      viewMode === 'leads'
+                        ? 'border-gray-900 text-gray-900 font-medium'
+                        : 'border-transparent text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    <Users className="h-3.5 w-3.5" />
+                    Leads
+                    {leadsData && (
+                      <span className="ml-0.5 text-xs text-gray-400">
+                        ({leadsData.leads.filter(l => !l.leadStageIsClosed).length})
+                      </span>
+                    )}
+                  </button>
                 </div>
                 <div className="flex items-center gap-4">
-                  {viewMode === 'deals' && (
+                  {(viewMode === 'deals' || viewMode === 'leads') && (
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-gray-400">Gruppierung</span>
                       <button
@@ -528,7 +580,7 @@ function PipelineOverviewContent() {
                       </button>
                     </div>
                   )}
-                  {(viewMode === 'deals' || viewMode === 'spreadsheet') && (
+                  {(viewMode === 'deals' || viewMode === 'spreadsheet' || viewMode === 'leads') && (
                     <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
                       <input
                         type="checkbox"
@@ -536,10 +588,10 @@ function PipelineOverviewContent() {
                         onChange={(e) => setOnlyOpen(e.target.checked)}
                         className="h-3.5 w-3.5 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
                       />
-                      Nur offene Deals
+                      {viewMode === 'leads' ? 'Nur offene Leads' : 'Nur offene Deals'}
                     </label>
                   )}
-                  {showAgentQuickFilter && (
+                  {showAgentQuickFilter && viewMode !== 'leads' && (
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-gray-400">MRR</span>
                       <button
@@ -564,6 +616,66 @@ function PipelineOverviewContent() {
                       </button>
                     </div>
                   )}
+                  {viewMode === 'leads' && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-gray-400">Min</span>
+                      <button
+                        onClick={() => setMinLeadMinuten(1000)}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          minLeadMinuten === 1000
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        ≥ 1000
+                      </button>
+                      <button
+                        onClick={() => setMinLeadMinuten(2000)}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          minLeadMinuten === 2000
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        ≥ 2000
+                      </button>
+                      <button
+                        onClick={() => setMinLeadMinuten(null)}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          minLeadMinuten === null
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        Alle
+                      </button>
+                    </div>
+                  )}
+                  {viewMode === 'leads' && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-gray-400">Deal</span>
+                      <button
+                        onClick={() => setHideLeadsWithDeal(true)}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          hideLeadsWithDeal
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        Ohne Deal
+                      </button>
+                      <button
+                        onClick={() => setHideLeadsWithDeal(false)}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          !hideLeadsWithDeal
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        Alle
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -579,10 +691,22 @@ function PipelineOverviewContent() {
                 stageHistory={stageHistoryData ?? {}}
                 stageHistoryLoading={stageHistoryLoading}
                 pipelineId={selectedPipelineId}
+                leads={leadsData?.leads ?? []}
               />
             ) : viewMode === 'spreadsheet' ? (
               /* Spreadsheet View */
               <SpreadsheetView deals={dealsForDealsView} />
+            ) : viewMode === 'leads' ? (
+              /* Leads View — own tab, no deals mixed in */
+              <LeadsSection
+                leads={leadsData?.leads ?? []}
+                stages={leadsData?.stages ?? []}
+                onlyOpen={onlyOpen}
+                minMinuten={minLeadMinuten}
+                hideWithDeal={hideLeadsWithDeal}
+                grouping={grouping}
+                loading={leadsLoading}
+              />
             ) : grouping === 'stage' ? (
               /* Deals, grouped by stage */
               dealsByStage.map(({ stage, deals, totalCount }) => (

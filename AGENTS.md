@@ -159,3 +159,30 @@ limit (~100 req/10s) because it fans out batch reads for deals,
 associations, line items, and owners. We currently rely on the client
 retrying on the next request. Hardening (concurrency cap, 429 backoff with
 `Retry-After`, short-TTL caches on pipelines/owners) is a deferred task.
+
+### Never fan out per deal — always batch
+
+Rule: **any endpoint that processes a list of deals must use HubSpot's
+batch endpoints, not a loop of per-deal calls**. HubSpot offers
+`/crm/v4/associations/{from}/{to}/batch/read` for associations and
+`/crm/v3/objects/{type}/batch/read` for object details — both take up to
+100 inputs per call. A 150-deal pipeline should cost 2–4 HubSpot calls,
+never 300.
+
+Why this matters: per-deal fan-out at `BATCH_SIZE=4` with a 300 ms pause
+is ~28 req/s — 3× the 10 req/s limit. Rate-limited calls return 429 and
+get `try/catch`'d to `null`, indistinguishable from "no result". That
+null then lands in the `pipeline-cache-*` localStorage entry and sticks
+around — refresh doesn't help because the next fetch hits the same
+ceiling. This bit us on the meetings endpoint (deal 497714974930 "Taxi
+Höhne" showing no next appointment despite having one). Fix:
+`HubSpotClient.getMeetingsForDeals(dealIds)` — 2 batch calls total,
+independent of pipeline size.
+
+Checklist when writing a new endpoint that touches N deals:
+
+1. Is there a `/batch/read` endpoint for what you need? Use it.
+2. Do not swallow API errors into `null`. At minimum log + rethrow so the
+   request fails loudly; the client can retry the whole query.
+3. Never persist an error-derived `null` into the localStorage cache.
+   Only cache responses from successful, complete fetches.

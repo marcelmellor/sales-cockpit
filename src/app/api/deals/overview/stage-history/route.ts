@@ -51,56 +51,31 @@ export async function GET(request: Request) {
     const client = getHubSpotClient();
     const now = new Date();
 
-    // Process deals in parallel batches to stay within Netlify timeout
-    // HubSpot rate limit: 10 req/s. getDealStageHistory makes 1 call per deal.
-    // Batch of 8 = 8 API calls, then 300ms pause
-    const BATCH_SIZE = 8;
-    const BATCH_DELAY = 300;
+    // Single batch read with `propertiesWithHistory` instead of one GET per
+    // deal — same reasoning as the meetings endpoint. See AGENTS.md "Never
+    // fan out per deal — always batch".
+    const historiesByDeal = await client.getDealStageHistories(dealIdList);
+
     const stageHistoryMap: DealStageHistoryMap = {};
+    for (const dealId of dealIdList) {
+      const history = historiesByDeal.get(dealId);
+      if (history && history.length > 0) {
+        const latestEntry = history[0];
+        const stageEnteredAt = latestEntry.timestamp;
+        const entered = new Date(stageEnteredAt);
+        const diffTime = now.getTime() - entered.getTime();
+        const daysInStage = Math.floor(diffTime / (1000 * 60 * 60 * 24));
 
-    for (let i = 0; i < dealIdList.length; i += BATCH_SIZE) {
-      const batch = dealIdList.slice(i, i + BATCH_SIZE);
-
-      const results = await Promise.allSettled(
-        batch.map(async (dealId) => {
-          try {
-            const dealWithHistory = await client.getDealStageHistory(dealId);
-            const history = dealWithHistory.propertiesWithHistory?.dealstage;
-
-            if (history && history.length > 0) {
-              const latestEntry = history[0];
-              const stageEnteredAt = latestEntry.timestamp;
-              const entered = new Date(stageEnteredAt);
-              const diffTime = now.getTime() - entered.getTime();
-              const daysInStage = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-
-              return {
-                dealId,
-                value: {
-                  stageEnteredAt,
-                  daysInStage,
-                  history: history.map(entry => ({
-                    stageId: entry.value,
-                    timestamp: entry.timestamp,
-                  })),
-                } as DealStageHistoryMap[string],
-              };
-            }
-            return { dealId, value: null };
-          } catch {
-            return { dealId, value: null };
-          }
-        })
-      );
-
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          stageHistoryMap[result.value.dealId] = result.value.value;
-        }
-      }
-
-      if (i + BATCH_SIZE < dealIdList.length) {
-        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
+        stageHistoryMap[dealId] = {
+          stageEnteredAt,
+          daysInStage,
+          history: history.map(entry => ({
+            stageId: entry.value,
+            timestamp: entry.timestamp,
+          })),
+        };
+      } else {
+        stageHistoryMap[dealId] = null;
       }
     }
 

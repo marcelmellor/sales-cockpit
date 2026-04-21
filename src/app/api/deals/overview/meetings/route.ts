@@ -39,52 +39,33 @@ export async function GET(request: Request) {
     const client = getHubSpotClient();
     const now = new Date();
 
-    // Process deals in parallel batches to stay within Netlify timeout
-    // HubSpot rate limit: 10 req/s. getMeetingsForDeal makes 2 calls per deal.
-    // Batch of 4 = 8 API calls, then 300ms pause ≈ 30 deals/sec capacity
-    const BATCH_SIZE = 4;
-    const BATCH_DELAY = 300;
+    // Single pair of batch calls instead of 2 per deal — stays inside
+    // HubSpot's 10 req/s limit even for large pipelines. Previously the
+    // per-deal fan-out silently swallowed 429s and cached nulls in the
+    // client, which is how "no next meeting" showed up on deals that clearly
+    // had one (e.g. 497714974930 "Taxi Höhne - AI Agents").
+    const meetingsPerDeal = await client.getMeetingsForDeals(dealIdList);
+
     const meetingsMap: DealMeetingsMap = {};
-
-    for (let i = 0; i < dealIdList.length; i += BATCH_SIZE) {
-      const batch = dealIdList.slice(i, i + BATCH_SIZE);
-
-      const results = await Promise.allSettled(
-        batch.map(async (dealId) => {
-          try {
-            const meetings = await client.getMeetingsForDeal(dealId);
-            const upcomingMeetings = meetings.results
-              .filter(m => {
-                const startTime = m.properties.hs_meeting_start_time;
-                return startTime && new Date(startTime) > now;
-              })
-              .sort((a, b) => {
-                const aTime = new Date(a.properties.hs_meeting_start_time!).getTime();
-                const bTime = new Date(b.properties.hs_meeting_start_time!).getTime();
-                return aTime - bTime;
-              });
-            const nextMeeting = upcomingMeetings[0];
-            return {
-              dealId,
-              value: nextMeeting
-                ? { date: nextMeeting.properties.hs_meeting_start_time!, title: nextMeeting.properties.hs_meeting_title || 'Meeting' }
-                : null,
-            };
-          } catch {
-            return { dealId, value: null };
-          }
+    for (const dealId of dealIdList) {
+      const meetings = meetingsPerDeal.get(dealId) || [];
+      const upcomingMeetings = meetings
+        .filter(m => {
+          const startTime = m.properties.hs_meeting_start_time;
+          return startTime && new Date(startTime) > now;
         })
-      );
-
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          meetingsMap[result.value.dealId] = result.value.value;
-        }
-      }
-
-      if (i + BATCH_SIZE < dealIdList.length) {
-        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
-      }
+        .sort((a, b) => {
+          const aTime = new Date(a.properties.hs_meeting_start_time!).getTime();
+          const bTime = new Date(b.properties.hs_meeting_start_time!).getTime();
+          return aTime - bTime;
+        });
+      const nextMeeting = upcomingMeetings[0];
+      meetingsMap[dealId] = nextMeeting
+        ? {
+            date: nextMeeting.properties.hs_meeting_start_time!,
+            title: nextMeeting.properties.hs_meeting_title || 'Meeting',
+          }
+        : null;
     }
 
     return NextResponse.json({

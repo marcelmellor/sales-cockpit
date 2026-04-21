@@ -5,6 +5,7 @@ import { Loader2, Plus, X, Save, FolderOpen, Check, Trash2, ChevronDown, Chevron
 import { useDevStore } from '@/stores/dev-store';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
+import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
 
 interface Stage {
   id: string;
@@ -44,6 +45,7 @@ interface DashboardViewProps {
   stageHistory: DealStageHistoryMap;
   stageHistoryLoading?: boolean;
   pipelineId?: string | null;
+  leads?: LeadOverviewItem[];
 }
 
 // ══════════════════════════════════════════════════════════
@@ -428,11 +430,14 @@ function formatTickLabel(v: number): string {
 function Sparkline({
   data, color, targetValue, targetLabel, targetColor = '#94D825', invertY = false, unit, weeks, tooltipExtra, tooltipOverride,
   tooltipLines,
-  bars = false, completionRate, dashLast = false,
+  bars = false, completionRate, dashLast = false, stacks,
 }: {
   data: number[]; color: string; targetValue?: number; targetLabel?: string; targetColor?: string; invertY?: boolean;
   unit?: string; weeks?: Date[]; tooltipExtra?: string[]; tooltipOverride?: string[]; tooltipLines?: string[][];
   bars?: boolean; completionRate?: number[]; dashLast?: boolean;
+  // Stacked bars: pro Segment eine Serie, von unten nach oben. Summe pro Index
+  // muss mit `data[i]` übereinstimmen. Wird nur mit `bars=true` ausgewertet.
+  stacks?: Array<{ values: number[]; color: string; opacity?: number }>;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -515,12 +520,45 @@ function Sparkline({
           <line x1={yAxisW} y1={targetY} x2={totalW} y2={targetY} stroke={targetColor} strokeWidth="1" strokeDasharray="4 4" opacity="0.5" />
         )}
         {bars ? (
-          /* Bar chart - optionally stacked with baseData */
+          /* Bar chart - optionally stacked with baseData or multi-segment stacks */
           data.map((v, i) => {
             const cx = idxToX(i);
             const barY = valToY(v);
             const totalBarH = Math.abs(baselineY - barY);
             if (totalBarH < 0.5) return null;
+
+            // Multi-segment stacks: bottom-up, heights proportional to segment values.
+            // Segmente selbst flach zeichnen und über clipPath der Gesamt-Bar-
+            // Kontur die obere Rundung erzeugen (sonst werden alle Segmente als
+            // einzelne Pillen gerendert und die Stapelung sieht "schuppig" aus).
+            if (stacks && stacks.length > 0) {
+              const total = stacks.reduce((s, seg) => s + (seg.values[i] ?? 0), 0);
+              if (total <= 0) return null;
+              const clipId = `bar-stack-clip-${i}`;
+              let cumulativeH = 0;
+              return (
+                <g key={i}>
+                  <defs>
+                    <clipPath id={clipId}>
+                      <rect x={cx - barW / 2} y={barY} width={barW} height={totalBarH} rx="1.5" />
+                    </clipPath>
+                  </defs>
+                  <g clipPath={`url(#${clipId})`}>
+                    {stacks.map((seg, segIdx) => {
+                      const segVal = seg.values[i] ?? 0;
+                      if (segVal <= 0) return null;
+                      const segH = (segVal / total) * totalBarH;
+                      const segY = baselineY - cumulativeH - segH;
+                      cumulativeH += segH;
+                      return (
+                        <rect key={segIdx} x={cx - barW / 2} y={segY} width={barW} height={segH}
+                          fill={seg.color} opacity={seg.opacity ?? 1} />
+                      );
+                    })}
+                  </g>
+                </g>
+              );
+            }
 
             const cr = completionRate?.[i] ?? 1;
             if (cr >= 1) {
@@ -1037,7 +1075,7 @@ function FilterBuilder({
 // ══════════════════════════════════════════════
 
 export function DashboardView({
-  stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId,
+  stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId, leads = [],
 }: DashboardViewProps) {
   // ── Filter state ──
   const [filter, setFilter] = useState<FilterState>(() => getDefaultFilterState());
@@ -1459,6 +1497,65 @@ export function DashboardView({
     return avg;
   }, [filteredDeals, stageHistory, referenceNow]);
 
+  // ── Leads pro Woche (Bar-Chart, gestapelt nach Minutensegment) ──
+  // Bucket-Logik pro Lead:
+  //   minutes = agentsMinuten ?? Untergrenze(inboundVolumen) ?? null
+  //   minutes >= 2000         → "large"   (Enterprise-Potenzial)
+  //   minutes >= 1000         → "mid"
+  //   sonst (inkl. unbekannt) → "small"
+  // Zeitraum folgt dem gleichen `weeks`-Array wie die Deal-Trends.
+  const leadsMinutesBucket = useCallback((l: LeadOverviewItem): 'small' | 'mid' | 'large' => {
+    let mins: number | null = null;
+    if (l.agentsMinuten != null) {
+      mins = l.agentsMinuten;
+    } else if (l.inboundVolumen) {
+      const m = l.inboundVolumen.match(/^(\d+)/) || l.inboundVolumen.match(/^>(\d+)/);
+      mins = m ? Number(m[1]) : null;
+    }
+    if (mins != null && mins >= 2000) return 'large';
+    if (mins != null && mins >= 1000) return 'mid';
+    return 'small';
+  }, []);
+
+  const leadsPerWeekData = useMemo(() => weeks.map((weekEnd, i) => {
+    const endMs = weekEnd.getTime();
+    const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - 7 * 86400000;
+    const inRange = leads.filter(l => {
+      const ts = l.createdate ? new Date(l.createdate).getTime() : null;
+      return ts != null && ts > startMs && ts <= endMs;
+    });
+    let small = 0, mid = 0, large = 0;
+    for (const l of inRange) {
+      const b = leadsMinutesBucket(l);
+      if (b === 'large') large++;
+      else if (b === 'mid') mid++;
+      else small++;
+    }
+    return { count: inRange.length, leads: inRange, small, mid, large };
+  }), [leads, weeks, leadsMinutesBucket]);
+
+  const leadsPerWeekTrend = useMemo(() => leadsPerWeekData.map(d => d.count), [leadsPerWeekData]);
+  const leadsPerWeekSmall = useMemo(() => leadsPerWeekData.map(d => d.small), [leadsPerWeekData]);
+  const leadsPerWeekMid = useMemo(() => leadsPerWeekData.map(d => d.mid), [leadsPerWeekData]);
+  const leadsPerWeekLarge = useMemo(() => leadsPerWeekData.map(d => d.large), [leadsPerWeekData]);
+
+  const leadsPerWeekTooltip = useMemo(
+    () => leadsPerWeekData.map(d => `${d.count} Lead${d.count === 1 ? '' : 's'}`),
+    [leadsPerWeekData],
+  );
+  const leadsPerWeekTooltipLines = useMemo(() => leadsPerWeekData.map(d => {
+    if (d.count === 0) return ['Keine neuen Leads'];
+    const lines: string[] = [];
+    if (d.large > 0) lines.push(`≥ 2000 Min: ${d.large}`);
+    if (d.mid > 0) lines.push(`1000-2000 Min: ${d.mid}`);
+    if (d.small > 0) lines.push(`< 1000 Min / unbek.: ${d.small}`);
+    return lines;
+  }), [leadsPerWeekData]);
+  const leadsPerWeekAvg = useMemo(() => {
+    if (leadsPerWeekTrend.length === 0) return 0;
+    return Math.round(leadsPerWeekTrend.reduce((sum, v) => sum + v, 0) / leadsPerWeekTrend.length);
+  }, [leadsPerWeekTrend]);
+
   // ── Shared filter builder props ──
   const filterBuilderProps = {
     filter, allStages: stages, onSetFilter: setFilter, quickButtons,
@@ -1534,6 +1631,39 @@ export function DashboardView({
           <ChartCard title="Ø Sales Cycle (Wochenkohorte)">
             <Sparkline data={salesCycleTrend} color="#2F0D5B" unit="W" weeks={weeks} tooltipExtra={salesCycleExtra} bars completionRate={salesCycleCompletion} />
             <WeekLabels weeks={weeks} />
+          </ChartCard>
+          <ChartCard title="Leads / Woche">
+            <Sparkline
+              data={leadsPerWeekTrend}
+              color="#2F0D5B"
+              weeks={weeks}
+              tooltipOverride={leadsPerWeekTooltip}
+              tooltipLines={leadsPerWeekTooltipLines}
+              targetValue={leadsPerWeekAvg}
+              targetLabel={`Ø ${leadsPerWeekAvg}`}
+              targetColor="#2C3333"
+              bars
+              stacks={[
+                { values: leadsPerWeekSmall, color: '#D4D4D4' },
+                { values: leadsPerWeekMid, color: '#E8AC68' },
+                { values: leadsPerWeekLarge, color: '#2F0D5B' },
+              ]}
+            />
+            <WeekLabels weeks={weeks} />
+            <div className="flex items-center gap-3 mt-2 text-[10px] opacity-60">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#2F0D5B' }} />
+                ≥ 2000 Min
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#E8AC68' }} />
+                1000-2000 Min
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#D4D4D4' }} />
+                &lt; 1000 / unbek.
+              </span>
+            </div>
           </ChartCard>
         </div>
       </div>
