@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { ExternalLink, Loader2 } from 'lucide-react';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import { getStageColor } from '@/lib/stage-colors';
-import { AgeTomato } from './AgeTomato';
+import { AgeLabel } from './AgeLabel';
 
 const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
 
@@ -122,6 +122,42 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
   // Check if deal is new in current stage (less than 2 days)
   const isNewInStage = !isDealLost && !isDealWon && deal.daysInStage >= 0 && deal.daysInStage < 2;
 
+  // Warning badge: high-revenue deals that either got stuck in a stage
+  // or lack a timely next appointment. Thresholds mirror existing heuristics:
+  //   - "hoher Umsatz" ≥ 1.000 EUR (matches the AI-Agent MRR quick filter in src/app/page.tsx)
+  //   - "stockt"        > 45 Tage in Stage (alte Tomaten-Schwelle, siehe AgeLabel)
+  //   - "kein Termin"   kein nextAppointment innerhalb der nächsten 14 Tage
+  const HIGH_REVENUE_THRESHOLD = 1000;
+  const STUCK_IN_STAGE_DAYS = 45;
+  const TIMELY_APPOINTMENT_DAYS = 14;
+
+  const isHighRevenue = deal.revenue >= HIGH_REVENUE_THRESHOLD;
+  const isStuckInStage = deal.daysInStage > STUCK_IN_STAGE_DAYS;
+  const hasTimelyAppointment = nextAppointmentDate
+    ? nextAppointmentDate.getTime() - Date.now() < TIMELY_APPOINTMENT_DAYS * 24 * 60 * 60 * 1000
+    : false;
+  const lacksTimelyAppointment = !hasTimelyAppointment;
+
+  const showWarningBadge =
+    !isDealLost &&
+    !isDealWon &&
+    !isNewInStage &&
+    isHighRevenue &&
+    (isStuckInStage || lacksTimelyAppointment);
+
+  const warningLabel = isStuckInStage && lacksTimelyAppointment
+    ? 'Stockt & kein Termin'
+    : isStuckInStage
+      ? 'Stockt in Stage'
+      : 'Kein Termin';
+
+  const warningTooltip = (() => {
+    const parts: string[] = [];
+    if (isStuckInStage) parts.push(`${deal.daysInStage} Tage in aktueller Stage`);
+    if (lacksTimelyAppointment) parts.push(`kein Termin in den nächsten ${TIMELY_APPOINTMENT_DAYS} Tagen`);
+    return `Wertvoller Deal (≥ ${HIGH_REVENUE_THRESHOLD.toLocaleString('de-DE')} EUR): ${parts.join(' · ')}`;
+  })();
+
   return (
     <Link
       href={canvasUrl}
@@ -151,29 +187,45 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
           )}
         </div>
 
-        {/* Lost Badge */}
+        {/* Lost Indicator */}
         {showLostBadge && daysSinceLost !== null && (
           <div className="shrink-0">
-            <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-red-100 text-red-800 border border-red-200">
+            <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-700">
+              <span aria-hidden="true">💔</span>
               Vor {daysSinceLost} Tag{daysSinceLost !== 1 ? 'en' : ''} verloren
             </span>
           </div>
         )}
 
-        {/* Won Badge */}
+        {/* Won Indicator */}
         {showWonBadge && daysSinceWon !== null && (
           <div className="shrink-0">
-            <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-green-100 text-green-800 border border-green-200">
+            <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-green-700">
+              <span aria-hidden="true">✅</span>
               Vor {daysSinceWon} Tag{daysSinceWon !== 1 ? 'en' : ''} gewonnen
             </span>
           </div>
         )}
 
-        {/* New in Stage Badge */}
+        {/* New in Stage Indicator */}
         {isNewInStage && (
           <div className="shrink-0">
-            <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-blue-100 text-blue-800 border border-blue-200">
+            <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-700">
+              <span aria-hidden="true">✨</span>
               Neu in Stage
+            </span>
+          </div>
+        )}
+
+        {/* High-Revenue Warning Indicator */}
+        {showWarningBadge && (
+          <div className="shrink-0">
+            <span
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-700"
+              title={warningTooltip}
+            >
+              <span aria-hidden="true">⚠️</span>
+              {warningLabel}
             </span>
           </div>
         )}
@@ -224,20 +276,33 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
             </div>
           ) : (
             <>
-              {/* Days in Stage (Tomato Icon) */}
-              <div
-                className="w-[80px] flex justify-end"
-                title={deal.daysInStage >= 0
-                  ? `${deal.daysInStage} Tag${deal.daysInStage !== 1 ? 'e' : ''} in Stage\n${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`
-                  : `${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`
-                }
-              >
-                {stageHistoryLoading ? (
-                  <Loader2 className="h-7 w-7 animate-spin text-gray-300" />
-                ) : !deal.dealStage.toLowerCase().includes('closed') && !deal.dealStage.toLowerCase().includes('abgeschlossen') && (
-                  <AgeTomato days={deal.daysInStage >= 0 ? deal.daysInStage : 0} />
-                )}
-              </div>
+              {/* Age / Days-in-Stage */}
+              {(() => {
+                // In nicht nach Stage gruppierten Ansichten (showStage = true,
+                // z.B. DealListView) zeigen wir das Gesamt-Alter des Deals.
+                // In nach Stage gruppierten Ansichten zeigen wir die Standzeit
+                // in der aktuellen Stage.
+                const useDealAge = !!showStage;
+                const days = useDealAge
+                  ? deal.dealAge
+                  : (deal.daysInStage >= 0 ? deal.daysInStage : deal.dealAge);
+                const tooltip = useDealAge
+                  ? `${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`
+                  : (deal.daysInStage >= 0
+                      ? `${deal.daysInStage} Tag${deal.daysInStage !== 1 ? 'e' : ''} in Stage\n${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`
+                      : `${deal.dealAge} Tag${deal.dealAge !== 1 ? 'e' : ''} Deal-Alter`);
+                const isClosedStage = deal.dealStage.toLowerCase().includes('closed')
+                  || deal.dealStage.toLowerCase().includes('abgeschlossen');
+                return (
+                  <div className="w-[90px] flex justify-end">
+                    {stageHistoryLoading && !useDealAge ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-gray-300" />
+                    ) : !isClosedStage && days >= 0 ? (
+                      <AgeLabel days={days} title={tooltip} />
+                    ) : null}
+                  </div>
+                );
+              })()}
 
               {/* Next Appointment */}
               <div className={`min-w-[140px] ${

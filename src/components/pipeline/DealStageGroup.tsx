@@ -148,7 +148,7 @@ export function DealStageGroup({
                     />
                   ) : (
                     <>
-                      <span className="text-xs text-gray-500 w-[80px] text-right">In Stage</span>
+                      <span className="text-xs text-gray-500 w-[90px] text-right">In Stage</span>
                       <SortableHeader field="nextAppointment" label="Nächster Termin" className="min-w-[140px]" />
                     </>
                   )}

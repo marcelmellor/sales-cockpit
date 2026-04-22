@@ -1,10 +1,21 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
+import { ArrowUpDown, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
 import type { DealsGrouping } from '@/app/page';
-import { AgeTomato } from './AgeTomato';
+import { AgeLabel } from './AgeLabel';
+
+type LeadSortField = 'company' | 'source' | 'minuten' | 'age';
+type LeadSortDirection = 'asc' | 'desc';
+
+// Liefert die für den Minuten-Sort relevante Zahl: bevorzugt agentsMinuten
+// (exakt), sonst die untere Grenze des inbound_volumen-Ranges als Näherung.
+function leadMinutenForSort(lead: LeadOverviewItem): number {
+  if (lead.agentsMinuten != null) return lead.agentsMinuten;
+  const lower = inboundVolumenLowerBound(lead.inboundVolumen);
+  return lower ?? -1;
+}
 
 const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
 
@@ -61,6 +72,22 @@ function inboundVolumenLowerBound(range: string | null): number | null {
 }
 
 export function LeadsSection({ leads, stages, onlyOpen = false, minMinuten = null, hideWithDeal = false, grouping = 'stage', loading }: LeadsSectionProps) {
+  const [flatSort, setFlatSort] = useState<{ field: LeadSortField; direction: LeadSortDirection }>({
+    field: 'minuten',
+    direction: 'desc',
+  });
+
+  const handleFlatSortChange = (field: LeadSortField) => {
+    setFlatSort(prev => {
+      if (prev.field === field) {
+        return { field, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      // Text-Spalten default asc (A→Z), numerische default desc (größte zuerst).
+      const textFields: LeadSortField[] = ['company', 'source'];
+      return { field, direction: textFields.includes(field) ? 'asc' : 'desc' };
+    });
+  };
+
   const visibleLeads = useMemo(() => {
     let out = leads;
     if (onlyOpen) out = out.filter(l => !l.leadStageIsClosed);
@@ -126,11 +153,31 @@ export function LeadsSection({ leads, stages, onlyOpen = false, minMinuten = nul
   }
 
   if (grouping === 'none') {
+    const sortedLeads = [...visibleLeads].sort((a, b) => {
+      const { field, direction } = flatSort;
+      let cmp = 0;
+      if (field === 'company') {
+        const aName = a.companyName || a.leadName || '';
+        const bName = b.companyName || b.leadName || '';
+        cmp = aName.localeCompare(bName, 'de');
+      } else if (field === 'source') {
+        const aSrc = a.leadSource || a.source || '';
+        const bSrc = b.leadSource || b.source || '';
+        cmp = aSrc.localeCompare(bSrc, 'de');
+      } else if (field === 'minuten') {
+        cmp = leadMinutenForSort(a) - leadMinutenForSort(b);
+      } else if (field === 'age') {
+        cmp = a.leadAge - b.leadAge;
+      }
+      return direction === 'asc' ? cmp : -cmp;
+    });
+
     return (
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <LeadFlatHeader sort={flatSort} onSortChange={handleFlatSortChange} />
         <ul className="divide-y divide-gray-100">
-          {visibleLeads.map(lead => (
-            <LeadRow key={lead.id} lead={lead} />
+          {sortedLeads.map(lead => (
+            <LeadRow key={lead.id} lead={lead} showAge="leadAge" />
           ))}
         </ul>
       </div>
@@ -174,7 +221,7 @@ function LeadStageGroup({
       {isExpanded && (
         <ul className="divide-y divide-gray-100">
           {leads.map(lead => (
-            <LeadRow key={lead.id} lead={lead} />
+            <LeadRow key={lead.id} lead={lead} showAge="daysInStage" />
           ))}
         </ul>
       )}
@@ -182,7 +229,62 @@ function LeadStageGroup({
   );
 }
 
-function LeadRow({ lead }: { lead: LeadOverviewItem }) {
+function LeadFlatHeader({
+  sort,
+  onSortChange,
+}: {
+  sort: { field: LeadSortField; direction: LeadSortDirection };
+  onSortChange: (field: LeadSortField) => void;
+}) {
+  const SortableHeader = ({
+    field,
+    label,
+    className,
+  }: {
+    field: LeadSortField;
+    label: string;
+    className?: string;
+  }) => {
+    const isActive = sort.field === field;
+    const isAsc = sort.direction === 'asc';
+    return (
+      <button
+        type="button"
+        onClick={() => onSortChange(field)}
+        className={`flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors ${className || ''}`}
+      >
+        {label}
+        {isActive ? (
+          isAsc ? (
+            <ChevronUp className="h-3 w-3" />
+          ) : (
+            <ChevronDown className="h-3 w-3" />
+          )
+        ) : (
+          <ArrowUpDown className="h-3 w-3 opacity-40" />
+        )}
+      </button>
+    );
+  };
+
+  return (
+    <div className="px-4 py-2 border-b border-gray-100 flex items-center gap-4 bg-gray-50/50">
+      <div className="flex-1 min-w-0">
+        <SortableHeader field="company" label="Firma" />
+      </div>
+      <div className="flex items-center gap-6 text-sm">
+        <div className="hidden md:block w-[180px]">
+          <SortableHeader field="source" label="Source" />
+        </div>
+        <SortableHeader field="minuten" label="Minuten" className="w-[110px] justify-end" />
+        <SortableHeader field="age" label="Alter" className="w-[90px] justify-end" />
+        <div className="w-4" />
+      </div>
+    </div>
+  );
+}
+
+function LeadRow({ lead, showAge }: { lead: LeadOverviewItem; showAge: 'leadAge' | 'daysInStage' }) {
   const url = hubspotRecordUrl(lead);
   const displayName = lead.companyName || lead.leadName;
   // Source steht jetzt in einer eigenen Spalte; die Subline zeigt nur noch
@@ -248,17 +350,25 @@ function LeadRow({ lead }: { lead: LeadOverviewItem }) {
               : ''}
         </div>
 
-        <div
-          className="w-[80px] flex justify-end"
-          title={lead.daysInStage >= 0
-            ? `${lead.daysInStage} Tag${lead.daysInStage === 1 ? '' : 'e'} in Stage\n${lead.leadAge} Tag${lead.leadAge === 1 ? '' : 'e'} Lead-Alter`
-            : `${lead.leadAge} Tag${lead.leadAge === 1 ? '' : 'e'} Lead-Alter`
-          }
-        >
-          {lead.daysInStage >= 0 && (
-            <AgeTomato days={lead.daysInStage} />
-          )}
-        </div>
+        {(() => {
+          // In nicht nach Stage gruppierten Ansichten (showAge = 'leadAge')
+          // zeigen wir das Gesamt-Alter des Leads. In nach Stage gruppierten
+          // Ansichten zeigen wir die Standzeit in der aktuellen Stage.
+          const useLeadAge = showAge === 'leadAge';
+          const days = useLeadAge
+            ? lead.leadAge
+            : (lead.daysInStage >= 0 ? lead.daysInStage : lead.leadAge);
+          const tooltip = useLeadAge
+            ? `${lead.leadAge} Tag${lead.leadAge === 1 ? '' : 'e'} Lead-Alter`
+            : (lead.daysInStage >= 0
+                ? `${lead.daysInStage} Tag${lead.daysInStage === 1 ? '' : 'e'} in Stage\n${lead.leadAge} Tag${lead.leadAge === 1 ? '' : 'e'} Lead-Alter`
+                : `${lead.leadAge} Tag${lead.leadAge === 1 ? '' : 'e'} Lead-Alter`);
+          return (
+            <div className="w-[90px] flex justify-end">
+              {days >= 0 && <AgeLabel days={days} title={tooltip} />}
+            </div>
+          );
+        })()}
 
         <ExternalLink className="h-4 w-4 text-gray-300 group-hover:text-purple-500 transition-colors" />
       </div>

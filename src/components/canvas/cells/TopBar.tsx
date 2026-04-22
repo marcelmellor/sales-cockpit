@@ -1,24 +1,14 @@
 'use client';
 
-import Image from 'next/image';
 import { ExternalLink } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvas-store';
 import { getStageColor } from '@/lib/stage-colors';
+import { AgeLabel } from '@/components/pipeline/AgeLabel';
 
 const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
 
 function getHubSpotDealUrl(dealId: string): string {
   return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-3/${dealId}`;
-}
-
-function getDealAgeIcon(dealAge: number): { src: string; alt: string } {
-  if (dealAge <= 14) {
-    return { src: '/tomato-fresh.svg', alt: 'Frisch' };
-  } else if (dealAge <= 45) {
-    return { src: '/tomato-half-fresh.svg', alt: 'Halb frisch' };
-  } else {
-    return { src: '/tomato-rotten.svg', alt: 'Alt' };
-  }
 }
 
 export function TopBar() {
@@ -60,17 +50,16 @@ export function TopBar() {
 
       {/* Rechts: Deal-Alter, PM und Deal Owner */}
       <div className="flex items-center gap-6 text-sm">
-        {canvasData.topBar.dealAge !== undefined && canvasData.topBar.dealAge > 0 && (
+        {canvasData.topBar.dealAge !== undefined && canvasData.topBar.dealAge >= 0 && (
           <div className="flex items-center gap-2">
             <span className="text-gray-400 text-xs uppercase tracking-wide">Alter</span>
-            <span className="font-medium text-gray-700">{canvasData.topBar.dealAge} Tage</span>
-            {!canvasData.topBar.dealStage?.toLowerCase().includes('closed') && !canvasData.topBar.dealStage?.toLowerCase().includes('abgeschlossen') && (
-              <Image
-                src={getDealAgeIcon(canvasData.topBar.dealAge).src}
-                alt={getDealAgeIcon(canvasData.topBar.dealAge).alt}
-                width={24}
-                height={24}
+            {!canvasData.topBar.dealStage?.toLowerCase().includes('closed') && !canvasData.topBar.dealStage?.toLowerCase().includes('abgeschlossen') ? (
+              <AgeLabel
+                days={canvasData.topBar.dealAge}
+                title={`${canvasData.topBar.dealAge} Tag${canvasData.topBar.dealAge !== 1 ? 'e' : ''} Deal-Alter`}
               />
+            ) : (
+              <span className="font-medium text-gray-700">{canvasData.topBar.dealAge} Tage</span>
             )}
           </div>
         )}
