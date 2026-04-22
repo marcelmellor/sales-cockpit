@@ -700,21 +700,73 @@ export class HubSpotClient {
     }> = [];
     let after: string | undefined;
 
+    // Fallback-Mapping: Wenn das strukturierte `product`-Multi-Select leer ist
+    // (bei Leads aus Contact-Form-Workflows passiert das häufig), kommen wir
+    // über das Freitext-Feld `lead_source` trotzdem an die richtige Zuordnung.
+    // HubSpots Prospecting-Workspace zeigt die Produkt-Kachel ebenfalls auf
+    // dieser Basis an (String-Match), sodass Cockpit- und HubSpot-UI-Sicht
+    // wieder konsistent sind.
+    const LEAD_SOURCE_FALLBACK_TOKENS: Record<string, string> = {
+      frontdesk: 'Frontdesk',
+    };
+    const leadSourceFallback = produkt ? LEAD_SOURCE_FALLBACK_TOKENS[produkt] : undefined;
+
+    // Zweiter Fallback: `hs_tag_ids` — die automatisch von HubSpot gesetzten
+    // Prospecting-Workspace-Tags. Sie greifen breiter als `lead_source` (z.B.
+    // bei Leads mit Namen "Frontdesk - <Firma>" ohne `lead_source`-Eintrag).
+    // WICHTIG: Diese IDs sind account-spezifisch (hier: hub 27058496
+    // "sipgate 2025") und werden von HubSpots Regel-Engine vergeben. Falls der
+    // Admin die Tag-Regeln umbaut, kann sich die ID ändern. Es gibt keinen
+    // Public-API-Endpunkt zur Label-Auflösung — die ID wurde durch Abgleich
+    // gegen Stichproben ermittelt (73% der Leads mit Tag 33920575 haben
+    // product=frontdesk, alle lead_sources sind Frontdesk-verwandt).
+    const LEAD_TAG_FALLBACK_IDS: Record<string, string> = {
+      frontdesk: '33920575',
+    };
+    const leadTagFallback = produkt ? LEAD_TAG_FALLBACK_IDS[produkt] : undefined;
+
     do {
+      type Filter = { propertyName: string; operator: string; value: string };
       const searchBody: {
         properties: string[];
-        filterGroups: Array<{ filters: Array<{ propertyName: string; operator: string; value: string }> }>;
+        filterGroups: Array<{ filters: Filter[] }>;
         sorts: Array<{ propertyName: string; direction: string }>;
         limit: number;
         after?: string;
       } = {
         properties,
-        filterGroups: [{
-          filters: [
-            { propertyName: 'hs_pipeline', operator: 'EQ', value: pipelineId },
-            ...(produkt ? [{ propertyName: 'product', operator: 'CONTAINS_TOKEN', value: produkt }] : []),
-          ],
-        }],
+        // HubSpot-Semantik: Filter innerhalb einer filterGroup sind AND,
+        // zwischen filterGroups OR. Für den Produkt-Match mit Fallback
+        // brauchen wir daher zwei Gruppen: (pipeline AND product=X) OR
+        // (pipeline AND lead_source~Token).
+        filterGroups: produkt
+          ? [
+              {
+                filters: [
+                  { propertyName: 'hs_pipeline', operator: 'EQ', value: pipelineId },
+                  { propertyName: 'product', operator: 'CONTAINS_TOKEN', value: produkt },
+                ],
+              },
+              ...(leadSourceFallback
+                ? [{
+                    filters: [
+                      { propertyName: 'hs_pipeline', operator: 'EQ', value: pipelineId },
+                      { propertyName: 'lead_source', operator: 'CONTAINS_TOKEN', value: leadSourceFallback },
+                    ],
+                  }]
+                : []),
+              ...(leadTagFallback
+                ? [{
+                    filters: [
+                      { propertyName: 'hs_pipeline', operator: 'EQ', value: pipelineId },
+                      { propertyName: 'hs_tag_ids', operator: 'CONTAINS_TOKEN', value: leadTagFallback },
+                    ],
+                  }]
+                : []),
+            ]
+          : [{
+              filters: [{ propertyName: 'hs_pipeline', operator: 'EQ', value: pipelineId }],
+            }],
         sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
         limit: 100,
       };
