@@ -38,6 +38,17 @@ interface LeadsSectionProps {
   loading?: boolean;
 }
 
+// Fasst die HubSpot-Stages "Kontaktversuch 1/2/3" zu einer logischen Stage
+// "Kontaktversuch" zusammen. Für den Sales-Alltag ist die Nummer uninteressant —
+// wichtig ist nur, dass der Lead in der Kontaktversuch-Phase steckt.
+const KONTAKTVERSUCH_PATTERN = /^Kontaktversuch\s*\d+$/i;
+const MERGED_KONTAKTVERSUCH_ID = 'merged:kontaktversuch';
+const MERGED_KONTAKTVERSUCH_LABEL = 'Kontaktversuch';
+
+function isKontaktversuchStage(label: string): boolean {
+  return KONTAKTVERSUCH_PATTERN.test(label.trim());
+}
+
 // Liefert die untere Grenze des Range-Strings aus `inbound_volumen`,
 // z.B. "0-1000" → 0, "1000-2000" → 1000, ">5000" → 5000.
 // Wird vom Minuten-Quickfilter als konservative Untergrenze genutzt: ein Lead
@@ -67,10 +78,37 @@ export function LeadsSection({ leads, stages, onlyOpen = false, minMinuten = nul
   }, [leads, onlyOpen, minMinuten, hideWithDeal]);
 
   const leadsByStage = useMemo(() => {
-    return stages
+    // Effektive Stage-Liste bauen: alle "Kontaktversuch N"-Stages werden zu
+    // einer einzigen synthetischen Stage zusammengefasst.
+    type EffectiveStage = { id: string; label: string; displayOrder: number; isClosed: boolean };
+    const effectiveStages: EffectiveStage[] = [];
+    const origIdToEffectiveId = new Map<string, string>();
+    let mergedInserted = false;
+
+    for (const stage of stages) {
+      if (isKontaktversuchStage(stage.label)) {
+        origIdToEffectiveId.set(stage.id, MERGED_KONTAKTVERSUCH_ID);
+        if (!mergedInserted) {
+          effectiveStages.push({
+            id: MERGED_KONTAKTVERSUCH_ID,
+            label: MERGED_KONTAKTVERSUCH_LABEL,
+            displayOrder: stage.displayOrder,
+            isClosed: false,
+          });
+          mergedInserted = true;
+        }
+      } else {
+        origIdToEffectiveId.set(stage.id, stage.id);
+        effectiveStages.push(stage);
+      }
+    }
+
+    return effectiveStages
       .map(stage => ({
         stage,
-        leads: visibleLeads.filter(l => l.leadStageId === stage.id),
+        leads: visibleLeads.filter(
+          l => origIdToEffectiveId.get(l.leadStageId) === stage.id
+        ),
       }))
       .filter(g => g.leads.length > 0);
   }, [stages, visibleLeads]);
