@@ -468,6 +468,19 @@ function Sparkline({
 
   const idxToX = (i: number) => yAxisW + (data.length === 1 ? w / 2 : (i / (data.length - 1)) * w);
 
+  // Bar chart geometry
+  const barGap = 2;
+  const barW = bars && data.length > 0
+    ? Math.max(4, (w / data.length) - barGap)
+    : 0;
+  // Für Bars: rechts/links jeweils barW/2 Abstand lassen, damit der letzte
+  // (und erste) Balken nicht am Viewport-Rand abgeschnitten wird.
+  const barX = (i: number) => {
+    if (data.length === 1) return yAxisW + w / 2;
+    const inner = w - barW;
+    return yAxisW + barW / 2 + (i / (data.length - 1)) * inner;
+  };
+
   // Line chart paths (used when bars=false)
   let solidLinePath = '';
   let dashedLinePath = '';
@@ -484,11 +497,6 @@ function Sparkline({
     }
   }
 
-  // Bar chart geometry
-  const barGap = 2;
-  const barW = bars && data.length > 0
-    ? Math.max(4, (w / data.length) - barGap)
-    : 0;
   const baselineY = valToY(0);
 
   const targetY = targetValue != null ? valToY(targetValue) : null;
@@ -496,7 +504,15 @@ function Sparkline({
   return (
     <div ref={containerRef} className="relative h-[120px]">
       {targetLabel && targetY != null && (
-        <span className="absolute right-0 text-[10px] font-medium" style={{ top: `${targetY - 14}px`, color: targetColor }}>
+        <span
+          className="absolute text-[10px] font-medium bg-white px-1 rounded"
+          style={{
+            left: `${yAxisW}px`,
+            top: `${targetY}px`,
+            transform: 'translateY(-50%)',
+            color: targetColor,
+          }}
+        >
           {targetLabel}
         </span>
       )}
@@ -522,7 +538,7 @@ function Sparkline({
         {bars ? (
           /* Bar chart - optionally stacked with baseData or multi-segment stacks */
           data.map((v, i) => {
-            const cx = idxToX(i);
+            const cx = barX(i);
             const barY = valToY(v);
             const totalBarH = Math.abs(baselineY - barY);
             if (totalBarH < 0.5) return null;
@@ -601,7 +617,7 @@ function Sparkline({
         {hoverIdx != null && (
           <>
             {bars ? (
-              <rect x={idxToX(hoverIdx) - barW / 2 - 1.5} y={padding} width={barW + 3}
+              <rect x={barX(hoverIdx) - barW / 2 - 1.5} y={padding} width={barW + 3}
                 height={h - padding * 2} fill={color} opacity="0.1" rx="2" />
             ) : (
               <>
@@ -613,7 +629,7 @@ function Sparkline({
         )}
         {/* Invisible hover zones per data point */}
         {data.map((_, i) => {
-          const x = idxToX(i);
+          const x = bars ? barX(i) : idxToX(i);
           const sliceW = data.length === 1 ? w : w / (data.length - 1);
           return (
             <rect key={i} x={x - sliceW / 2} y={0} width={sliceW} height={h}
@@ -623,7 +639,7 @@ function Sparkline({
       </svg>}
       {/* Tooltip */}
       {hoverIdx != null && (() => {
-        const x = idxToX(hoverIdx);
+        const x = bars ? barX(hoverIdx) : idxToX(hoverIdx);
         const pctLeft = (x / totalW) * 100;
         const val = data[hoverIdx];
         const dateStr = weeks && weeks[hoverIdx] ? getWeekRange(weeks[hoverIdx]) : `KW ${hoverIdx + 1}`;
@@ -1074,6 +1090,13 @@ function FilterBuilder({
 // ── Main Component ──
 // ══════════════════════════════════════════════
 
+// Palette für die Source-Stacks (Leads/Woche, Gruppierung "nach Source"):
+// bewusst hue-verschiedene Farben, damit benachbarte Segmente im Balken
+// unterscheidbar bleiben. Purple/Orange führen (Brand), dann Teal + Pink
+// als kontrastreiche Ergänzungen, Grau für den "Andere"-Sammel-Bucket.
+// Modul-scope, damit useMemo-Deps stabil bleiben.
+const LEAD_SOURCE_COLORS = ['#2F0D5B', '#E8AC68', '#2E9E8E', '#C44569', '#B8BCC2'];
+
 export function DashboardView({
   stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId, leads = [],
 }: DashboardViewProps) {
@@ -1082,6 +1105,9 @@ export function DashboardView({
   const [savedSets, setSavedSets] = useState<SavedFilterSet[]>(() =>
     pipelineId ? loadFilterSets(pipelineId) : []
   );
+  // Gruppierung für das "Leads / Woche"-Chart: entweder nach Minuten-Bucket
+  // (Default — zeigt Qualifizierungs-Stärke) oder nach Source (zeigt Kanal-Mix).
+  const [leadsChartGrouping, setLeadsChartGrouping] = useState<'minutes' | 'source'>('minutes');
 
   const hasStageReached = hasStageReachedInTree(filter.children);
 
@@ -1199,8 +1225,16 @@ export function DashboardView({
       result.push(new Date(cursor));
       cursor.setUTCDate(cursor.getUTCDate() + 7);
     }
-    // Always include current date as last point
-    if (result.length === 0 || result[result.length - 1].getTime() < now.getTime()) {
+    // `now` nur dann als Extra-Punkt anhängen, wenn der letzte bereits
+    // gepushte Montag NICHT schon in der laufenden Kalenderwoche liegt.
+    // Sonst bekommt man zwei Balken mit demselben KW-Label: einen vollen
+    // (Daten der Vorwoche, weekEnd = Montag dieser Woche) und einen
+    // partiellen (Daten seit Montag, weekEnd = heute). Der partielle
+    // Balken war durch den Off-by-one im Labeling sogar noch kleiner als
+    // der volle — visuell sehr irreführend.
+    const lastPt = result.length > 0 ? result[result.length - 1] : null;
+    const daysSinceLast = lastPt ? (now.getTime() - lastPt.getTime()) / 86400000 : Infinity;
+    if (!lastPt || daysSinceLast >= 7) {
       result.push(now);
     }
     // Minimum 4 points
@@ -1500,11 +1534,12 @@ export function DashboardView({
   // ── Leads pro Woche (Bar-Chart, gestapelt nach Minutensegment) ──
   // Bucket-Logik pro Lead:
   //   minutes = agentsMinuten ?? Untergrenze(inboundVolumen) ?? null
-  //   minutes >= 2000         → "large"   (Enterprise-Potenzial)
-  //   minutes >= 1000         → "mid"
-  //   sonst (inkl. unbekannt) → "small"
+  //   minutes >= 2000   → "large"   (Enterprise-Potenzial)
+  //   minutes >= 1000   → "mid"
+  //   minutes <  1000   → "small"
+  //   minutes == null   → "unknown" (weder agents_minuten noch parsebares Range)
   // Zeitraum folgt dem gleichen `weeks`-Array wie die Deal-Trends.
-  const leadsMinutesBucket = useCallback((l: LeadOverviewItem): 'small' | 'mid' | 'large' => {
+  const leadsMinutesBucket = useCallback((l: LeadOverviewItem): 'small' | 'mid' | 'large' | 'unknown' => {
     let mins: number | null = null;
     if (l.agentsMinuten != null) {
       mins = l.agentsMinuten;
@@ -1512,8 +1547,9 @@ export function DashboardView({
       const m = l.inboundVolumen.match(/^(\d+)/) || l.inboundVolumen.match(/^>(\d+)/);
       mins = m ? Number(m[1]) : null;
     }
-    if (mins != null && mins >= 2000) return 'large';
-    if (mins != null && mins >= 1000) return 'mid';
+    if (mins == null) return 'unknown';
+    if (mins >= 2000) return 'large';
+    if (mins >= 1000) return 'mid';
     return 'small';
   }, []);
 
@@ -1524,33 +1560,114 @@ export function DashboardView({
       const ts = l.createdate ? new Date(l.createdate).getTime() : null;
       return ts != null && ts > startMs && ts <= endMs;
     });
-    let small = 0, mid = 0, large = 0;
+    let small = 0, mid = 0, large = 0, unknown = 0;
     for (const l of inRange) {
       const b = leadsMinutesBucket(l);
       if (b === 'large') large++;
       else if (b === 'mid') mid++;
-      else small++;
+      else if (b === 'small') small++;
+      else unknown++;
     }
-    return { count: inRange.length, leads: inRange, small, mid, large };
+    return { count: inRange.length, leads: inRange, small, mid, large, unknown };
   }), [leads, weeks, leadsMinutesBucket]);
 
   const leadsPerWeekTrend = useMemo(() => leadsPerWeekData.map(d => d.count), [leadsPerWeekData]);
+  const leadsPerWeekUnknown = useMemo(() => leadsPerWeekData.map(d => d.unknown), [leadsPerWeekData]);
   const leadsPerWeekSmall = useMemo(() => leadsPerWeekData.map(d => d.small), [leadsPerWeekData]);
   const leadsPerWeekMid = useMemo(() => leadsPerWeekData.map(d => d.mid), [leadsPerWeekData]);
   const leadsPerWeekLarge = useMemo(() => leadsPerWeekData.map(d => d.large), [leadsPerWeekData]);
+
+  // Source-Gruppierung: Top-4 häufigste Sources (über alle Wochen summiert)
+  // bekommen eine eigene Farbe; alles darunter landet in "Andere". Verhindert,
+  // dass das Chart bei 15+ Sources in ein unleserliches Farbchaos kippt.
+  //
+  // Case-Insensitive-Konsolidierung: "TEAM_NEOPBX" und "team_neopbx" zählen
+  // als derselbe Bucket (lowercase-key). Als Anzeige-Label gewinnt die
+  // häufigste Schreibweise — so bleibt "Agent Qualifizierungsfragen …" schön
+  // kapitalisiert, ohne dass die beiden team_neopbx-Varianten doppelt kippen.
+  const leadSourceKey = useCallback((l: LeadOverviewItem): string => {
+    const raw = (l.leadSource || l.source || '').trim();
+    return raw ? raw.toLowerCase() : 'unbekannt';
+  }, []);
+
+  const { topLeadSources, sourceLabelByKey } = useMemo(() => {
+    // key → total count; key → { casing → count } (um Anzeige-Label zu wählen)
+    const totals = new Map<string, number>();
+    const casingCounts = new Map<string, Map<string, number>>();
+    for (const d of leadsPerWeekData) {
+      for (const l of d.leads) {
+        const key = leadSourceKey(l);
+        const display = ((l.leadSource || l.source || '').trim()) || 'Unbekannt';
+        totals.set(key, (totals.get(key) || 0) + 1);
+        if (!casingCounts.has(key)) casingCounts.set(key, new Map());
+        const cm = casingCounts.get(key)!;
+        cm.set(display, (cm.get(display) || 0) + 1);
+      }
+    }
+    const labelByKey = new Map<string, string>();
+    for (const [key, cm] of casingCounts) {
+      const best = Array.from(cm.entries()).sort((a, b) => b[1] - a[1])[0];
+      labelByKey.set(key, best ? best[0] : key);
+    }
+    const top = Array.from(totals.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([key]) => key);
+    return { topLeadSources: top, sourceLabelByKey: labelByKey };
+  }, [leadsPerWeekData, leadSourceKey]);
+
+
+  const leadsPerWeekBySource = useMemo(() => {
+    const displayKeys = [
+      ...topLeadSources.map(k => sourceLabelByKey.get(k) || k),
+      'Andere',
+    ];
+    const perWeek: Record<string, number[]> = {};
+    for (const k of displayKeys) perWeek[k] = new Array(leadsPerWeekData.length).fill(0);
+    const topSet = new Set(topLeadSources);
+    leadsPerWeekData.forEach((d, wi) => {
+      for (const l of d.leads) {
+        const key = leadSourceKey(l);
+        const bucket = topSet.has(key) ? (sourceLabelByKey.get(key) || key) : 'Andere';
+        perWeek[bucket][wi]++;
+      }
+    });
+    return { keys: displayKeys, perWeek };
+  }, [leadsPerWeekData, topLeadSources, sourceLabelByKey, leadSourceKey]);
+
+  const leadsPerWeekSourceStacks = useMemo(
+    () => leadsPerWeekBySource.keys.map((k, i) => ({
+      key: k,
+      color: LEAD_SOURCE_COLORS[i] || '#D4D4D4',
+      values: leadsPerWeekBySource.perWeek[k],
+    })),
+    [leadsPerWeekBySource],
+  );
 
   const leadsPerWeekTooltip = useMemo(
     () => leadsPerWeekData.map(d => `${d.count} Lead${d.count === 1 ? '' : 's'}`),
     [leadsPerWeekData],
   );
-  const leadsPerWeekTooltipLines = useMemo(() => leadsPerWeekData.map(d => {
+  const leadsPerWeekTooltipLinesMinutes = useMemo(() => leadsPerWeekData.map(d => {
     if (d.count === 0) return ['Keine neuen Leads'];
     const lines: string[] = [];
     if (d.large > 0) lines.push(`≥ 2000 Min: ${d.large}`);
     if (d.mid > 0) lines.push(`1000-2000 Min: ${d.mid}`);
-    if (d.small > 0) lines.push(`< 1000 Min / unbek.: ${d.small}`);
+    if (d.small > 0) lines.push(`< 1000 Min: ${d.small}`);
+    if (d.unknown > 0) lines.push(`Unbekannt: ${d.unknown}`);
     return lines;
   }), [leadsPerWeekData]);
+  const leadsPerWeekTooltipLinesSource = useMemo(() => leadsPerWeekData.map((d, wi) => {
+    if (d.count === 0) return ['Keine neuen Leads'];
+    // Top-Source-Reihenfolge beibehalten, nur nicht-leere Einträge zeigen
+    return leadsPerWeekSourceStacks
+      .map(s => ({ key: s.key, n: s.values[wi] }))
+      .filter(x => x.n > 0)
+      .map(x => `${x.key}: ${x.n}`);
+  }), [leadsPerWeekData, leadsPerWeekSourceStacks]);
+  const leadsPerWeekTooltipLines = leadsChartGrouping === 'source'
+    ? leadsPerWeekTooltipLinesSource
+    : leadsPerWeekTooltipLinesMinutes;
   const leadsPerWeekAvg = useMemo(() => {
     if (leadsPerWeekTrend.length === 0) return 0;
     return Math.round(leadsPerWeekTrend.reduce((sum, v) => sum + v, 0) / leadsPerWeekTrend.length);
@@ -1632,7 +1749,20 @@ export function DashboardView({
             <Sparkline data={salesCycleTrend} color="#2F0D5B" unit="W" weeks={weeks} tooltipExtra={salesCycleExtra} bars completionRate={salesCycleCompletion} />
             <WeekLabels weeks={weeks} />
           </ChartCard>
-          <ChartCard title="Leads / Woche">
+          <ChartCard
+            title="Leads / Woche"
+            headerExtra={
+              <select
+                value={leadsChartGrouping}
+                onChange={e => setLeadsChartGrouping(e.target.value as 'minutes' | 'source')}
+                className="text-[11px] border border-[#e8e8e8] rounded px-2 py-0.5 bg-white text-[#2F0D5B] focus:outline-none focus:ring-1 focus:ring-[#2F0D5B]"
+                title="Gruppierung"
+              >
+                <option value="minutes">nach Minuten</option>
+                <option value="source">nach Source</option>
+              </select>
+            }
+          >
             <Sparkline
               data={leadsPerWeekTrend}
               color="#2F0D5B"
@@ -1643,27 +1773,46 @@ export function DashboardView({
               targetLabel={`Ø ${leadsPerWeekAvg}`}
               targetColor="#2C3333"
               bars
-              stacks={[
-                { values: leadsPerWeekSmall, color: '#D4D4D4' },
-                { values: leadsPerWeekMid, color: '#E8AC68' },
-                { values: leadsPerWeekLarge, color: '#2F0D5B' },
-              ]}
+              stacks={leadsChartGrouping === 'source'
+                ? leadsPerWeekSourceStacks.map(s => ({ values: s.values, color: s.color }))
+                : [
+                    { values: leadsPerWeekUnknown, color: '#B8BCC2' },
+                    { values: leadsPerWeekSmall, color: '#2E9E8E' },
+                    { values: leadsPerWeekMid, color: '#E8AC68' },
+                    { values: leadsPerWeekLarge, color: '#2F0D5B' },
+                  ]
+              }
             />
             <WeekLabels weeks={weeks} />
-            <div className="flex items-center gap-3 mt-2 text-[10px] opacity-60">
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#2F0D5B' }} />
-                ≥ 2000 Min
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#E8AC68' }} />
-                1000-2000 Min
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#D4D4D4' }} />
-                &lt; 1000 / unbek.
-              </span>
-            </div>
+            {leadsChartGrouping === 'source' ? (
+              <div className="flex items-center gap-3 mt-2 text-[10px] flex-wrap">
+                {leadsPerWeekSourceStacks.map(s => (
+                  <span key={s.key} className="flex items-center gap-1" title={s.key}>
+                    <span className="inline-block w-2 h-2 rounded-sm" style={{ background: s.color }} />
+                    <span className="max-w-[140px] truncate text-gray-500">{s.key}</span>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 mt-2 text-[10px] flex-wrap">
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#2F0D5B' }} />
+                  <span className="text-gray-500">≥ 2000 Min</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#E8AC68' }} />
+                  <span className="text-gray-500">1000-2000 Min</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#2E9E8E' }} />
+                  <span className="text-gray-500">&lt; 1000 Min</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#B8BCC2' }} />
+                  <span className="text-gray-500">Unbekannt</span>
+                </span>
+              </div>
+            )}
           </ChartCard>
         </div>
       </div>
@@ -1791,19 +1940,21 @@ function MetricCard({ label, value, unit, sub, subPositive, subNeutral, deals }:
   );
 }
 
-function ChartCard({ title, current, target, children }: {
-  title: string; current?: string; target?: string; children: React.ReactNode;
+function ChartCard({ title, current, target, headerExtra, children }: {
+  title: string; current?: string; target?: string; headerExtra?: React.ReactNode; children: React.ReactNode;
 }) {
   return (
     <div className="bg-white border border-[#e8e8e8] rounded-lg p-6">
       <div className="flex justify-between items-baseline mb-4">
         <span className="text-[13px] font-medium text-[#2F0D5B]">{title}</span>
-        {(current || target) && (
+        {headerExtra ? (
+          headerExtra
+        ) : (current || target) ? (
           <span>
             {current && <span className="text-[13px] text-[#E8AC68] font-medium">{current}</span>}
             {target && <span className="text-[11px] opacity-40 ml-1">{target}</span>}
           </span>
-        )}
+        ) : null}
       </div>
       <div className="border-b border-[#F0F0F0]">{children}</div>
     </div>

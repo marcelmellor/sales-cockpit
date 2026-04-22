@@ -185,7 +185,12 @@ function LeadStageGroup({
 function LeadRow({ lead }: { lead: LeadOverviewItem }) {
   const url = hubspotRecordUrl(lead);
   const displayName = lead.companyName || lead.leadName;
-  const subLine = lead.companyName ? lead.leadName : (lead.leadSource || lead.source || '');
+  // Source steht jetzt in einer eigenen Spalte; die Subline zeigt nur noch
+  // den Lead-Namen (sofern die Company in der Primärzeile steht), sonst nichts.
+  const subLine = lead.companyName ? lead.leadName : '';
+  // Freitext-`leadSource` ("Rueckruf anfordern (Frontdesk)") ist spezifischer
+  // als der Enum-`source` ("Contact Form") — daher vorziehen, Enum als Fallback.
+  const sourceDisplay = lead.leadSource || lead.source || '';
 
   const content = (
     <div className="flex items-center gap-4 px-4 py-3 hover:bg-gray-50 transition-colors group">
@@ -227,6 +232,13 @@ function LeadRow({ lead }: { lead: LeadOverviewItem }) {
             ))}
           </div>
         )}
+
+        <div
+          className="hidden md:block w-[180px] text-gray-500 text-xs truncate"
+          title={sourceDisplay}
+        >
+          {sourceDisplay}
+        </div>
 
         <div className="w-[110px] text-right text-gray-600 text-xs tabular-nums">
           {lead.agentsMinuten != null
