@@ -8,6 +8,10 @@ import { getHubSpotClient } from '@/lib/hubspot/client';
 // TCV / Vertragsdauer fallback, or could not be computed at all.
 export type RevenueSource = 'line_items' | 'agents_package' | 'tcv_laufzeit' | 'none';
 
+// HubSpot-Property `icp_tier` — enum mit Werten S1 / S2 / S3 / S4. Nicht
+// jeder Deal hat den Wert gesetzt (null = unklassifiziert).
+export type IcpTier = 'S1' | 'S2' | 'S3' | 'S4';
+
 export interface DealOverviewItem {
   id: string;
   companyName: string;
@@ -16,6 +20,7 @@ export interface DealOverviewItem {
   agentsMinuten: number;
   productManager: string;
   angeboteneProdukte: string;
+  icpTier: IcpTier | null;
   dealStage: string;
   dealStageId: string;
   dealAge: number; // Alter des Deals in Tagen
@@ -125,6 +130,15 @@ export async function GET(request: Request) {
       }
     }
 
+    // Collect all contact IDs (für sipgate-Account-Fallback: Kontakt mit gesetztem
+    // `mastersipid` zählt als verknüpfter sipgate-Account und liefert den Firmennamen).
+    const contactIds = new Set<string>();
+    for (const deal of filteredDeals) {
+      for (const contactAssoc of deal.associations?.contacts?.results ?? []) {
+        contactIds.add(contactAssoc.id);
+      }
+    }
+
     // Batch fetch companies
     const companiesMap = new Map<string, { name: string }>();
     if (companyIds.size > 0) {
@@ -132,6 +146,21 @@ export async function GET(request: Request) {
       for (const company of companies.results) {
         companiesMap.set(company.id, {
           name: company.properties.name || 'Unknown',
+        });
+      }
+    }
+
+    // Batch fetch contacts mit company + mastersipid für sipgate-Account-Fallback
+    const contactsMap = new Map<string, { company: string; mastersipid: string }>();
+    if (contactIds.size > 0) {
+      const contacts = await client.getContacts(
+        Array.from(contactIds),
+        ['company', 'mastersipid'],
+      );
+      for (const contact of contacts.results) {
+        contactsMap.set(contact.id, {
+          company: contact.properties.company || '',
+          mastersipid: contact.properties.mastersipid || '',
         });
       }
     }
@@ -169,6 +198,20 @@ export async function GET(request: Request) {
     const deals: DealOverviewItem[] = filteredDeals.map((deal) => {
       const companyId = deal.associations?.companies?.results?.[0]?.id;
       const company = companyId ? companiesMap.get(companyId) : undefined;
+
+      // sipgate-Account-Fallback: erster verknüpfter Contact mit gesetztem
+      // `mastersipid` gilt als verknüpfter sipgate-Account. Dessen `company`-Feld
+      // hat Vorrang vor der assoziierten Company — sipgate-Accounts sind in der
+      // Praxis näher an der tatsächlich kaufenden Firma als die HubSpot-Company.
+      const sipgateAccountCompany = (() => {
+        for (const contactAssoc of deal.associations?.contacts?.results ?? []) {
+          const contact = contactsMap.get(contactAssoc.id);
+          if (contact?.mastersipid && contact.company) {
+            return contact.company;
+          }
+        }
+        return '';
+      })();
 
       // Prefer qualified minutes, fall back to old field
       const agentMinuten = parseInt(deal.properties.agents_minuten_qualifiziert) || parseInt(deal.properties.agents_minuten) || 0;
@@ -210,14 +253,22 @@ export async function GET(request: Request) {
         return { revenue: 0, revenueSource: 'none' };
       })();
 
+      // icp_tier aus HubSpot ist ein freier String ('S1'|'S2'|'S3'|'S4'|'').
+      // Wir engen auf den IcpTier-Union ein und null-fallback, damit die UI
+      // nicht an unerwarteten Werten rät.
+      const rawIcp = deal.properties.icp_tier || '';
+      const icpTier: IcpTier | null =
+        rawIcp === 'S1' || rawIcp === 'S2' || rawIcp === 'S3' || rawIcp === 'S4' ? rawIcp : null;
+
       return {
         id: deal.id,
-        companyName: company?.name || deal.properties.dealname || 'Unknown',
+        companyName: sipgateAccountCompany || company?.name || deal.properties.dealname || 'Unknown',
         revenue,
         revenueSource,
         agentsMinuten: agentMinuten,
         productManager: deal.properties.deal_po || '',
         angeboteneProdukte: deal.properties.angebotene_produkte || '',
+        icpTier,
         dealStage: pipeline.stages.find(s => s.id === deal.properties.dealstage)?.label || deal.properties.dealstage || 'Unknown',
         dealStageId: deal.properties.dealstage || '',
         dealAge: calculateDealAge(deal.properties.createdate),

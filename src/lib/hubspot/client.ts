@@ -159,6 +159,7 @@ export class HubSpotClient {
       'angebotene_produkte',
       'hs_mrr',
       'hs_num_of_associated_line_items',
+      'icp_tier',
     ];
 
     // Fetch all deals with pagination (HubSpot search API returns max 100 per request)
@@ -167,6 +168,7 @@ export class HubSpotClient {
       properties: Record<string, string>;
       associations?: {
         companies?: { results: Array<{ id: string; type: string }> };
+        contacts?: { results: Array<{ id: string; type: string }> };
       };
     }> = [];
     let after: string | undefined;
@@ -220,14 +222,19 @@ export class HubSpotClient {
 
     const deals = { results: allDeals };
 
-    // Use batch associations API to get all company associations
+    // Use batch associations API to get all company + contact associations
     // HubSpot batch API has a limit of 100 inputs per request
     const dealIds = deals.results.map(d => d.id);
-    const associationsMap = new Map<string, Array<{ id: string; type: string }>>();
+    const companyAssocsMap = new Map<string, Array<{ id: string; type: string }>>();
+    const contactAssocsMap = new Map<string, Array<{ id: string; type: string }>>();
 
-    if (dealIds.length > 0) {
+    const fetchAssociations = async (
+      toType: 'companies' | 'contacts',
+      target: Map<string, Array<{ id: string; type: string }>>,
+      typeLabel: string,
+    ) => {
+      if (dealIds.length === 0) return;
       try {
-        // Process in batches of 100
         const batchSize = 100;
         for (let i = 0; i < dealIds.length; i += batchSize) {
           const batchIds = dealIds.slice(i, i + batchSize);
@@ -236,7 +243,7 @@ export class HubSpotClient {
               from: { id: string };
               to: Array<{ toObjectId: number; associationTypes: Array<{ typeId: number }> }>;
             }>;
-          }>('/crm/v4/associations/deals/companies/batch/read', {
+          }>(`/crm/v4/associations/deals/${toType}/batch/read`, {
             method: 'POST',
             body: JSON.stringify({
               inputs: batchIds.map(id => ({ id })),
@@ -244,21 +251,26 @@ export class HubSpotClient {
           });
 
           for (const result of batchAssociations.results) {
-            // toObjectId is a number, convert to string
-            const companyAssocs = result.to.map(t => ({ id: String(t.toObjectId), type: 'company' }));
-            associationsMap.set(result.from.id, companyAssocs);
+            const assocs = result.to.map(t => ({ id: String(t.toObjectId), type: typeLabel }));
+            target.set(result.from.id, assocs);
           }
         }
       } catch {
         // Fallback: associations will be empty
       }
-    }
+    };
+
+    await Promise.all([
+      fetchAssociations('companies', companyAssocsMap, 'company'),
+      fetchAssociations('contacts', contactAssocsMap, 'contact'),
+    ]);
 
     // Merge associations into deals
     const dealsWithAssociations = deals.results.map(deal => ({
       ...deal,
       associations: {
-        companies: { results: associationsMap.get(deal.id) || [] },
+        companies: { results: companyAssocsMap.get(deal.id) || [] },
+        contacts: { results: contactAssocsMap.get(deal.id) || [] },
       },
     }));
 
@@ -400,8 +412,10 @@ export class HubSpotClient {
     }>(`/crm/v3/objects/contacts/${contactId}?properties=firstname,lastname,email,jobtitle,phone`);
   }
 
-  async getContacts(contactIds: string[]) {
+  async getContacts(contactIds: string[], properties?: string[]) {
     if (contactIds.length === 0) return { results: [] };
+
+    const props = properties ?? ['firstname', 'lastname', 'email', 'jobtitle', 'phone'];
 
     // HubSpot batch API has a limit of 100 inputs per request
     const allResults: Array<{ id: string; properties: Record<string, string> }> = [];
@@ -417,7 +431,7 @@ export class HubSpotClient {
       }>('/crm/v3/objects/contacts/batch/read', {
         method: 'POST',
         body: JSON.stringify({
-          properties: ['firstname', 'lastname', 'email', 'jobtitle', 'phone'],
+          properties: props,
           inputs: batchIds.map(id => ({ id })),
         }),
       });

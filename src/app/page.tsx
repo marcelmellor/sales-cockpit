@@ -10,11 +10,62 @@ import { DealListView } from '@/components/pipeline/DealListView';
 import { DashboardView } from '@/components/pipeline/DashboardView';
 import { SpreadsheetView } from '@/components/pipeline/SpreadsheetView';
 import { LeadsSection } from '@/components/pipeline/LeadsSection';
+import { LeadsSpreadsheetView } from '@/components/pipeline/LeadsSpreadsheetView';
+import { FilterBuilder } from '@/components/pipeline/filters/FilterBuilder';
+import {
+  getDefaultFilterState,
+  loadFilterSets,
+  saveFilterSets,
+  makeId,
+  combineFilterWithBadges,
+  loadActiveBadgeIds,
+  saveActiveBadgeIds,
+} from '@/components/pipeline/filters/engine';
+import type {
+  FilterBadge,
+  FilterState,
+  SavedFilterSet,
+} from '@/components/pipeline/filters/types';
+import {
+  DEAL_DEFAULT_FIELD,
+  buildDealFieldConfigs,
+  getDealInputKind,
+  applyDealFilters,
+} from '@/components/pipeline/filters/dealFilters';
+import type { DealFieldType } from '@/components/pipeline/filters/dealFilters';
+import {
+  LEAD_DEFAULT_FIELD,
+  buildLeadFieldConfigs,
+  getLeadInputKind,
+  applyLeadFilters,
+} from '@/components/pipeline/filters/leadFilters';
+import type { LeadFieldType } from '@/components/pipeline/filters/leadFilters';
 import { Loader2, LayoutGrid, RefreshCw, BarChart3, Table2, Users } from 'lucide-react';
 import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
-import type { LeadsOverviewResponse } from '@/app/api/leads/overview/route';
+import type { LeadsOverviewResponse, LeadOverviewItem } from '@/app/api/leads/overview/route';
 import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
+
+// localStorage-Prefixe für die pro-Tab gespeicherten Filter-Sets und die
+// aktiv geschalteten Badges. Pipeline/Produkt fließen mit ein, damit jeder
+// Portfolio-Tab seine eigenen Sets und Badge-Zustände behält.
+const DEALS_TAB_FILTERSETS_PREFIX = 'deals-tab-filtersets-';
+const LEADS_TAB_FILTERSETS_PREFIX = 'leads-tab-filtersets-';
+const DEALS_TAB_ACTIVE_BADGES_PREFIX = 'deals-tab-active-badges-';
+const LEADS_TAB_ACTIVE_BADGES_PREFIX = 'leads-tab-active-badges-';
+
+// IDs der System-Badges. Müssen konstant bleiben, damit ein einmal aktiv
+// geschaltetes System-Badge nach Reload wieder aktiv ist.
+const DEAL_SYSTEM_BADGE_OPEN = 'system:deals-open';
+const DEAL_SYSTEM_BADGE_MIN_MRR = 'system:deals-min-mrr-450';
+const DEAL_SYSTEM_BADGE_ICP_S1 = 'system:deals-icp-s1';
+const DEAL_SYSTEM_BADGE_ICP_S2 = 'system:deals-icp-s2';
+const DEAL_SYSTEM_BADGE_ICP_S3 = 'system:deals-icp-s3';
+const DEAL_SYSTEM_BADGE_ICP_S4 = 'system:deals-icp-s4';
+const LEAD_SYSTEM_BADGE_OPEN = 'system:leads-open';
+const LEAD_SYSTEM_BADGE_MIN_1000 = 'system:leads-min-1000';
+const LEAD_SYSTEM_BADGE_MIN_2000 = 'system:leads-min-2000';
+const LEAD_SYSTEM_BADGE_NO_DEAL = 'system:leads-no-deal';
 
 interface Pipeline {
   id: string;
@@ -34,9 +85,14 @@ const PORTFOLIO_OPTIONS = [
   { value: 'easy', label: 'satellite Business' },
 ] as const;
 
-export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'nextAppointment' | 'closedDate';
+export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'daysInStage' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
-export type ViewMode = 'deals' | 'dashboard' | 'spreadsheet' | 'leads';
+export type ViewMode = 'deals' | 'dashboard' | 'leads';
+// Sub-Modus innerhalb Deals- und Leads-Tab: Sales-Sicht (Kachel-/Listenansicht
+// mit Story) oder Sheet (tabellarisch, mit CSV-Export). Wird pro Tab separat
+// gehalten, damit ein Wechsel zwischen Deals und Leads die gewählte Sicht nicht
+// zurücksetzt.
+export type ContentMode = 'sales' | 'sheet';
 export type DealsGrouping = 'stage' | 'none';
 
 export default function PipelineOverview() {
@@ -59,21 +115,22 @@ function PipelineOverviewContent() {
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
   const [selectedProdukt, setSelectedProdukt] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
-  // 449 (not 450) because the Enterprise package (2500 Min.) prices at
-  // exactly 449,95 €. A 450 threshold would drop Enterprise-fit deals.
-  const [minAgentMrr, setMinAgentMrr] = useState<number | null>(449);
   const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
+  // Getrennte Sub-View-States für Deals und Leads — so merkt sich jeder Tab
+  // seine zuletzt gewählte Sicht (Sales vs. Sheet) auch beim Hin- und
+  // Herspringen zwischen den Tabs.
+  const [dealsSubView, setDealsSubView] = useState<ContentMode>('sales');
+  const [leadsSubView, setLeadsSubView] = useState<ContentMode>('sales');
   const [grouping, setGrouping] = useState<DealsGrouping>('stage');
-  const [onlyOpen, setOnlyOpen] = useState<boolean>(false);
-  // Minuten-Quickfilter für den Leads-Tab. Wirkt auf `agents_minuten` (Zahl)
-  // und als Fallback auf die Untergrenze von `inbound_volumen` (Range-Select).
-  const [minLeadMinuten, setMinLeadMinuten] = useState<number | null>(1000);
-  // Leads-Quickfilter: nur Leads zeigen, deren primärer Kontakt noch nicht an
-  // einem passenden Deal im selben Produkt-Bucket hängt. Default = true, weil
-  // "bereits als Deal erfasst" meist uninteressant für das Lead-Triage ist.
-  const [hideLeadsWithDeal, setHideLeadsWithDeal] = useState<boolean>(true);
   const [listSortConfig, setListSortConfig] = useState<{ field: SortField; direction: SortDirection }>({ field: 'revenue', direction: 'desc' });
+
+  // Deals-Tab- und Leads-Tab-Filter (dasselbe Modell wie der Dashboard-Filter,
+  // nur pro Tab eigene State-Instanzen + eigene gespeicherte Filter-Sets).
+  const [dealsFilter, setDealsFilter] = useState<FilterState<DealFieldType>>(() => getDefaultFilterState<DealFieldType>());
+  const [dealsSavedSets, setDealsSavedSets] = useState<SavedFilterSet<DealFieldType>[]>([]);
+  const [leadsFilter, setLeadsFilter] = useState<FilterState<LeadFieldType>>(() => getDefaultFilterState<LeadFieldType>());
+  const [leadsSavedSets, setLeadsSavedSets] = useState<SavedFilterSet<LeadFieldType>[]>([]);
 
   const isAuthenticated = status === 'authenticated';
 
@@ -144,18 +201,28 @@ function PipelineOverviewContent() {
   });
 
   // Fetch leads for the selected portfolio (separate CRM object, own pipeline).
-  // Leads are cheaper to fetch than deals so we don't bother with localStorage
-  // cache — react-query's staleTime is enough.
+  // Wird analog zu Deals auch in localStorage gecached, damit nach einem Reload
+  // sofort Inhalte dastehen. Cache-Key nur nach Produkt, weil der Leads-Endpoint
+  // keine Pipeline-Auswahl kennt (fix auf LEAD_PIPELINE_ID im Route-Handler).
+  const leadsCacheKey = selectedProdukt ? `leads-overview-${selectedProdukt}` : null;
+  const cachedLeads = useMemo(
+    () => leadsCacheKey ? getCachedData<LeadsOverviewResponse>(leadsCacheKey) : null,
+    [leadsCacheKey]
+  );
+
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
     queryKey: ['pipeline-leads', selectedProdukt],
     queryFn: async () => {
       const response = await fetch(`/api/leads/overview?produkt=${selectedProdukt}`);
       if (!response.ok) throw new Error('Failed to fetch leads overview');
       const data = await response.json();
-      return data.data as LeadsOverviewResponse;
+      const result = data.data as LeadsOverviewResponse;
+      if (leadsCacheKey) setCachedData(leadsCacheKey, result);
+      return result;
     },
     enabled: isAuthenticated && !!selectedProdukt,
     staleTime: 5 * 60 * 1000,
+    initialData: cachedLeads ?? undefined,
   });
 
   // Extract deal IDs for meetings query
@@ -236,7 +303,7 @@ function PipelineOverviewContent() {
   // Refresh all data
   const handleRefresh = () => {
     if (cacheKey) {
-      clearPipelineCache(cacheKey);
+      clearPipelineCache(cacheKey, selectedProdukt ?? undefined);
     }
     queryClient.invalidateQueries({ queryKey: ['pipeline-overview', selectedPipelineId, selectedProdukt] });
     queryClient.invalidateQueries({ queryKey: ['pipeline-meetings', selectedPipelineId, selectedProdukt] });
@@ -250,16 +317,9 @@ function PipelineOverviewContent() {
   // Show Agents Minuten column when AI Agent is selected
   const showAgentsMinuten = selectedProdukt === 'frontdesk';
 
-  // Show the agent minutes quick-filter only for AI Agents
-  const showAgentQuickFilter = selectedProdukt === 'frontdesk';
-
-  // Apply AI Agent MRR quick-filter. MRR is the right lens because it captures
-  // both fixed-seat deals and minute-based pricing uniformly (≥450 € ≈ the
-  // smallest commercially relevant AI Agent package).
-  const filteredDeals = useMemo(() => {
-    if (!showAgentQuickFilter || minAgentMrr === null) return dealsWithMeetings;
-    return dealsWithMeetings.filter(deal => deal.revenue >= minAgentMrr);
-  }, [dealsWithMeetings, showAgentQuickFilter, minAgentMrr]);
+  // Show the MRR ≥ 450 € System-Badge standardmäßig nur für AI Agents, weil
+  // dort diese Heuristik sinnvoll ist (andere Portfolios haben andere Preise).
+  const showAgentMrrBadge = selectedProdukt === 'frontdesk';
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -312,6 +372,13 @@ function PipelineOverviewContent() {
         comparison = a.agentsMinuten - b.agentsMinuten;
       } else if (field === 'dealAge') {
         comparison = a.dealAge - b.dealAge;
+      } else if (field === 'daysInStage') {
+        // -1 bedeutet "unbekannt" (Stage-History noch nicht geladen). Solche
+        // Deals ans Ende sortieren, damit sie nicht fälschlich als "am
+        // längsten in Stage" oben landen.
+        const aDays = a.daysInStage >= 0 ? a.daysInStage : Infinity;
+        const bDays = b.daysInStage >= 0 ? b.daysInStage : Infinity;
+        comparison = aDays - bDays;
       } else if (field === 'nextAppointment') {
         const aDate = a.nextAppointment?.date ? new Date(a.nextAppointment.date).getTime() : Infinity;
         const bDate = b.nextAppointment?.date ? new Date(b.nextAppointment.date).getTime() : Infinity;
@@ -351,17 +418,332 @@ function PipelineOverviewContent() {
     return closedKeywords.some(keyword => label.toLowerCase().includes(keyword));
   }, []);
 
-  // Apply "nur offene Deals" filter as an independent toggle on top of the
-  // product + MRR filters. Used by both grouping modes.
-  const dealsForDealsView = useMemo(() => {
-    if (!onlyOpen) return filteredDeals;
-    return filteredDeals.filter(deal => !isClosedStage(deal.dealStage));
-  }, [filteredDeals, onlyOpen, isClosedStage]);
+  // ── Deals-/Leads-Tab Advanced-Filter ────────────────────────────────────
+  // Storage-Keys (pro Pipeline+Produkt / pro Produkt). Nicht-nullable nur,
+  // wenn beide Parameter gesetzt sind — sonst haben wir nichts zum Trennen.
+  const dealsFiltersetsKey = selectedPipelineId && selectedProdukt
+    ? `${DEALS_TAB_FILTERSETS_PREFIX}${selectedPipelineId}-${selectedProdukt}`
+    : null;
+  const leadsFiltersetsKey = selectedProdukt ? `${LEADS_TAB_FILTERSETS_PREFIX}${selectedProdukt}` : null;
+  const dealsActiveBadgesKey = selectedPipelineId && selectedProdukt
+    ? `${DEALS_TAB_ACTIVE_BADGES_PREFIX}${selectedPipelineId}-${selectedProdukt}`
+    : null;
+  const leadsActiveBadgesKey = selectedProdukt ? `${LEADS_TAB_ACTIVE_BADGES_PREFIX}${selectedProdukt}` : null;
+
+  // Aktive Badges pro Tab. Default-Aktiv-Logik (für System-Badges wie
+  // "MRR ≥ 450 €") wird unten beim ersten Laden via defaultActive angewendet.
+  const [activeDealsBadgeIds, setActiveDealsBadgeIds] = useState<string[]>([]);
+  const [activeLeadsBadgeIds, setActiveLeadsBadgeIds] = useState<string[]>([]);
+
+  // Gespeicherte Filter-Sets aus localStorage laden, sobald der Kontext
+  // (Pipeline/Produkt) steht oder sich ändert. Bewusst cascading-rerender,
+  // weil die Sets an einen externen Store (localStorage) gekoppelt sind.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDealsSavedSets(dealsFiltersetsKey ? loadFilterSets<DealFieldType>(dealsFiltersetsKey) : []);
+  }, [dealsFiltersetsKey]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLeadsSavedSets(leadsFiltersetsKey ? loadFilterSets<LeadFieldType>(leadsFiltersetsKey) : []);
+  }, [leadsFiltersetsKey]);
+
+  // Aktive Badge-IDs laden. Wenn noch keine Auswahl persistiert ist, werden
+  // die `defaultActive: true`-System-Badges standardmäßig aktiv geschaltet.
+  useEffect(() => {
+    if (!dealsActiveBadgesKey) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveDealsBadgeIds([]);
+      return;
+    }
+    const stored = loadActiveBadgeIds(dealsActiveBadgesKey);
+    setActiveDealsBadgeIds(stored ?? (selectedProdukt === 'frontdesk' ? [DEAL_SYSTEM_BADGE_MIN_MRR] : []));
+  }, [dealsActiveBadgesKey, selectedProdukt]);
+  useEffect(() => {
+    if (!leadsActiveBadgesKey) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveLeadsBadgeIds([]);
+      return;
+    }
+    const stored = loadActiveBadgeIds(leadsActiveBadgesKey);
+    setActiveLeadsBadgeIds(stored ?? [LEAD_SYSTEM_BADGE_MIN_1000, LEAD_SYSTEM_BADGE_NO_DEAL]);
+  }, [leadsActiveBadgesKey]);
+
+  const dealsFieldConfigs = useMemo(() => buildDealFieldConfigs(reorderedStages), [reorderedStages]);
+  const leadsFieldConfigs = useMemo(
+    () => buildLeadFieldConfigs(leadsData?.stages ?? [], leadsData?.leads ?? []),
+    [leadsData?.stages, leadsData?.leads],
+  );
+
+  // System-Badges für den Deals-Tab: "Nur offene Deals" immer verfügbar,
+  // "MRR ≥ 450 €" nur für AI Agents. Beide Badges sind fest im Code definiert
+  // und werden als Badge (nicht als Header-Quickfilter) dargestellt.
+  const dealsSystemBadges: FilterBadge<DealFieldType>[] = useMemo(() => {
+    const badges: FilterBadge<DealFieldType>[] = [
+      {
+        id: DEAL_SYSTEM_BADGE_OPEN,
+        label: 'Nur offene Deals',
+        system: true,
+        filter: {
+          logic: 'AND',
+          children: [{
+            kind: 'criterion',
+            id: 'sys-open',
+            type: 'status',
+            operator: 'after',
+            dateFrom: '',
+            stringValue: 'open',
+          }],
+        },
+      },
+    ];
+    if (showAgentMrrBadge) {
+      badges.push({
+        id: DEAL_SYSTEM_BADGE_MIN_MRR,
+        label: 'MRR ≥ 450 €',
+        system: true,
+        defaultActive: true,
+        filter: {
+          logic: 'AND',
+          children: [{
+            kind: 'criterion',
+            id: 'sys-mrr',
+            type: 'mrr',
+            operator: 'after',
+            dateFrom: '',
+            numberFrom: 449,
+          }],
+        },
+      });
+    }
+    // ICP-Tier-Badges (S1–S4). Teilen sich die `orGroup: 'icp_tier'`, damit
+    // Mehrfachauswahl als OR ausgewertet wird (S1 oder S2 …). Pro Deal ist
+    // genau ein Tier gesetzt; ohne orGroup würde "S1 und S2 aktiv" alles
+    // ausfiltern.
+    const icpBadges: Array<{ id: string; value: 'S1' | 'S2' | 'S3' | 'S4' }> = [
+      { id: DEAL_SYSTEM_BADGE_ICP_S1, value: 'S1' },
+      { id: DEAL_SYSTEM_BADGE_ICP_S2, value: 'S2' },
+      { id: DEAL_SYSTEM_BADGE_ICP_S3, value: 'S3' },
+      { id: DEAL_SYSTEM_BADGE_ICP_S4, value: 'S4' },
+    ];
+    for (const b of icpBadges) {
+      badges.push({
+        id: b.id,
+        label: b.value,
+        system: true,
+        orGroup: 'icp_tier',
+        filter: {
+          logic: 'AND',
+          children: [{
+            kind: 'criterion',
+            id: `sys-icp-${b.value}`,
+            type: 'icp_tier',
+            operator: 'after',
+            dateFrom: '',
+            stringValue: b.value,
+          }],
+        },
+      });
+    }
+    return badges;
+  }, [showAgentMrrBadge]);
+
+  // System-Badges für den Leads-Tab. Die Minuten-Badges verwenden eine
+  // OR-Gruppe mit agents_minuten + inbound_volumen, damit Leads, die (noch)
+  // keine Agent-Minuten haben, über ihr Inbound-Volumen matchen können.
+  const leadsSystemBadges: FilterBadge<LeadFieldType>[] = useMemo(() => {
+    const minMinutenFilter = (threshold: number): FilterState<LeadFieldType> => ({
+      logic: 'AND',
+      children: [{
+        kind: 'group',
+        id: `sys-lead-min-${threshold}-grp`,
+        logic: 'OR',
+        children: [
+          {
+            kind: 'criterion',
+            id: `sys-lead-min-${threshold}-am`,
+            type: 'agents_minuten',
+            operator: 'after',
+            dateFrom: '',
+            numberFrom: threshold,
+          },
+          {
+            kind: 'criterion',
+            id: `sys-lead-min-${threshold}-iv`,
+            type: 'inbound_volumen',
+            operator: 'after',
+            dateFrom: '',
+            numberFrom: threshold,
+          },
+        ],
+      }],
+    });
+
+    return [
+      {
+        id: LEAD_SYSTEM_BADGE_OPEN,
+        label: 'Nur offene Leads',
+        system: true,
+        filter: {
+          logic: 'AND',
+          children: [{
+            kind: 'criterion',
+            id: 'sys-lead-open',
+            type: 'status',
+            operator: 'after',
+            dateFrom: '',
+            stringValue: 'open',
+          }],
+        },
+      },
+      {
+        id: LEAD_SYSTEM_BADGE_MIN_1000,
+        label: '≥ 1000 Min.',
+        system: true,
+        defaultActive: true,
+        filter: minMinutenFilter(1000),
+      },
+      {
+        id: LEAD_SYSTEM_BADGE_MIN_2000,
+        label: '≥ 2000 Min.',
+        system: true,
+        filter: minMinutenFilter(2000),
+      },
+      {
+        id: LEAD_SYSTEM_BADGE_NO_DEAL,
+        label: 'Ohne Deal',
+        system: true,
+        defaultActive: true,
+        filter: {
+          logic: 'AND',
+          children: [{
+            kind: 'criterion',
+            id: 'sys-lead-no-deal',
+            type: 'has_deal',
+            operator: 'after',
+            dateFrom: '',
+            booleanValue: false,
+          }],
+        },
+      },
+    ];
+  }, []);
+
+  // Aktive Badges (System + gespeicherte Sets) in ausführbare Filter auflösen.
+  const activeDealsBadges: FilterBadge<DealFieldType>[] = useMemo(() => {
+    const system = dealsSystemBadges.filter(b => activeDealsBadgeIds.includes(b.id));
+    const saved = dealsSavedSets
+      .filter(s => activeDealsBadgeIds.includes(s.id))
+      .map(s => ({ id: s.id, label: s.name, filter: s.filter }));
+    return [...system, ...saved];
+  }, [dealsSystemBadges, dealsSavedSets, activeDealsBadgeIds]);
+
+  const activeLeadsBadges: FilterBadge<LeadFieldType>[] = useMemo(() => {
+    const system = leadsSystemBadges.filter(b => activeLeadsBadgeIds.includes(b.id));
+    const saved = leadsSavedSets
+      .filter(s => activeLeadsBadgeIds.includes(s.id))
+      .map(s => ({ id: s.id, label: s.name, filter: s.filter }));
+    return [...system, ...saved];
+  }, [leadsSystemBadges, leadsSavedSets, activeLeadsBadgeIds]);
+
+  const effectiveDealsFilter = useMemo(
+    () => combineFilterWithBadges<DealFieldType>(dealsFilter, activeDealsBadges),
+    [dealsFilter, activeDealsBadges],
+  );
+  const effectiveLeadsFilter = useMemo(
+    () => combineFilterWithBadges<LeadFieldType>(leadsFilter, activeLeadsBadges),
+    [leadsFilter, activeLeadsBadges],
+  );
+
+  // Den effektiven Filterbaum (manuell + aktive Badges) auf die Deals anwenden.
+  const dealsForDealsTab = useMemo(
+    () => applyDealFilters(dealsWithMeetings, effectiveDealsFilter, stageHistoryData ?? {}, stageHistoryLoading),
+    [dealsWithMeetings, effectiveDealsFilter, stageHistoryData, stageHistoryLoading],
+  );
+
+  // Leads-Basis: rohe Liste — alle Quickfilter sind jetzt System-Badges und
+  // fließen über effectiveLeadsFilter in applyLeadFilters ein.
+  const leadsBase: LeadOverviewItem[] = useMemo(
+    () => leadsData?.leads ?? [],
+    [leadsData?.leads],
+  );
+
+  const leadsForLeadsTab = useMemo(
+    () => applyLeadFilters(leadsBase, effectiveLeadsFilter),
+    [leadsBase, effectiveLeadsFilter],
+  );
+
+  // Filter-Set Handler: Deals-Tab
+  const handleSaveDealsFilterSet = useCallback((name: string) => {
+    if (!dealsFiltersetsKey || !name.trim()) return;
+    setDealsSavedSets(prev => {
+      const existing = prev.find(s => s.name === name.trim());
+      const next: SavedFilterSet<DealFieldType>[] = existing
+        ? prev.map(s => s.id === existing.id ? { ...s, filter: structuredClone(dealsFilter) } : s)
+        : [...prev, { id: makeId(), name: name.trim(), filter: structuredClone(dealsFilter) }];
+      saveFilterSets<DealFieldType>(dealsFiltersetsKey, next);
+      return next;
+    });
+  }, [dealsFiltersetsKey, dealsFilter]);
+  const handleDeleteDealsFilterSet = useCallback((id: string) => {
+    if (!dealsFiltersetsKey) return;
+    setDealsSavedSets(prev => {
+      const next = prev.filter(s => s.id !== id);
+      saveFilterSets<DealFieldType>(dealsFiltersetsKey, next);
+      return next;
+    });
+    setActiveDealsBadgeIds(prev => {
+      if (!prev.includes(id)) return prev;
+      const next = prev.filter(x => x !== id);
+      if (dealsActiveBadgesKey) saveActiveBadgeIds(dealsActiveBadgesKey, next);
+      return next;
+    });
+  }, [dealsFiltersetsKey, dealsActiveBadgesKey]);
+  const handleToggleDealsBadge = useCallback((id: string) => {
+    setActiveDealsBadgeIds(prev => {
+      const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
+      if (dealsActiveBadgesKey) saveActiveBadgeIds(dealsActiveBadgesKey, next);
+      return next;
+    });
+  }, [dealsActiveBadgesKey]);
+
+  // Filter-Set Handler: Leads-Tab
+  const handleSaveLeadsFilterSet = useCallback((name: string) => {
+    if (!leadsFiltersetsKey || !name.trim()) return;
+    setLeadsSavedSets(prev => {
+      const existing = prev.find(s => s.name === name.trim());
+      const next: SavedFilterSet<LeadFieldType>[] = existing
+        ? prev.map(s => s.id === existing.id ? { ...s, filter: structuredClone(leadsFilter) } : s)
+        : [...prev, { id: makeId(), name: name.trim(), filter: structuredClone(leadsFilter) }];
+      saveFilterSets<LeadFieldType>(leadsFiltersetsKey, next);
+      return next;
+    });
+  }, [leadsFiltersetsKey, leadsFilter]);
+  const handleDeleteLeadsFilterSet = useCallback((id: string) => {
+    if (!leadsFiltersetsKey) return;
+    setLeadsSavedSets(prev => {
+      const next = prev.filter(s => s.id !== id);
+      saveFilterSets<LeadFieldType>(leadsFiltersetsKey, next);
+      return next;
+    });
+    setActiveLeadsBadgeIds(prev => {
+      if (!prev.includes(id)) return prev;
+      const next = prev.filter(x => x !== id);
+      if (leadsActiveBadgesKey) saveActiveBadgeIds(leadsActiveBadgesKey, next);
+      return next;
+    });
+  }, [leadsFiltersetsKey, leadsActiveBadgesKey]);
+  const handleToggleLeadsBadge = useCallback((id: string) => {
+    setActiveLeadsBadgeIds(prev => {
+      const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
+      if (leadsActiveBadgesKey) saveActiveBadgeIds(leadsActiveBadgesKey, next);
+      return next;
+    });
+  }, [leadsActiveBadgesKey]);
 
   // Group deals by stage
   const dealsByStage = reorderedStages.map(stage => {
     const sortedDeals = sortDeals(
-      dealsForDealsView.filter(deal => deal.dealStageId === stage.id),
+      dealsForDealsTab.filter(deal => deal.dealStageId === stage.id),
       stage.id
     );
     const isClosed = isClosedStage(stage.label);
@@ -374,7 +756,7 @@ function PipelineOverviewContent() {
 
   // Flat list for grouping="none" — globally sorted
   const flatSortedDeals = useMemo(() => {
-    return [...dealsForDealsView].sort((a, b) => {
+    return [...dealsForDealsTab].sort((a, b) => {
       const { field, direction } = listSortConfig;
       let comparison = 0;
 
@@ -384,6 +766,10 @@ function PipelineOverviewContent() {
         comparison = a.agentsMinuten - b.agentsMinuten;
       } else if (field === 'dealAge') {
         comparison = a.dealAge - b.dealAge;
+      } else if (field === 'daysInStage') {
+        const aDays = a.daysInStage >= 0 ? a.daysInStage : Infinity;
+        const bDays = b.daysInStage >= 0 ? b.daysInStage : Infinity;
+        comparison = aDays - bDays;
       } else if (field === 'nextAppointment') {
         const aDate = a.nextAppointment?.date ? new Date(a.nextAppointment.date).getTime() : Infinity;
         const bDate = b.nextAppointment?.date ? new Date(b.nextAppointment.date).getTime() : Infinity;
@@ -392,7 +778,7 @@ function PipelineOverviewContent() {
 
       return direction === 'asc' ? comparison : -comparison;
     });
-  }, [dealsForDealsView, listSortConfig]);
+  }, [dealsForDealsTab, listSortConfig]);
 
   // Handler for list view sort
   const handleListSortChange = (field: SortField) => {
@@ -485,7 +871,7 @@ function PipelineOverviewContent() {
                       </>
                     ) : (
                       <>
-                        {filteredDeals.length} Deal{filteredDeals.length !== 1 ? 's' : ''}
+                        {dealsWithMeetings.length} Deal{dealsWithMeetings.length !== 1 ? 's' : ''}
                         {(meetingsLoading || stageHistoryLoading) && (
                           <Loader2 className="h-3 w-3 animate-spin inline ml-1.5 text-blue-500" />
                         )}
@@ -527,17 +913,6 @@ function PipelineOverviewContent() {
                     Deals
                   </button>
                   <button
-                    onClick={() => setViewMode('spreadsheet')}
-                    className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
-                      viewMode === 'spreadsheet'
-                        ? 'border-gray-900 text-gray-900 font-medium'
-                        : 'border-transparent text-gray-400 hover:text-gray-600'
-                    }`}
-                  >
-                    <Table2 className="h-3.5 w-3.5" />
-                    Spreadsheet
-                  </button>
-                  <button
                     onClick={() => setViewMode('leads')}
                     className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
                       viewMode === 'leads'
@@ -556,6 +931,37 @@ function PipelineOverviewContent() {
                 </div>
                 <div className="flex items-center gap-4">
                   {(viewMode === 'deals' || viewMode === 'leads') && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() =>
+                          viewMode === 'deals' ? setDealsSubView('sales') : setLeadsSubView('sales')
+                        }
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          (viewMode === 'deals' ? dealsSubView : leadsSubView) === 'sales'
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        <LayoutGrid className="h-3 w-3" />
+                        Sales
+                      </button>
+                      <button
+                        onClick={() =>
+                          viewMode === 'deals' ? setDealsSubView('sheet') : setLeadsSubView('sheet')
+                        }
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          (viewMode === 'deals' ? dealsSubView : leadsSubView) === 'sheet'
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        <Table2 className="h-3 w-3" />
+                        Sheet
+                      </button>
+                    </div>
+                  )}
+                  {((viewMode === 'deals' && dealsSubView === 'sales') ||
+                    (viewMode === 'leads' && leadsSubView === 'sales')) && (
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-gray-400">Gruppierung</span>
                       <button
@@ -580,102 +986,6 @@ function PipelineOverviewContent() {
                       </button>
                     </div>
                   )}
-                  {(viewMode === 'deals' || viewMode === 'spreadsheet' || viewMode === 'leads') && (
-                    <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={onlyOpen}
-                        onChange={(e) => setOnlyOpen(e.target.checked)}
-                        className="h-3.5 w-3.5 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
-                      />
-                      {viewMode === 'leads' ? 'Nur offene Leads' : 'Nur offene Deals'}
-                    </label>
-                  )}
-                  {showAgentQuickFilter && viewMode !== 'leads' && (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-gray-400">MRR</span>
-                      <button
-                        onClick={() => setMinAgentMrr(449)}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          minAgentMrr === 449
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        ≥ 450 €
-                      </button>
-                      <button
-                        onClick={() => setMinAgentMrr(null)}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          minAgentMrr === null
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        Alle
-                      </button>
-                    </div>
-                  )}
-                  {viewMode === 'leads' && (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-gray-400">Min</span>
-                      <button
-                        onClick={() => setMinLeadMinuten(1000)}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          minLeadMinuten === 1000
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        ≥ 1000
-                      </button>
-                      <button
-                        onClick={() => setMinLeadMinuten(2000)}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          minLeadMinuten === 2000
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        ≥ 2000
-                      </button>
-                      <button
-                        onClick={() => setMinLeadMinuten(null)}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          minLeadMinuten === null
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        Alle
-                      </button>
-                    </div>
-                  )}
-                  {viewMode === 'leads' && (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-gray-400">Deal</span>
-                      <button
-                        onClick={() => setHideLeadsWithDeal(true)}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          hideLeadsWithDeal
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        Ohne Deal
-                      </button>
-                      <button
-                        onClick={() => setHideLeadsWithDeal(false)}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          !hideLeadsWithDeal
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        Alle
-                      </button>
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
@@ -686,55 +996,101 @@ function PipelineOverviewContent() {
               <DashboardView
                 key={`${selectedPipelineId ?? 'none'}-${selectedProdukt ?? 'none'}`}
                 stages={reorderedStages}
-                deals={filteredDeals}
+                deals={dealsWithMeetings}
                 isClosedStage={isClosedStage}
                 stageHistory={stageHistoryData ?? {}}
                 stageHistoryLoading={stageHistoryLoading}
                 pipelineId={selectedPipelineId}
+                produkt={selectedProdukt}
                 leads={leadsData?.leads ?? []}
               />
-            ) : viewMode === 'spreadsheet' ? (
-              /* Spreadsheet View */
-              <SpreadsheetView deals={dealsForDealsView} />
             ) : viewMode === 'leads' ? (
-              /* Leads View — own tab, no deals mixed in */
-              <LeadsSection
-                leads={leadsData?.leads ?? []}
-                stages={leadsData?.stages ?? []}
-                onlyOpen={onlyOpen}
-                minMinuten={minLeadMinuten}
-                hideWithDeal={hideLeadsWithDeal}
-                grouping={grouping}
-                loading={leadsLoading}
-              />
-            ) : grouping === 'stage' ? (
-              /* Deals, grouped by stage */
-              dealsByStage.map(({ stage, deals, totalCount }) => (
-                <DealStageGroup
-                  key={stage.id}
-                  stage={stage}
-                  deals={deals}
-                  totalCount={totalCount}
-                  pipelineId={selectedPipelineId}
-                  pipelineName={overviewData?.pipelineName}
-                  showAgentsMinuten={showAgentsMinuten}
-                  sortConfig={sortByStage[stage.id]}
-                  onSortChange={(field) => handleSortChange(stage.id, field)}
-                  meetingsLoading={meetingsLoading}
-                  stageHistoryLoading={stageHistoryLoading}
+              /* Leads-Tab: Sales- oder Sheet-Sicht */
+              <>
+                <FilterBuilder<LeadFieldType>
+                  filter={leadsFilter}
+                  onSetFilter={setLeadsFilter}
+                  fieldConfigs={leadsFieldConfigs}
+                  defaultType={LEAD_DEFAULT_FIELD}
+                  getInputKind={getLeadInputKind}
+                  totalFiltered={leadsForLeadsTab.length}
+                  totalItems={leadsBase.length}
+                  itemLabel="Leads"
+                  savedSets={leadsSavedSets}
+                  onSaveFilterSet={handleSaveLeadsFilterSet}
+                  onDeleteFilterSet={handleDeleteLeadsFilterSet}
+                  showFilterSets={!!leadsFiltersetsKey}
+                  systemBadges={leadsSystemBadges}
+                  activeBadgeIds={activeLeadsBadgeIds}
+                  onToggleBadge={handleToggleLeadsBadge}
                 />
-              ))
+                {leadsSubView === 'sheet' ? (
+                  <LeadsSpreadsheetView leads={leadsForLeadsTab} />
+                ) : (
+                  <LeadsSection
+                    leads={leadsForLeadsTab}
+                    stages={leadsData?.stages ?? []}
+                    grouping={grouping}
+                    loading={leadsLoading}
+                  />
+                )}
+              </>
             ) : (
-              /* Deals, flat list */
-              <DealListView
-                deals={flatSortedDeals}
-                pipelineId={selectedPipelineId}
-                onlyOpen={onlyOpen}
-                sortConfig={listSortConfig}
-                onSortChange={handleListSortChange}
-                meetingsLoading={meetingsLoading}
-                stageHistoryLoading={stageHistoryLoading}
-              />
+              <>
+                <FilterBuilder<DealFieldType>
+                  filter={dealsFilter}
+                  onSetFilter={setDealsFilter}
+                  fieldConfigs={dealsFieldConfigs}
+                  defaultType={DEAL_DEFAULT_FIELD}
+                  getInputKind={getDealInputKind}
+                  totalFiltered={dealsForDealsTab.length}
+                  totalItems={dealsWithMeetings.length}
+                  itemLabel="Deals"
+                  pendingDataLabel={stageHistoryLoading ? 'Stage-History laden...' : null}
+                  pendingDataLoading={stageHistoryLoading}
+                  savedSets={dealsSavedSets}
+                  onSaveFilterSet={handleSaveDealsFilterSet}
+                  onDeleteFilterSet={handleDeleteDealsFilterSet}
+                  showFilterSets={!!dealsFiltersetsKey}
+                  systemBadges={dealsSystemBadges}
+                  activeBadgeIds={activeDealsBadgeIds}
+                  onToggleBadge={handleToggleDealsBadge}
+                />
+                {dealsSubView === 'sheet' ? (
+                  /* Deals-Tab, Sheet-Sicht */
+                  <SpreadsheetView deals={dealsForDealsTab} />
+                ) : grouping === 'stage' ? (
+                  /* Deals, grouped by stage */
+                  <>
+                    {dealsByStage.map(({ stage, deals, totalCount }) => (
+                      <DealStageGroup
+                        key={stage.id}
+                        stage={stage}
+                        deals={deals}
+                        totalCount={totalCount}
+                        pipelineId={selectedPipelineId}
+                        pipelineName={overviewData?.pipelineName}
+                        showAgentsMinuten={showAgentsMinuten}
+                        sortConfig={sortByStage[stage.id]}
+                        onSortChange={(field) => handleSortChange(stage.id, field)}
+                        meetingsLoading={meetingsLoading}
+                        stageHistoryLoading={stageHistoryLoading}
+                      />
+                    ))}
+                  </>
+                ) : (
+                  /* Deals, flat list */
+                  <DealListView
+                    deals={flatSortedDeals}
+                    pipelineId={selectedPipelineId}
+                    onlyOpen={activeDealsBadgeIds.includes(DEAL_SYSTEM_BADGE_OPEN)}
+                    sortConfig={listSortConfig}
+                    onSortChange={handleListSortChange}
+                    meetingsLoading={meetingsLoading}
+                    stageHistoryLoading={stageHistoryLoading}
+                  />
+                )}
+              </>
             )}
           </div>
         )}
