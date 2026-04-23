@@ -77,6 +77,16 @@ export function LeadsSection({ leads, stages, onlyOpen = false, minMinuten = nul
     direction: 'desc',
   });
 
+  // Sortierung nach Alter innerhalb jeder Stage-Gruppe. `null` = keine
+  // explizite Sortierung (HubSpot-Default-Reihenfolge beibehalten). Wird über
+  // den "Alter"-Header in LeadStageGroup umgeschaltet; der Zustand liegt hier,
+  // damit alle Stage-Gruppen konsistent mit derselben Richtung sortieren.
+  const [stageAgeSortDir, setStageAgeSortDir] = useState<LeadSortDirection | null>(null);
+
+  const handleStageAgeSortToggle = () => {
+    setStageAgeSortDir(prev => (prev === 'desc' ? 'asc' : 'desc'));
+  };
+
   const handleFlatSortChange = (field: LeadSortField) => {
     setFlatSort(prev => {
       if (prev.field === field) {
@@ -187,7 +197,13 @@ export function LeadsSection({ leads, stages, onlyOpen = false, minMinuten = nul
   return (
     <div className="space-y-4">
       {leadsByStage.map(({ stage, leads: stageLeads }) => (
-        <LeadStageGroup key={stage.id} stage={stage} leads={stageLeads} />
+        <LeadStageGroup
+          key={stage.id}
+          stage={stage}
+          leads={stageLeads}
+          ageSortDir={stageAgeSortDir}
+          onToggleAgeSort={handleStageAgeSortToggle}
+        />
       ))}
     </div>
   );
@@ -196,11 +212,27 @@ export function LeadsSection({ leads, stages, onlyOpen = false, minMinuten = nul
 function LeadStageGroup({
   stage,
   leads,
+  ageSortDir,
+  onToggleAgeSort,
 }: {
   stage: { id: string; label: string; displayOrder: number; isClosed: boolean };
   leads: LeadOverviewItem[];
+  ageSortDir: LeadSortDirection | null;
+  onToggleAgeSort: () => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
+
+  // In Stage-Gruppierung zeigen die Rows `daysInStage` als Alter-Wert. Dieselbe
+  // Metrik ist hier die sinnvolle Sortier-Grundlage; `-1` (unbekannt) ans Ende.
+  const sortedLeads = useMemo(() => {
+    if (!ageSortDir) return leads;
+    return [...leads].sort((a, b) => {
+      const aDays = a.daysInStage >= 0 ? a.daysInStage : Infinity;
+      const bDays = b.daysInStage >= 0 ? b.daysInStage : Infinity;
+      const cmp = aDays - bDays;
+      return ageSortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [leads, ageSortDir]);
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -217,15 +249,70 @@ function LeadStageGroup({
         <span className="px-2 py-0.5 text-sm rounded-full bg-gray-100 text-gray-600">
           {leads.length}
         </span>
+        <div className="ml-auto">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleAgeSort();
+            }}
+            className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors"
+            title="Nach Alter (Tage in Stage) sortieren"
+          >
+            Sortieren: Alter
+            {ageSortDir === 'asc' ? (
+              <ChevronUp className="h-3 w-3" />
+            ) : ageSortDir === 'desc' ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ArrowUpDown className="h-3 w-3 opacity-40" />
+            )}
+          </button>
+        </div>
       </div>
       {isExpanded && (
         <ul className="divide-y divide-gray-100">
-          {leads.map(lead => (
+          {sortedLeads.map(lead => (
             <LeadRow key={lead.id} lead={lead} showAge="daysInStage" />
           ))}
         </ul>
       )}
     </div>
+  );
+}
+
+function LeadSortableHeader({
+  field,
+  label,
+  sort,
+  onSortChange,
+  className,
+}: {
+  field: LeadSortField;
+  label: string;
+  sort: { field: LeadSortField; direction: LeadSortDirection };
+  onSortChange: (field: LeadSortField) => void;
+  className?: string;
+}) {
+  const isActive = sort.field === field;
+  const isAsc = sort.direction === 'asc';
+  return (
+    <button
+      type="button"
+      onClick={() => onSortChange(field)}
+      className={`flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors ${className || ''}`}
+    >
+      {label}
+      {isActive ? (
+        isAsc ? (
+          <ChevronUp className="h-3 w-3" />
+        ) : (
+          <ChevronDown className="h-3 w-3" />
+        )
+      ) : (
+        <ArrowUpDown className="h-3 w-3 opacity-40" />
+      )}
+    </button>
   );
 }
 
@@ -236,48 +323,17 @@ function LeadFlatHeader({
   sort: { field: LeadSortField; direction: LeadSortDirection };
   onSortChange: (field: LeadSortField) => void;
 }) {
-  const SortableHeader = ({
-    field,
-    label,
-    className,
-  }: {
-    field: LeadSortField;
-    label: string;
-    className?: string;
-  }) => {
-    const isActive = sort.field === field;
-    const isAsc = sort.direction === 'asc';
-    return (
-      <button
-        type="button"
-        onClick={() => onSortChange(field)}
-        className={`flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors ${className || ''}`}
-      >
-        {label}
-        {isActive ? (
-          isAsc ? (
-            <ChevronUp className="h-3 w-3" />
-          ) : (
-            <ChevronDown className="h-3 w-3" />
-          )
-        ) : (
-          <ArrowUpDown className="h-3 w-3 opacity-40" />
-        )}
-      </button>
-    );
-  };
-
   return (
     <div className="px-4 py-2 border-b border-gray-100 flex items-center gap-4 bg-gray-50/50">
       <div className="flex-1 min-w-0">
-        <SortableHeader field="company" label="Firma" />
+        <LeadSortableHeader field="company" label="Firma" sort={sort} onSortChange={onSortChange} />
       </div>
       <div className="flex items-center gap-6 text-sm">
         <div className="hidden md:block w-[180px]">
-          <SortableHeader field="source" label="Source" />
+          <LeadSortableHeader field="source" label="Source" sort={sort} onSortChange={onSortChange} />
         </div>
-        <SortableHeader field="minuten" label="Minuten" className="w-[110px] justify-end" />
-        <SortableHeader field="age" label="Alter" className="w-[90px] justify-end" />
+        <LeadSortableHeader field="minuten" label="Minuten" sort={sort} onSortChange={onSortChange} className="w-[110px] justify-end" />
+        <LeadSortableHeader field="age" label="Alter" sort={sort} onSortChange={onSortChange} className="w-[90px] justify-end" />
         <div className="w-4" />
       </div>
     </div>
