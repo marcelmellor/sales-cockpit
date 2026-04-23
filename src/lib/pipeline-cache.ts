@@ -43,15 +43,22 @@ export function setCachedData<T>(key: string, data: T): void {
   }
 }
 
-export function clearPipelineCache(pipelineId?: string): void {
+export function clearPipelineCache(pipelineId?: string, produkt?: string): void {
   if (typeof window === 'undefined') return;
 
   try {
     if (pipelineId) {
-      // Clear specific pipeline cache
+      // Clear specific pipeline cache. `pipelineId` ist hier tatsächlich der
+      // zusammengesetzte cache-Key (z.B. "<id>-<produkt>") — historisch
+      // gewachsen, Name unverändert gelassen.
       localStorage.removeItem(CACHE_PREFIX + `overview-${pipelineId}`);
       localStorage.removeItem(CACHE_PREFIX + `meetings-${pipelineId}`);
       localStorage.removeItem(CACHE_PREFIX + `stage-history-${pipelineId}`);
+      // Leads sind nur nach Produkt gekeyt (Leads-Endpoint kennt keine
+      // Pipeline-Auswahl), deshalb explizit übergeben.
+      if (produkt) {
+        localStorage.removeItem(CACHE_PREFIX + `leads-overview-${produkt}`);
+      }
     } else {
       // Clear all pipeline caches
       const keys = Object.keys(localStorage).filter(k => k.startsWith(CACHE_PREFIX));
