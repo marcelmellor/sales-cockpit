@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, ArrowUpDown, Settings2, ExternalLink, Download } from 'lucide-react';
+import { ChevronDown, ChevronUp, ArrowUpDown, Settings2, ExternalLink, Download, Search, X } from 'lucide-react';
 import type { DealOverviewItem, RevenueSource } from '@/app/api/deals/overview/route';
 
 const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
@@ -349,6 +349,7 @@ export function SpreadsheetView({ deals }: SpreadsheetViewProps) {
   const [sortKey, setSortKey] = useState<ColumnKey>('revenue');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const pickerRef = useRef<HTMLDivElement>(null);
 
   // Hydrate column selection from localStorage. This intentionally runs in an
@@ -409,11 +410,31 @@ export function SpreadsheetView({ deals }: SpreadsheetViewProps) {
     }
   };
 
+  // Filter (case-insensitive substring over textual columns) and sort in one
+  // pass. Count badge matches the visible rows because filtering happens before
+  // sorting.
   const sortedDeals = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const filtered = !q
+      ? deals
+      : deals.filter((d) => {
+          const haystack = [
+            d.companyName,
+            d.dealStage,
+            d.productManager,
+            d.angeboteneProdukte,
+            d.nextAppointment?.title || '',
+            REVENUE_SOURCE_LABEL[d.revenueSource],
+            d.id,
+          ]
+            .join(' ')
+            .toLowerCase();
+          return haystack.includes(q);
+        });
     const col = COLUMN_MAP[sortKey];
-    if (!col?.sortable) return deals;
+    if (!col?.sortable) return filtered;
     const mul = sortDirection === 'asc' ? 1 : -1;
-    return [...deals].sort((a, b) => {
+    return [...filtered].sort((a, b) => {
       const va = col.getSortValue(a);
       const vb = col.getSortValue(b);
       // null / undefined always sort last, regardless of direction
@@ -422,7 +443,7 @@ export function SpreadsheetView({ deals }: SpreadsheetViewProps) {
       if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * mul;
       return String(va).localeCompare(String(vb), 'de') * mul;
     });
-  }, [deals, sortKey, sortDirection]);
+  }, [deals, searchQuery, sortKey, sortDirection]);
 
   // Preserve defined column order, only include visible ones
   const columnsToRender = COLUMNS.filter((c) => visibleColumns.includes(c.key));
@@ -430,12 +451,35 @@ export function SpreadsheetView({ deals }: SpreadsheetViewProps) {
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
       {/* Toolbar */}
-      <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h3 className="font-semibold text-gray-900">Spreadsheet</h3>
-          <span className="px-2 py-0.5 text-sm rounded-full bg-blue-100 text-blue-700">
+      <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <h3 className="font-semibold text-gray-900 whitespace-nowrap">Spreadsheet</h3>
+          <span className="px-2 py-0.5 text-sm rounded-full bg-blue-100 text-blue-700 whitespace-nowrap">
             {sortedDeals.length}
+            {searchQuery.trim() && deals.length !== sortedDeals.length ? (
+              <span className="text-blue-500"> / {deals.length}</span>
+            ) : null}
           </span>
+          <div className="relative max-w-xs w-full">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Suchen…"
+              className="w-full pl-7 pr-7 py-1 text-xs bg-white border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-gray-400 focus:border-gray-400"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-gray-400 hover:text-gray-700"
+                title="Suche zurücksetzen"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -497,7 +541,9 @@ export function SpreadsheetView({ deals }: SpreadsheetViewProps) {
 
       {/* Table */}
       {sortedDeals.length === 0 ? (
-        <div className="px-4 py-8 text-center text-gray-400">Keine Deals vorhanden</div>
+        <div className="px-4 py-8 text-center text-gray-400">
+          {searchQuery.trim() ? `Keine Treffer für „${searchQuery.trim()}"` : 'Keine Deals vorhanden'}
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
