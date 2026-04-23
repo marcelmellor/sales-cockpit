@@ -119,8 +119,8 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
   const daysSinceWon = isDealWon ? getDaysSinceLost(deal.stageEnteredAt, deal.closedate) : null;
   const showWonBadge = isDealWon && daysSinceWon !== null && daysSinceWon >= 0 && daysSinceWon < 10;
 
-  // Check if deal is new in current stage (less than 2 days)
-  const isNewInStage = !isDealLost && !isDealWon && deal.daysInStage >= 0 && deal.daysInStage < 2;
+  // Check if deal itself is new (created less than 2 days ago), unabhängig von der Stage
+  const isNewDeal = !isDealLost && !isDealWon && deal.dealAge >= 0 && deal.dealAge < 2;
 
   // Warning badge: high-revenue deals that either got stuck in a stage
   // or lack a timely next appointment. Thresholds mirror existing heuristics:
@@ -141,15 +141,15 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
   const showWarningBadge =
     !isDealLost &&
     !isDealWon &&
-    !isNewInStage &&
+    !isNewDeal &&
     isHighRevenue &&
     (isStuckInStage || lacksTimelyAppointment);
 
   const warningLabel = isStuckInStage && lacksTimelyAppointment
-    ? 'Stockt & kein Termin'
+    ? 'Stockt & kein zeitnaher Termin'
     : isStuckInStage
       ? 'Stockt in Stage'
-      : 'Kein Termin';
+      : 'Kein zeitnaher Termin';
 
   const warningTooltip = (() => {
     const parts: string[] = [];
@@ -207,12 +207,12 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
           </div>
         )}
 
-        {/* New in Stage Indicator */}
-        {isNewInStage && (
+        {/* New Deal Indicator */}
+        {isNewDeal && (
           <div className="shrink-0">
             <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-700">
-              <span aria-hidden="true">✨</span>
-              Neu in Stage
+              <span aria-hidden="true">💠</span>
+              Neuer Deal
             </span>
           </div>
         )}
