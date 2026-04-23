@@ -35,6 +35,49 @@ export interface LeadOverviewItem {
   inboundVolumen: string | null; // Range, z.B. "0-1000", "1000-5000"
   existingDealId: string | null; // Deal-ID, falls primärer Kontakt bereits an einem passenden Deal hängt
   existingDealName: string | null;
+  // HubSpot-Analytics des primären Kontakts — zeigt, wie/von wo der Kontakt
+  // ursprünglich reingekommen ist (Original Source + First URL).
+  analyticsSource: string | null; // Rohwert, z.B. "DIRECT_TRAFFIC", "ORGANIC_SEARCH"
+  analyticsFirstUrl: string | null;
+  // Aus analyticsFirstUrl geparste UTM-Parameter. Virtuell: werden nicht
+  // separat von HubSpot geholt, sondern direkt aus der First-URL extrahiert.
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmTerm: string | null;
+  utmContent: string | null;
+}
+
+// UTM-Parameter aus einer URL extrahieren. Akzeptiert absolute wie relative
+// URLs (Dummy-Base für Relative-Parsing). Gibt überall null zurück, wenn die
+// URL nicht parsebar ist oder keine UTM-Query-Params enthält.
+function parseUtmParams(url: string | null): {
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmTerm: string | null;
+  utmContent: string | null;
+} {
+  const empty = {
+    utmSource: null,
+    utmMedium: null,
+    utmCampaign: null,
+    utmTerm: null,
+    utmContent: null,
+  };
+  if (!url) return empty;
+  try {
+    const u = new URL(url, 'http://_utm-parse.local/');
+    return {
+      utmSource: u.searchParams.get('utm_source') || null,
+      utmMedium: u.searchParams.get('utm_medium') || null,
+      utmCampaign: u.searchParams.get('utm_campaign') || null,
+      utmTerm: u.searchParams.get('utm_term') || null,
+      utmContent: u.searchParams.get('utm_content') || null,
+    };
+  } catch {
+    return empty;
+  }
 }
 
 export interface LeadsOverviewResponse {
@@ -123,6 +166,39 @@ export async function GET(request: Request) {
       }
     }
 
+    // Analytics-Properties (Original Source + First URL) des primären Kontakts
+    // batch-lesen. HubSpot trackt pro Contact, wie er reingekommen ist — genau
+    // der Vermerk, den man im Contact-Sidebar als "This contact was created
+    // from … Traffic from <url>" sieht.
+    const contactIdsForAnalytics = new Set<string>();
+    for (const l of leadsResp.results) {
+      const cid = l.associations?.contacts?.results?.[0]?.id;
+      if (cid) contactIdsForAnalytics.add(cid);
+    }
+    const contactAnalyticsById = new Map<
+      string,
+      { source: string | null; firstUrl: string | null }
+    >();
+    if (contactIdsForAnalytics.size > 0) {
+      try {
+        const contactsResp = await client.getContacts(
+          Array.from(contactIdsForAnalytics),
+          ['hs_analytics_source', 'hs_analytics_first_url'],
+        );
+        for (const c of contactsResp.results) {
+          contactAnalyticsById.set(c.id, {
+            source: c.properties.hs_analytics_source || null,
+            firstUrl: c.properties.hs_analytics_first_url || null,
+          });
+        }
+      } catch (err) {
+        // Analytics sind nicht-kritisch — wenn der Batch-Read fehlschlägt
+        // (fehlender Scope, 429 o.ä.) zeigen wir einfach leere Spalten statt
+        // den ganzen Leads-View abzubrechen.
+        console.error('[leads/overview] contact analytics batch failed:', err);
+      }
+    }
+
     // Prüfen, ob der primäre Kontakt eines Leads bereits an einem Deal im
     // gleichen Produkt-Bucket hängt (nur wenn produkt-gefiltert, sonst zu
     // unspezifisch für das Tag).
@@ -139,6 +215,7 @@ export async function GET(request: Request) {
       const productRaw = lead.properties.product || '';
       const productList = productRaw ? productRaw.split(';').map(s => s.trim()).filter(Boolean) : [];
       const existingDeal = contactId ? existingDealsByContact.get(contactId) : undefined;
+      const analytics = contactId ? contactAnalyticsById.get(contactId) : undefined;
 
       return {
         id: lead.id,
@@ -161,6 +238,9 @@ export async function GET(request: Request) {
         inboundVolumen: lead.properties.inbound_volumen || null,
         existingDealId: existingDeal?.dealId || null,
         existingDealName: existingDeal?.dealName || null,
+        analyticsSource: analytics?.source ?? null,
+        analyticsFirstUrl: analytics?.firstUrl ?? null,
+        ...parseUtmParams(analytics?.firstUrl ?? null),
       };
     });
 
