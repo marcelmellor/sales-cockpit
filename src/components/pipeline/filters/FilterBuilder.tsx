@@ -52,6 +52,20 @@ function CriterionRow<T extends string>({
           const nextType = e.target.value as T;
           const nextConfig = fieldConfigs.find(f => f.type === nextType);
           const nextKind = nextConfig?.inputKind ?? 'date';
+          // Sinnvolle Default-Operator je Kind: für Text defaulten wir auf
+          // 'contains' (häufigster Use-Case), für Datums-/Zahlen-Felder bleibt
+          // der bisherige Operator bestehen, für Enum/Boolean ist der Operator
+          // irrelevant und wird auf einen neutralen Wert gesetzt.
+          const nextOperator: FilterCriterion<T>['operator'] =
+            nextKind === 'text'
+              ? 'contains'
+              : nextKind === 'enum' || nextKind === 'boolean'
+                ? 'after'
+                : criterion.operator === 'equals' ||
+                    criterion.operator === 'startsWith' ||
+                    criterion.operator === 'contains'
+                  ? 'after'
+                  : criterion.operator;
           onUpdate({
             type: nextType,
             // Payload passend zum neuen InputKind zurücksetzen, damit Altwerte
@@ -61,9 +75,9 @@ function CriterionRow<T extends string>({
             dateTo: undefined,
             numberFrom: nextKind === 'number' ? undefined : undefined,
             numberTo: undefined,
-            stringValue: nextKind === 'enum' ? undefined : undefined,
+            stringValue: nextKind === 'enum' || nextKind === 'text' ? undefined : undefined,
             booleanValue: nextKind === 'boolean' ? undefined : undefined,
-            operator: nextKind === 'enum' || nextKind === 'boolean' ? 'after' : criterion.operator,
+            operator: nextOperator,
           });
         }}
         className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
@@ -98,6 +112,12 @@ function CriterionRow<T extends string>({
               <option value="after">mindestens</option>
               <option value="before">höchstens</option>
               <option value="between">zwischen</option>
+            </>
+          ) : inputKind === 'text' ? (
+            <>
+              <option value="contains">enthält</option>
+              <option value="startsWith">startet mit</option>
+              <option value="equals">ist gleich</option>
             </>
           ) : (
             <>
@@ -171,6 +191,26 @@ function CriterionRow<T extends string>({
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
+      )}
+
+      {inputKind === 'text' && (
+        <>
+          <input
+            type="text"
+            value={criterion.stringValue ?? ''}
+            onChange={(e) => onUpdate({ stringValue: e.target.value })}
+            placeholder={config?.textPlaceholder ?? 'Text...'}
+            list={config?.textSuggestions && config.textSuggestions.length > 0 ? `filter-suggest-${criterion.id}` : undefined}
+            className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-w-[200px]"
+          />
+          {config?.textSuggestions && config.textSuggestions.length > 0 && (
+            <datalist id={`filter-suggest-${criterion.id}`}>
+              {config.textSuggestions.map(s => (
+                <option key={s} value={s} />
+              ))}
+            </datalist>
+          )}
+        </>
       )}
 
       {inputKind === 'boolean' && (

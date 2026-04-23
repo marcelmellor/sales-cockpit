@@ -115,6 +115,7 @@ export function criterionIsComplete<T extends string>(
     return c.numberFrom != null;
   }
   if (inputKind === 'enum') return !!c.stringValue;
+  if (inputKind === 'text') return !!c.stringValue;
   if (inputKind === 'boolean') return c.booleanValue != null;
   if (inputKind === 'stageDate' && !c.stageId) return false;
   if (!c.dateFrom) return false;

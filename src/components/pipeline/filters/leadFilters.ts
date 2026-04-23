@@ -47,13 +47,17 @@ export function getLeadInputKind(type: LeadFieldType): FieldInputKind {
     case 'product':
     case 'status':
     case 'analytics_source':
+      return 'enum';
+    // Textfelder: URL + UTM-Parameter. Werte können frei getippt werden
+    // (startet mit / enthält / ist gleich). Autocomplete-Vorschläge liefert
+    // `buildLeadFieldConfigs` aus der aktuellen Lead-Liste.
     case 'analytics_first_url':
     case 'utm_source':
     case 'utm_medium':
     case 'utm_campaign':
     case 'utm_term':
     case 'utm_content':
-      return 'enum';
+      return 'text';
     case 'agents_minuten':
     case 'inbound_volumen':
     case 'lead_age':
@@ -118,6 +122,9 @@ export function buildLeadFieldConfigs(
     Array.from(values)
       .sort((a, b) => a.localeCompare(b, 'de'))
       .map(v => ({ value: v, label: v }));
+
+  const toSuggestions = (values: Iterable<string>) =>
+    Array.from(values).sort((a, b) => a.localeCompare(b, 'de'));
 
   return [
     { type: 'createdate', label: 'Erstelldatum', inputKind: 'date' },
@@ -198,38 +205,41 @@ export function buildLeadFieldConfigs(
     {
       type: 'analytics_first_url',
       label: 'Erste URL',
-      inputKind: 'enum',
-      enumOptions: toOptions(analyticsFirstUrls),
+      inputKind: 'text',
+      textPlaceholder: 'z.B. /preise',
+      textSuggestions: toSuggestions(analyticsFirstUrls),
     },
     {
       type: 'utm_source',
       label: 'UTM Source',
-      inputKind: 'enum',
-      enumOptions: toOptions(utmSources),
+      inputKind: 'text',
+      textPlaceholder: 'z.B. google',
+      textSuggestions: toSuggestions(utmSources),
     },
     {
       type: 'utm_medium',
       label: 'UTM Medium',
-      inputKind: 'enum',
-      enumOptions: toOptions(utmMediums),
+      inputKind: 'text',
+      textPlaceholder: 'z.B. cpc',
+      textSuggestions: toSuggestions(utmMediums),
     },
     {
       type: 'utm_campaign',
       label: 'UTM Campaign',
-      inputKind: 'enum',
-      enumOptions: toOptions(utmCampaigns),
+      inputKind: 'text',
+      textSuggestions: toSuggestions(utmCampaigns),
     },
     {
       type: 'utm_term',
       label: 'UTM Term',
-      inputKind: 'enum',
-      enumOptions: toOptions(utmTerms),
+      inputKind: 'text',
+      textSuggestions: toSuggestions(utmTerms),
     },
     {
       type: 'utm_content',
       label: 'UTM Content',
-      inputKind: 'enum',
-      enumOptions: toOptions(utmContents),
+      inputKind: 'text',
+      textSuggestions: toSuggestions(utmContents),
     },
     {
       type: 'status',
@@ -251,6 +261,22 @@ function matchNumeric(
   if (c.operator === 'after') return value >= (c.numberFrom ?? 0);
   if (c.operator === 'before') return value <= (c.numberFrom ?? Infinity);
   return value >= (c.numberFrom ?? 0) && value <= (c.numberTo ?? Infinity);
+}
+
+// Text-Match mit Operatoren `equals` / `startsWith` / `contains`. Case-
+// insensitive, weil URL- und UTM-Werte erfahrungsgemäß in unterschiedlicher
+// Schreibweise im HubSpot landen ("Google" vs. "google"). Ein leerer
+// Suchstring wird bereits in criterionIsComplete herausgefiltert.
+function matchText(
+  value: string | null | undefined,
+  c: FilterCriterion<LeadFieldType>,
+): boolean {
+  if (value == null) return false;
+  const v = value.toLowerCase();
+  const q = (c.stringValue ?? '').toLowerCase();
+  if (c.operator === 'startsWith') return v.startsWith(q);
+  if (c.operator === 'contains') return v.includes(q);
+  return v === q;
 }
 
 function matchLeadCriterion(
@@ -293,17 +319,17 @@ function matchLeadCriterion(
     case 'analytics_source':
       return (lead.analyticsSource ?? '') === c.stringValue;
     case 'analytics_first_url':
-      return (lead.analyticsFirstUrl ?? '') === c.stringValue;
+      return matchText(lead.analyticsFirstUrl, c);
     case 'utm_source':
-      return (lead.utmSource ?? '') === c.stringValue;
+      return matchText(lead.utmSource, c);
     case 'utm_medium':
-      return (lead.utmMedium ?? '') === c.stringValue;
+      return matchText(lead.utmMedium, c);
     case 'utm_campaign':
-      return (lead.utmCampaign ?? '') === c.stringValue;
+      return matchText(lead.utmCampaign, c);
     case 'utm_term':
-      return (lead.utmTerm ?? '') === c.stringValue;
+      return matchText(lead.utmTerm, c);
     case 'utm_content':
-      return (lead.utmContent ?? '') === c.stringValue;
+      return matchText(lead.utmContent, c);
   }
 }
 

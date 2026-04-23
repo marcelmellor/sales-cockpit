@@ -4,7 +4,17 @@
 // Kernmodell anzufassen.
 
 export type FilterLogic = 'AND' | 'OR';
-export type FilterOperator = 'after' | 'before' | 'between';
+// `after` / `before` / `between` werden für Datums- und Zahlenfelder genutzt.
+// `equals` / `startsWith` / `contains` werden für Textfelder (`inputKind:
+// 'text'`) genutzt — z.B. URL- oder UTM-Felder, wo nicht nur exakter Match,
+// sondern auch Präfix- und Teilstring-Suche sinnvoll ist.
+export type FilterOperator =
+  | 'after'
+  | 'before'
+  | 'between'
+  | 'equals'
+  | 'startsWith'
+  | 'contains';
 
 export interface FilterCriterion<TType extends string = string> {
   kind: 'criterion';
@@ -76,7 +86,8 @@ export type FieldInputKind =
   | 'number'
   | 'stageDate'
   | 'enum'
-  | 'boolean';
+  | 'boolean'
+  | 'text';
 
 export interface FieldStageOption {
   id: string;
@@ -103,4 +114,8 @@ export interface FieldConfig<TType extends string = string> {
   // Für inputKind === 'boolean' — Label-Paar für true/false-Option
   booleanTrueLabel?: string;
   booleanFalseLabel?: string;
+  // Für inputKind === 'text' — vorgeschlagene Werte (Autocomplete via
+  // <datalist>). Der Benutzer kann aus der Liste wählen oder frei tippen.
+  textSuggestions?: string[];
+  textPlaceholder?: string;
 }
