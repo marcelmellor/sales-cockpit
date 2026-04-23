@@ -88,7 +88,7 @@ export function DealListView({
               <div className="flex items-center gap-6 text-sm">
                 <SortableHeader field="revenue" label="Umsatz" className="min-w-[120px] justify-end" />
                 <span className="text-xs text-gray-500 w-[120px]">PM</span>
-                <span className="text-xs text-gray-500 w-[90px] text-right">Alter</span>
+                <SortableHeader field="dealAge" label="Alter" className="w-[90px] justify-end" />
                 <SortableHeader field="nextAppointment" label="Nächster Termin" className="min-w-[140px]" />
                 {/* Link indicator placeholder */}
                 <div className="w-4" />
