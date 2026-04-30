@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useMemo, useState, useEffect } from 'react';
+import { Suspense, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { DealCarousel } from '@/components/tv/DealCarousel';
@@ -44,14 +44,8 @@ function TVContent() {
   const intervalSeconds = parseInt(searchParams.get('interval') || '10', 10);
   const tvSecret = searchParams.get('tvSecret') || '';
 
-  const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(pipelineIdFromUrl);
-
-  // Sync URL param to state
-  useEffect(() => {
-    if (pipelineIdFromUrl) {
-      setSelectedPipelineId(pipelineIdFromUrl);
-    }
-  }, [pipelineIdFromUrl]);
+  const [selectedPipelineIdFromPicker, setSelectedPipelineIdFromPicker] = useState<string | null>(null);
+  const selectedPipelineId = pipelineIdFromUrl || selectedPipelineIdFromPicker;
 
   // Build auth suffix for API calls
   const authParam = tvSecret ? `&tvSecret=${encodeURIComponent(tvSecret)}` : '';
@@ -85,7 +79,8 @@ function TVContent() {
   });
 
   // Deal IDs for meetings + stage history
-  const dealIds = useMemo(() => overviewData?.deals.map((d) => d.id) || [], [overviewData]);
+  const overviewDeals = overviewData?.deals;
+  const dealIds = useMemo(() => overviewDeals?.map((d) => d.id) || [], [overviewDeals]);
 
   // Fetch meetings
   const { data: meetingsData } = useQuery({
@@ -121,8 +116,8 @@ function TVContent() {
 
   // Merge data, filter closed deals, sort by revenue desc
   const deals = useMemo(() => {
-    if (!overviewData?.deals) return [];
-    return overviewData.deals
+    if (!overviewDeals) return [];
+    return overviewDeals
       .filter((deal) => !isLostStage(deal.dealStage))
       .map((deal) => ({
         ...deal,
@@ -131,7 +126,7 @@ function TVContent() {
         stageEnteredAt: stageHistoryData?.[deal.id]?.stageEnteredAt ?? null,
       }))
       .sort((a, b) => b.revenue - a.revenue);
-  }, [overviewData?.deals, meetingsData, stageHistoryData]);
+  }, [overviewDeals, meetingsData, stageHistoryData]);
 
   // Pipeline selector (when no pipelineId provided)
   if (!selectedPipelineId) {
@@ -153,7 +148,7 @@ function TVContent() {
             {pipelines?.map((pipeline) => (
               <button
                 key={pipeline.id}
-                onClick={() => setSelectedPipelineId(pipeline.id)}
+                onClick={() => setSelectedPipelineIdFromPicker(pipeline.id)}
                 className="px-6 py-4 rounded-xl text-lg text-white text-left transition-colors"
                 style={{
                   backgroundColor: 'var(--gray-dark-3)',

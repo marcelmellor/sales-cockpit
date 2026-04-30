@@ -42,7 +42,7 @@ export function DealCarousel({ deals, intervalSeconds }: DealCarouselProps) {
   const [progress, setProgress] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const progressRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startTimeRef = useRef(Date.now());
+  const startTimeRef = useRef(0);
 
   const advance = useCallback(() => {
     setCurrentIndex((prev) => (prev + 1) % deals.length);
@@ -109,9 +109,12 @@ export function DealCarousel({ deals, intervalSeconds }: DealCarouselProps) {
 
   // Reset index when deals change
   useEffect(() => {
-    setCurrentIndex(0);
-    setProgress(0);
-    startTimeRef.current = Date.now();
+    const frame = requestAnimationFrame(() => {
+      setCurrentIndex(0);
+      setProgress(0);
+      startTimeRef.current = Date.now();
+    });
+    return () => cancelAnimationFrame(frame);
   }, [deals]);
 
   if (deals.length === 0) {

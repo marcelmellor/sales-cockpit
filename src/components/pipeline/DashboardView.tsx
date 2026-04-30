@@ -106,13 +106,27 @@ function getCalendarWeek(date: Date): number {
   return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
 }
 
-function getWeekRange(date: Date): string {
+const MS_PER_DAY = 86_400_000;
+const MS_PER_WEEK = 7 * MS_PER_DAY;
+
+function startOfIsoWeek(date: Date): Date {
   const d = new Date(date);
-  const day = d.getDay() || 7; // Mon=1 … Sun=7
-  const mon = new Date(d);
-  mon.setDate(d.getDate() - day + 1);
-  const sun = new Date(mon);
-  sun.setDate(mon.getDate() + 6);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay() || 7; // Mon=1 ... Sun=7
+  d.setDate(d.getDate() - day + 1);
+  return d;
+}
+
+function endOfIsoWeek(date: Date): Date {
+  const d = startOfIsoWeek(date);
+  d.setDate(d.getDate() + 6);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+
+function getWeekRange(date: Date): string {
+  const mon = startOfIsoWeek(date);
+  const sun = endOfIsoWeek(date);
   const fmt = (dt: Date) => `${dt.getDate()}.${dt.getMonth() + 1}.`;
   return `${fmt(mon)} – ${fmt(sun)}`;
 }
@@ -631,7 +645,7 @@ export function DashboardView({
     return (wonDeals.reduce((sum, d) => sum + d.revenue, 0) / wonDeals.length) * 12;
   }, [wonDeals]);
 
-  // ── Generate weekly date points aligned to Monday boundaries ──
+  // ── Generate weekly date points aligned to calendar-week ends ──
   const weeks = useMemo(() => {
     const now = new Date();
     const { from: filterFrom } = getFilterDateRange<DealFieldType>(filter.children, DEAL_DATE_FIELD_TYPES, getDealInputKind);
@@ -641,37 +655,25 @@ export function DashboardView({
       const dt = new Date(d.createdate);
       return !earliest || dt < earliest ? dt : earliest;
     }, null);
-    const start = filterFrom ?? earliestDeal ?? new Date(now.getTime() - 11 * 7 * 86400000);
+    const start = filterFrom ?? earliestDeal ?? new Date(now.getTime() - 11 * MS_PER_WEEK);
 
-    // Find first Monday on or after start
-    const firstMonday = new Date(start);
-    const dayOfWeek = firstMonday.getUTCDay(); // 0=Sun, 1=Mon
-    const daysUntilMon = dayOfWeek === 0 ? 1 : dayOfWeek === 1 ? 0 : 8 - dayOfWeek;
-    firstMonday.setUTCDate(firstMonday.getUTCDate() + daysUntilMon);
-    firstMonday.setUTCHours(0, 0, 0, 0);
-
+    const firstWeekStart = startOfIsoWeek(start);
+    const currentWeekStart = startOfIsoWeek(now);
     const result: Date[] = [];
-    const cursor = new Date(firstMonday);
-    while (cursor <= now) {
-      result.push(new Date(cursor));
-      cursor.setUTCDate(cursor.getUTCDate() + 7);
+    const cursor = new Date(firstWeekStart);
+    while (cursor < currentWeekStart) {
+      result.push(endOfIsoWeek(cursor));
+      cursor.setDate(cursor.getDate() + 7);
     }
-    // `now` nur dann als Extra-Punkt anhängen, wenn der letzte bereits
-    // gepushte Montag NICHT schon in der laufenden Kalenderwoche liegt.
-    // Sonst bekommt man zwei Balken mit demselben KW-Label: einen vollen
-    // (Daten der Vorwoche, weekEnd = Montag dieser Woche) und einen
-    // partiellen (Daten seit Montag, weekEnd = heute). Der partielle
-    // Balken war durch den Off-by-one im Labeling sogar noch kleiner als
-    // der volle — visuell sehr irreführend.
-    const lastPt = result.length > 0 ? result[result.length - 1] : null;
-    const daysSinceLast = lastPt ? (now.getTime() - lastPt.getTime()) / 86400000 : Infinity;
-    if (!lastPt || daysSinceLast >= 7) {
-      result.push(now);
-    }
+
+    // Die laufende Kalenderwoche endet im Chart bei "jetzt", nicht erst am
+    // kommenden Sonntag. Sonst würden zukünftige close dates mitzählen.
+    result.push(now);
+
     // Minimum 4 points
     while (result.length < 4) {
       const first = result[0];
-      result.unshift(new Date(first.getTime() - 7 * 86400000));
+      result.unshift(endOfIsoWeek(new Date(first.getTime() - MS_PER_WEEK)));
     }
     return result;
   }, [filter, filteredDeals]);
@@ -762,7 +764,7 @@ export function DashboardView({
 
   const newArrData = useMemo(() => weeks.map((weekEnd, i) => {
     const endMs = weekEnd.getTime();
-    const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - 7 * 86400000;
+    const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - MS_PER_WEEK;
     const wonThisWeek = wonDeals.filter(d => {
       const closed = d.closedate ? new Date(d.closedate).getTime() : null;
       const created = d.createdate ? new Date(d.createdate).getTime() : null;
@@ -783,7 +785,7 @@ export function DashboardView({
 
   const winRateData = useMemo(() => weeks.map((weekEnd, i) => {
     const endMs = weekEnd.getTime();
-    const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - 7 * 86400000;
+    const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - MS_PER_WEEK;
     // Kohorte: Deals, die in diesem Zeitfenster erstellt wurden
     const cohort = filteredDeals.filter(d => {
       const created = d.createdate ? new Date(d.createdate).getTime() : null;
@@ -816,12 +818,12 @@ export function DashboardView({
       if (created === null) return 0;
       const isClosed = isWonStage(d.dealStage) || isLostStage(d.dealStage);
       const end = isClosed && d.closedate ? new Date(d.closedate).getTime() : now;
-      return Math.max(0, Math.floor((end - created) / 86_400_000));
+      return Math.max(0, Math.floor((end - created) / MS_PER_DAY));
     };
 
     return weeks.map((weekEnd, i) => {
       const endMs = weekEnd.getTime();
-      const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - 7 * 86400000;
+      const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - MS_PER_WEEK;
       // Kohorte: Deals, die in diesem Zeitfenster erstellt wurden
       const cohort = filteredDeals.filter(d => {
         const created = d.createdate ? new Date(d.createdate).getTime() : null;
@@ -986,7 +988,7 @@ export function DashboardView({
 
   const leadsPerWeekData = useMemo(() => weeks.map((weekEnd, i) => {
     const endMs = weekEnd.getTime();
-    const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - 7 * 86400000;
+    const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - MS_PER_WEEK;
     const inRange = leads.filter(l => {
       const ts = l.createdate ? new Date(l.createdate).getTime() : null;
       return ts != null && ts > startMs && ts <= endMs;

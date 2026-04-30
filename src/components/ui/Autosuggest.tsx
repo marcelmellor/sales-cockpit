@@ -116,11 +116,6 @@ export function Autosuggest({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Reset highlighted index when filtered options change
-  useEffect(() => {
-    setHighlightedIndex(0);
-  }, [query]);
-
   return (
     <div ref={containerRef} className={`relative ${className}`}>
       <div
@@ -157,6 +152,7 @@ export function Autosuggest({
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
+              setHighlightedIndex(0);
               if (!isOpen) setIsOpen(true);
             }}
             onFocus={() => setIsOpen(true)}

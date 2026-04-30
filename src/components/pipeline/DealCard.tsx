@@ -97,16 +97,17 @@ function formatClosedDate(stageEnteredAt: string | null, closedate: string | nul
   return date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
-export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoading, showAgentsMinuten, showStage, showClosedDate, closedDateLabel }: DealCardProps) {
+export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoading, showAgentsMinuten, showStage, showClosedDate }: DealCardProps) {
   const canvasUrl = `/canvas?pipeline=${pipelineId}&deal=${deal.id}`;
   const stageColors = showStage ? getStageColor(deal.dealStage) : null;
+  const nowMs = new Date().getTime();
 
   const nextAppointmentDate = deal.nextAppointment?.date
     ? new Date(deal.nextAppointment.date)
     : null;
 
   const isAppointmentSoon = nextAppointmentDate
-    ? nextAppointmentDate.getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000
+    ? nextAppointmentDate.getTime() - nowMs < 7 * 24 * 60 * 60 * 1000
     : false;
 
   // Check if deal is lost and recently lost
@@ -134,7 +135,7 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
   const isHighRevenue = deal.revenue >= HIGH_REVENUE_THRESHOLD;
   const isStuckInStage = deal.daysInStage > STUCK_IN_STAGE_DAYS;
   const hasTimelyAppointment = nextAppointmentDate
-    ? nextAppointmentDate.getTime() - Date.now() < TIMELY_APPOINTMENT_DAYS * 24 * 60 * 60 * 1000
+    ? nextAppointmentDate.getTime() - nowMs < TIMELY_APPOINTMENT_DAYS * 24 * 60 * 60 * 1000
     : false;
   const lacksTimelyAppointment = !hasTimelyAppointment;
 

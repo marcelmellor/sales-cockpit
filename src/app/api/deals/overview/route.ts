@@ -46,6 +46,19 @@ export interface PipelineOverviewResponse {
   deals: DealOverviewItem[];
 }
 
+function isLostStage(label: string): boolean {
+  const l = label.toLowerCase();
+  if (l.includes('closed lost')) return true;
+  return l.includes('verloren') || l.includes('lost') || l.includes('abgesagt') || l.includes('cancelled') || l.includes('storniert');
+}
+
+function isWonStage(label: string): boolean {
+  if (isLostStage(label)) return false;
+  const l = label.toLowerCase();
+  if (l.includes('closed won')) return true;
+  return l.includes('gewonnen') || l.includes('won') || l.includes('abgeschlossen') || l.includes('aktiv') || l.includes('active');
+}
+
 // Meeting data returned by the separate meetings endpoint
 export interface DealMeetingsMap {
   [dealId: string]: {
@@ -198,6 +211,9 @@ export async function GET(request: Request) {
     const deals: DealOverviewItem[] = filteredDeals.map((deal) => {
       const companyId = deal.associations?.companies?.results?.[0]?.id;
       const company = companyId ? companiesMap.get(companyId) : undefined;
+      const stage = pipeline.stages.find(s => s.id === deal.properties.dealstage);
+      const dealStage = stage?.label || deal.properties.dealstage || 'Unknown';
+      const isWonDeal = isWonStage(dealStage);
 
       // sipgate-Account-Fallback: erster verknüpfter Contact mit gesetztem
       // `mastersipid` gilt als verknüpfter sipgate-Account. Dessen `company`-Feld
@@ -222,11 +238,11 @@ export async function GET(request: Request) {
       //    property is simply unset
       //  - agents_minuten_qualifiziert is 0 if the deal predates that
       //    qualification step
-      // So for AI Agent deals we take the max of both (either signal is
-      // better than dropping the deal to 0). For non-AI-Agent deals we fall
-      // back to TCV/Laufzeit only when there's no line-item MRR. The
-      // `revenueSource` surfaces which branch won, so users can audit the
-      // MRR in the spreadsheet view.
+      // For open AI Agent deals we take the max of both (either signal is
+      // better than dropping the deal to 0). Once a deal is won, the accepted
+      // offer wins: if there is a line-item MRR, we use that instead of a
+      // higher calculated package price. For non-AI-Agent deals we fall back
+      // to TCV/Laufzeit only when there's no line-item MRR.
       const { revenue, revenueSource } = ((): { revenue: number; revenueSource: RevenueSource } => {
         const products = deal.properties.angebotene_produkte || '';
         const isAiAgent = products.split(';').includes('frontdesk');
@@ -234,6 +250,10 @@ export async function GET(request: Request) {
         const lineItemMrr = lineItemCount > 0 ? (parseFloat(deal.properties.hs_mrr) || 0) : 0;
 
         if (isAiAgent) {
+          if (isWonDeal && lineItemMrr > 0) {
+            return { revenue: lineItemMrr, revenueSource: 'line_items' };
+          }
+
           const packageMrr = calculateAgentMrr(agentMinuten);
           if (packageMrr > lineItemMrr) {
             return { revenue: packageMrr, revenueSource: 'agents_package' };
@@ -269,7 +289,7 @@ export async function GET(request: Request) {
         productManager: deal.properties.deal_po || '',
         angeboteneProdukte: deal.properties.angebotene_produkte || '',
         icpTier,
-        dealStage: pipeline.stages.find(s => s.id === deal.properties.dealstage)?.label || deal.properties.dealstage || 'Unknown',
+        dealStage,
         dealStageId: deal.properties.dealstage || '',
         dealAge: calculateDealAge(deal.properties.createdate),
         daysInStage: -1, // Loaded separately via /api/deals/overview/stage-history

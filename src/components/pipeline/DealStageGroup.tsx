@@ -27,6 +27,43 @@ interface DealStageGroupProps {
   stageHistoryLoading?: boolean;
 }
 
+interface SortableHeaderProps {
+  field: SortField;
+  label: string;
+  className?: string;
+  sortConfig?: {
+    field: SortField;
+    direction: SortDirection;
+  };
+  onSortChange: (field: SortField) => void;
+}
+
+function SortableHeader({ field, label, className, sortConfig, onSortChange }: SortableHeaderProps) {
+  const isActive = sortConfig?.field === field;
+  const isAsc = sortConfig?.direction === 'asc';
+
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onSortChange(field);
+      }}
+      className={`flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors ${className || ''}`}
+    >
+      {label}
+      {isActive ? (
+        isAsc ? (
+          <ChevronUp className="h-3 w-3" />
+        ) : (
+          <ChevronDown className="h-3 w-3" />
+        )
+      ) : (
+        <ArrowUpDown className="h-3 w-3 opacity-40" />
+      )}
+    </button>
+  );
+}
+
 function isLostStage(label: string): boolean {
   const l = label.toLowerCase();
   if (l.includes('closed lost')) return true;
@@ -64,32 +101,6 @@ export function DealStageGroup({
 
   const totalRevenue = deals.reduce((sum, deal) => sum + deal.revenue, 0);
   const weightedRevenue = totalRevenue * stage.probability;
-
-  const SortableHeader = ({ field, label, className }: { field: SortField; label: string; className?: string }) => {
-    const isActive = sortConfig?.field === field;
-    const isAsc = sortConfig?.direction === 'asc';
-
-    return (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onSortChange(field);
-        }}
-        className={`flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors ${className || ''}`}
-      >
-        {label}
-        {isActive ? (
-          isAsc ? (
-            <ChevronUp className="h-3 w-3" />
-          ) : (
-            <ChevronDown className="h-3 w-3" />
-          )
-        ) : (
-          <ArrowUpDown className="h-3 w-3 opacity-40" />
-        )}
-      </button>
-    );
-  };
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -135,9 +146,9 @@ export function DealStageGroup({
 
                 {/* Metrics headers */}
                 <div className="flex items-center gap-6 text-sm">
-                  <SortableHeader field="revenue" label="Umsatz" className="min-w-[120px] justify-end" />
+                  <SortableHeader field="revenue" label="Umsatz" className="min-w-[120px] justify-end" sortConfig={sortConfig} onSortChange={onSortChange} />
                   {showAgentsMinuten && (
-                    <SortableHeader field="agentsMinuten" label="Agents Min" className="min-w-[100px] justify-end" />
+                    <SortableHeader field="agentsMinuten" label="Agents Min" className="min-w-[100px] justify-end" sortConfig={sortConfig} onSortChange={onSortChange} />
                   )}
                   <span className="text-xs text-gray-500 w-[120px]">PM</span>
                   {showClosedDate ? (
@@ -145,11 +156,13 @@ export function DealStageGroup({
                       field="closedDate"
                       label={isLost ? 'Verloren am' : 'Gewonnen am'}
                       className="w-[100px] justify-end"
+                      sortConfig={sortConfig}
+                      onSortChange={onSortChange}
                     />
                   ) : (
                     <>
-                      <SortableHeader field="daysInStage" label="In Stage" className="w-[90px] justify-end" />
-                      <SortableHeader field="nextAppointment" label="Nächster Termin" className="min-w-[140px]" />
+                      <SortableHeader field="daysInStage" label="In Stage" className="w-[90px] justify-end" sortConfig={sortConfig} onSortChange={onSortChange} />
+                      <SortableHeader field="nextAppointment" label="Nächster Termin" className="min-w-[140px]" sortConfig={sortConfig} onSortChange={onSortChange} />
                     </>
                   )}
                   {/* Link indicator placeholder */}

@@ -18,6 +18,40 @@ interface DealListViewProps {
   stageHistoryLoading?: boolean;
 }
 
+interface SortableHeaderProps {
+  field: SortField;
+  label: string;
+  className?: string;
+  sortConfig?: {
+    field: SortField;
+    direction: SortDirection;
+  };
+  onSortChange: (field: SortField) => void;
+}
+
+function SortableHeader({ field, label, className, sortConfig, onSortChange }: SortableHeaderProps) {
+  const isActive = sortConfig?.field === field;
+  const isAsc = sortConfig?.direction === 'asc';
+
+  return (
+    <button
+      onClick={() => onSortChange(field)}
+      className={`flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors ${className || ''}`}
+    >
+      {label}
+      {isActive ? (
+        isAsc ? (
+          <ChevronUp className="h-3 w-3" />
+        ) : (
+          <ChevronDown className="h-3 w-3" />
+        )
+      ) : (
+        <ArrowUpDown className="h-3 w-3 opacity-40" />
+      )}
+    </button>
+  );
+}
+
 export function DealListView({
   deals,
   pipelineId,
@@ -28,29 +62,6 @@ export function DealListView({
   stageHistoryLoading,
 }: DealListViewProps) {
   const totalRevenue = deals.reduce((sum, deal) => sum + deal.revenue, 0);
-
-  const SortableHeader = ({ field, label, className }: { field: SortField; label: string; className?: string }) => {
-    const isActive = sortConfig?.field === field;
-    const isAsc = sortConfig?.direction === 'asc';
-
-    return (
-      <button
-        onClick={() => onSortChange(field)}
-        className={`flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors ${className || ''}`}
-      >
-        {label}
-        {isActive ? (
-          isAsc ? (
-            <ChevronUp className="h-3 w-3" />
-          ) : (
-            <ChevronDown className="h-3 w-3" />
-          )
-        ) : (
-          <ArrowUpDown className="h-3 w-3 opacity-40" />
-        )}
-      </button>
-    );
-  };
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -86,10 +97,10 @@ export function DealListView({
 
               {/* Metrics headers */}
               <div className="flex items-center gap-6 text-sm">
-                <SortableHeader field="revenue" label="Umsatz" className="min-w-[120px] justify-end" />
+                <SortableHeader field="revenue" label="Umsatz" className="min-w-[120px] justify-end" sortConfig={sortConfig} onSortChange={onSortChange} />
                 <span className="text-xs text-gray-500 w-[120px]">PM</span>
-                <SortableHeader field="dealAge" label="Alter" className="w-[90px] justify-end" />
-                <SortableHeader field="nextAppointment" label="Nächster Termin" className="min-w-[140px]" />
+                <SortableHeader field="dealAge" label="Alter" className="w-[90px] justify-end" sortConfig={sortConfig} onSortChange={onSortChange} />
+                <SortableHeader field="nextAppointment" label="Nächster Termin" className="min-w-[140px]" sortConfig={sortConfig} onSortChange={onSortChange} />
                 {/* Link indicator placeholder */}
                 <div className="w-4" />
               </div>

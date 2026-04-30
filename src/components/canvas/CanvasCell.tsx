@@ -106,12 +106,8 @@ export function CanvasCell({
 
   // Detect overflow using ResizeObserver (works for all layouts with fixed height parents)
   useEffect(() => {
-    if (!contentRef.current || isExpanded) {
-      setHasOverflow(false);
-      return;
-    }
-
     const el = contentRef.current;
+    if (!el || isExpanded) return;
 
     const checkOverflow = () => {
       const isOverflowing = el.scrollHeight > el.clientHeight + 5;

@@ -67,14 +67,7 @@ const LEAD_SYSTEM_BADGE_MIN_1000 = 'system:leads-min-1000';
 const LEAD_SYSTEM_BADGE_MIN_2000 = 'system:leads-min-2000';
 const LEAD_SYSTEM_BADGE_NO_DEAL = 'system:leads-no-deal';
 
-interface Pipeline {
-  id: string;
-  label: string;
-  stages: Array<{
-    id: string;
-    label: string;
-  }>;
-}
+const SALES_PIPELINE_ID = '3576006860';
 
 const PORTFOLIO_OPTIONS = [
   { value: 'neo', label: 'Cloud PBX' },
@@ -84,6 +77,12 @@ const PORTFOLIO_OPTIONS = [
   { value: 'trunking', label: 'Trunking' },
   { value: 'easy', label: 'satellite Business' },
 ] as const;
+
+type PortfolioValue = typeof PORTFOLIO_OPTIONS[number]['value'];
+
+function isPortfolioValue(value: string | null): value is PortfolioValue {
+  return PORTFOLIO_OPTIONS.some(option => option.value === value);
+}
 
 export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'daysInStage' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
@@ -111,10 +110,8 @@ function PipelineOverviewContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
-  const { data: session, status } = useSession();
-  const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
-  const [selectedProdukt, setSelectedProdukt] = useState<string | null>(null);
-  const [isInitialized, setIsInitialized] = useState(false);
+  const { status } = useSession();
+  const selectedPipelineId = SALES_PIPELINE_ID;
   const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   // Getrennte Sub-View-States für Deals und Leads — so merkt sich jeder Tab
@@ -133,45 +130,13 @@ function PipelineOverviewContent() {
   const [leadsSavedSets, setLeadsSavedSets] = useState<SavedFilterSet<LeadFieldType>[]>([]);
 
   const isAuthenticated = status === 'authenticated';
-
-  // Initialize from URL params
-  useEffect(() => {
-    if (isInitialized) return;
+  const selectedProdukt = useMemo(() => {
     const produktFromUrl = searchParams.get('produkt');
-    if (produktFromUrl && PORTFOLIO_OPTIONS.some(o => o.value === produktFromUrl)) {
-      setSelectedProdukt(produktFromUrl);
-    } else {
-      // Default to first option
-      setSelectedProdukt(PORTFOLIO_OPTIONS[0].value);
-    }
-    setIsInitialized(true);
-  }, [searchParams, isInitialized]);
-
-  // Fetch pipelines to find Sales Pipeline ID
-  const { data: pipelinesData } = useQuery({
-    queryKey: ['pipelines'],
-    queryFn: async () => {
-      const response = await fetch('/api/pipelines');
-      if (!response.ok) throw new Error('Failed to fetch pipelines');
-      const data = await response.json();
-      return data.data as Pipeline[];
-    },
-    enabled: isAuthenticated,
-  });
-
-  // Auto-select "Sales Pipeline"
-  useEffect(() => {
-    if (pipelinesData && !selectedPipelineId) {
-      const salesPipeline = pipelinesData.find(p => p.label === 'Sales sipgate Portfolio');
-      if (salesPipeline) {
-        setSelectedPipelineId(salesPipeline.id);
-      }
-    }
-  }, [pipelinesData, selectedPipelineId]);
+    return isPortfolioValue(produktFromUrl) ? produktFromUrl : PORTFOLIO_OPTIONS[0].value;
+  }, [searchParams]);
 
   // Handle product change
-  const handleProduktChange = (produkt: string) => {
-    setSelectedProdukt(produkt);
+  const handleProduktChange = (produkt: PortfolioValue) => {
     router.replace(`/?produkt=${produkt}`, { scroll: false });
   };
 
@@ -199,6 +164,8 @@ function PipelineOverviewContent() {
     staleTime: 5 * 60 * 1000,
     initialData: cachedOverview ?? undefined,
   });
+  const overviewDeals = overviewData?.deals;
+  const overviewStages = overviewData?.stages;
 
   // Fetch leads for the selected portfolio (separate CRM object, own pipeline).
   // Wird analog zu Deals auch in localStorage gecached, damit nach einem Reload
@@ -226,7 +193,7 @@ function PipelineOverviewContent() {
   });
 
   // Extract deal IDs for meetings query
-  const dealIds = useMemo(() => overviewData?.deals.map(d => d.id) || [], [overviewData]);
+  const dealIds = useMemo(() => overviewDeals?.map(d => d.id) || [], [overviewDeals]);
 
   // Helper: fetch in batches to avoid URI Too Long (414) errors
   async function fetchInBatches<T extends Record<string, unknown>>(
@@ -291,14 +258,14 @@ function PipelineOverviewContent() {
 
   // Merge meetings and stage history into deals
   const dealsWithMeetings: DealOverviewItem[] = useMemo(() => {
-    if (!overviewData?.deals) return [];
-    return overviewData.deals.map(deal => ({
+    if (!overviewDeals) return [];
+    return overviewDeals.map(deal => ({
       ...deal,
       nextAppointment: meetingsData?.[deal.id] || null,
       daysInStage: stageHistoryData?.[deal.id]?.daysInStage ?? -1,
       stageEnteredAt: stageHistoryData?.[deal.id]?.stageEnteredAt ?? null,
     }));
-  }, [overviewData?.deals, meetingsData, stageHistoryData]);
+  }, [overviewDeals, meetingsData, stageHistoryData]);
 
   // Refresh all data
   const handleRefresh = () => {
@@ -395,8 +362,8 @@ function PipelineOverviewContent() {
 
   // Reorder stages: swap "Verloren" and "Gewonnen"
   const reorderedStages = useMemo(() => {
-    if (!overviewData?.stages) return [];
-    const stages = [...overviewData.stages];
+    if (!overviewStages) return [];
+    const stages = [...overviewStages];
 
     const verlorenIndex = stages.findIndex(s =>
       s.label.toLowerCase().includes('closed lost') || s.label.toLowerCase().includes('verloren') || s.label.toLowerCase().includes('lost')
@@ -410,7 +377,7 @@ function PipelineOverviewContent() {
     }
 
     return stages;
-  }, [overviewData?.stages]);
+  }, [overviewStages]);
 
   // Helper to check if stage is closed
   const isClosedStage = useCallback((label: string): boolean => {
@@ -847,7 +814,7 @@ function PipelineOverviewContent() {
               </p>
             </div>
           </div>
-        ) : !selectedPipelineId || !selectedProdukt || overviewLoading ? (
+        ) : overviewLoading ? (
           <div className="max-w-7xl mx-auto px-4">
             <div className="flex items-center justify-center gap-2 text-gray-400 py-12">
               <Loader2 className="h-6 w-6 animate-spin" />
