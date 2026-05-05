@@ -8,7 +8,7 @@
     "auth": {
       "type": "oauth",
       "redirectUrls": [
-        "http://localhost:4000/api/auth/callback/hubspot",
+        "http://localhost:3020/api/auth/callback/hubspot",
         "https://sales-cockpit.netlify.app/api/auth/callback/hubspot"
       ],
       "requiredScopes": [

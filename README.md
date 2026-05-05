@@ -14,7 +14,30 @@ pnpm dev
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3020](http://localhost:3020) with your browser to see the result.
+
+## Ports
+
+Belegt im 3020er-Block (siehe [`~/Development/PORTS.md`](../PORTS.md)).
+
+| Port | Service                            |
+| ---- | ---------------------------------- |
+| 3020 | Next.js dev server (Sales Cockpit) |
+
+URLs:
+
+- `https://cockpit.localhost` — primärer Zugang über Caddy (HTTPS, von PM2 verwaltet)
+- `http://localhost:3020` — direkt auf Next.js
+
+### Lokal-Auth deaktiviert
+
+Google OAuth akzeptiert keine `*.localhost`-Redirect-URIs (verlangt Public TLD). Statt eines Workarounds ist Auth in Lokal-Dev komplett aus: `NEXT_PUBLIC_AUTH_DISABLED=true` in `.env.local` injected eine Fake-Session, die Middleware skipped die Auth-Gate, API-Routes laufen ohne Session-Check.
+
+- `middleware.ts` — bypass via Flag
+- `src/lib/auth/session.ts` — `getSession()` Wrapper, Fake-Session im Bypass-Mode
+- `src/components/Providers.tsx` — `SessionProvider` mit Fake-Session
+
+**Production (Netlify)** hat `NEXT_PUBLIC_AUTH_DISABLED` nicht gesetzt → echter Google-OAuth-Flow mit Redirect-URI `https://sales-cockpit.netlify.app/api/auth/callback/google`.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 

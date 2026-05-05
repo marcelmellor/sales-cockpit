@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { getSession } from '@/lib/auth/session';
 import { getHubSpotClient } from '@/lib/hubspot/client';
 import { mapHubSpotToCanvas, mapCanvasToHubSpot } from '@/lib/hubspot/mapper';
 import type { CanvasData } from '@/types/canvas';
@@ -9,7 +9,7 @@ export async function GET(
   { params }: { params: Promise<{ dealId: string }> }
 ) {
   try {
-    const session = await auth();
+    const session = await getSession();
 
     if (!session) {
       return NextResponse.json(
@@ -103,7 +103,7 @@ export async function PATCH(
   { params }: { params: Promise<{ dealId: string }> }
 ) {
   try {
-    const session = await auth();
+    const session = await getSession();
 
     if (!session) {
       return NextResponse.json(

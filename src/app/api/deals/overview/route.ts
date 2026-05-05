@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { getSession } from '@/lib/auth/session';
 import { getHubSpotClient } from '@/lib/hubspot/client';
 
 // How `revenue` (MRR) was derived. Shown in the spreadsheet view so the user
@@ -74,7 +74,7 @@ export async function GET(request: Request) {
     const isValidTvSecret = tvSecret && process.env.TV_SECRET && tvSecret === process.env.TV_SECRET;
 
     if (!isValidTvSecret) {
-      const session = await auth();
+      const session = await getSession();
       if (!session) {
         return NextResponse.json(
           { error: 'Unauthorized' },

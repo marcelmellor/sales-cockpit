@@ -2,7 +2,15 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth';
 
+const AUTH_DISABLED = process.env.NEXT_PUBLIC_AUTH_DISABLED === 'true';
+
 export default auth((req) => {
+  // Local dev with NEXT_PUBLIC_AUTH_DISABLED=true: skip auth gate entirely.
+  // Configured in .env.local. Production (Netlify) keeps Google OAuth.
+  if (AUTH_DISABLED) {
+    return NextResponse.next();
+  }
+
   const { nextUrl } = req;
   const isLoggedIn = !!req.auth;
 
