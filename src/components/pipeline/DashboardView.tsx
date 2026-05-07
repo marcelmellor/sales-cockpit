@@ -6,6 +6,7 @@ import { useDevStore } from '@/stores/dev-store';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
+import { hubspotDealUrl } from '@/lib/hubspot/urls';
 import { FilterBuilder } from './filters/FilterBuilder';
 import {
   getDefaultFilterState,
@@ -89,11 +90,6 @@ const DASHBOARD_SYSTEM_BADGE_ICP_S4 = 'system:dashboard-icp-s4';
 // ── Helpers ──
 // ══════════════════════════════════════════════
 
-const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
-
-function getHubSpotDealUrl(dealId: string): string {
-  return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-3/${dealId}`;
-}
 
 function formatEUR(value: number): string {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(value);
@@ -1367,7 +1363,7 @@ function MetricCard({ label, value, unit, sub, subPositive, subNeutral, deals }:
               {deals.map(d => (
                 <div key={d.id} className="flex justify-between gap-2 text-xs">
                   <a
-                    href={getHubSpotDealUrl(d.id)}
+                    href={hubspotDealUrl(d.id)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="truncate text-amber-700 hover:text-amber-900 hover:underline"

@@ -3,13 +3,8 @@
 import { ExternalLink } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvas-store';
 import { getStageColor } from '@/lib/stage-colors';
+import { hubspotDealUrl } from '@/lib/hubspot/urls';
 import { AgeLabel } from '@/components/pipeline/AgeLabel';
-
-const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
-
-function getHubSpotDealUrl(dealId: string): string {
-  return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-3/${dealId}`;
-}
 
 export function TopBar() {
   const { canvasData } = useCanvasStore();
@@ -27,9 +22,9 @@ export function TopBar() {
         <h1 className="text-4xl text-gray-900 company-title" style={{ fontFamily: 'var(--font-headline)', fontWeight: 300 }}>
           {canvasData.topBar.companyName || 'Unbekanntes Unternehmen'}
         </h1>
-        {HUBSPOT_PORTAL_ID && canvasData.dealId && (
+        {canvasData.dealId && (
           <a
-            href={getHubSpotDealUrl(canvasData.dealId)}
+            href={hubspotDealUrl(canvasData.dealId)}
             target="_blank"
             rel="noopener noreferrer"
             className="text-orange-400 hover:text-orange-600 transition-colors"

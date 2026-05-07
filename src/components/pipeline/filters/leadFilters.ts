@@ -17,6 +17,7 @@ export type LeadFieldType =
   | 'current_stage'
   | 'agents_minuten'
   | 'inbound_volumen'
+  | 'effective_minuten'
   | 'lead_age'
   | 'days_in_stage'
   | 'has_deal'
@@ -60,6 +61,7 @@ export function getLeadInputKind(type: LeadFieldType): FieldInputKind {
       return 'text';
     case 'agents_minuten':
     case 'inbound_volumen':
+    case 'effective_minuten':
     case 'lead_age':
     case 'days_in_stage':
       return 'number';
@@ -73,6 +75,11 @@ function inboundVolumenLowerBound(range: string | null): number | null {
   if (!range) return null;
   const m = range.match(/^(\d+)/) || range.match(/^>(\d+)/);
   return m ? Number(m[1]) : null;
+}
+
+function effectiveMinuten(lead: LeadOverviewItem): number | null {
+  if (lead.agentsMinuten != null) return lead.agentsMinuten;
+  return inboundVolumenLowerBound(lead.inboundVolumen);
 }
 
 // HubSpot liefert Original Source als Enum in SCREAMING_SNAKE_CASE
@@ -308,6 +315,8 @@ function matchLeadCriterion(
       return matchNumeric(lead.agentsMinuten, c);
     case 'inbound_volumen':
       return matchNumeric(inboundVolumenLowerBound(lead.inboundVolumen), c);
+    case 'effective_minuten':
+      return matchNumeric(effectiveMinuten(lead), c);
     case 'lead_age':
       return matchNumeric(lead.leadAge, c);
     case 'days_in_stage':

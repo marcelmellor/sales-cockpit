@@ -3,29 +3,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, ArrowUpDown, Settings2, ExternalLink, Download, Search, X } from 'lucide-react';
 import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
+import {
+  hubspotCompanyUrl,
+  hubspotContactUrl,
+  hubspotDealUrl,
+} from '@/lib/hubspot/urls';
 
-const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
 const STORAGE_KEY = 'leads-spreadsheet-visible-columns';
-
-function hubspotContactUrl(contactId: string | null): string | null {
-  if (!HUBSPOT_PORTAL_ID || !contactId) return null;
-  return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/contact/${contactId}`;
-}
-
-function hubspotCompanyUrl(companyId: string | null): string | null {
-  if (!HUBSPOT_PORTAL_ID || !companyId) return null;
-  return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/company/${companyId}`;
-}
-
-function hubspotDealUrl(dealId: string | null): string | null {
-  if (!HUBSPOT_PORTAL_ID || !dealId) return null;
-  return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-3/${dealId}`;
-}
 
 // Leads haben keine eigene Detailseite — wir linken primär auf den
 // verknüpften Kontakt (mit der eigentlichen History), sonst auf die Firma.
 function hubspotLeadRecordUrl(lead: LeadOverviewItem): string | null {
-  return hubspotContactUrl(lead.contactId) || hubspotCompanyUrl(lead.companyId);
+  if (lead.contactId) return hubspotContactUrl(lead.contactId);
+  if (lead.companyId) return hubspotCompanyUrl(lead.companyId);
+  return null;
 }
 
 function formatDate(value: string | null): string {
@@ -281,12 +272,10 @@ const COLUMNS: ColumnDef[] = [
     getSortValue: (l) => (l.existingDealName || '').toLowerCase(),
     render: (l) => {
       if (!l.existingDealId) return <span className="text-gray-400">—</span>;
-      const url = hubspotDealUrl(l.existingDealId);
       const label = l.existingDealName || 'offen';
-      if (!url) return <span className="text-amber-700">{label}</span>;
       return (
         <a
-          href={url}
+          href={hubspotDealUrl(l.existingDealId)}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 text-amber-700 hover:text-amber-800"

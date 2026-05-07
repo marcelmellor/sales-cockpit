@@ -4,13 +4,8 @@ import Link from 'next/link';
 import { ExternalLink, Loader2 } from 'lucide-react';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import { getStageColor } from '@/lib/stage-colors';
+import { hubspotDealUrl } from '@/lib/hubspot/urls';
 import { AgeLabel } from './AgeLabel';
-
-const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
-
-function getHubSpotDealUrl(dealId: string): string {
-  return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-3/${dealId}`;
-}
 
 function formatRelativeDate(date: Date): { relative: string; absolute: string } {
   const now = new Date();
@@ -170,22 +165,20 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
           <h4 className="font-medium text-gray-900 truncate group-hover:text-blue-600 transition-colors">
             {deal.companyName}
           </h4>
-          {HUBSPOT_PORTAL_ID && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                window.open(getHubSpotDealUrl(deal.id), '_blank', 'noopener,noreferrer');
-              }}
-              className="shrink-0 text-orange-400 hover:text-orange-600 transition-colors opacity-0 group-hover:opacity-100"
-              title="In HubSpot öffnen"
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M17.1 11.3V8.4c.6-.3 1-1 1-1.7 0-1.1-.9-2-2-2s-2 .9-2 2c0 .7.4 1.4 1 1.7v2.9c-1.2.2-2.3.8-3.1 1.6l-5.4-4.2c.1-.2.1-.4.1-.6 0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2c.4 0 .7-.1 1-.3l5.3 4.1c-.4.8-.6 1.7-.6 2.6 0 3.2 2.6 5.8 5.8 5.8s5.8-2.6 5.8-5.8c0-2.8-2-5.2-4.7-5.8l-.2.3zm-.9 9.1c-2 0-3.6-1.6-3.6-3.6s1.6-3.6 3.6-3.6 3.6 1.6 3.6 3.6-1.6 3.6-3.6 3.6z"/>
-              </svg>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              window.open(hubspotDealUrl(deal.id), '_blank', 'noopener,noreferrer');
+            }}
+            className="shrink-0 text-orange-400 hover:text-orange-600 transition-colors opacity-0 group-hover:opacity-100"
+            title="In HubSpot öffnen"
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M17.1 11.3V8.4c.6-.3 1-1 1-1.7 0-1.1-.9-2-2-2s-2 .9-2 2c0 .7.4 1.4 1 1.7v2.9c-1.2.2-2.3.8-3.1 1.6l-5.4-4.2c.1-.2.1-.4.1-.6 0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2c.4 0 .7-.1 1-.3l5.3 4.1c-.4.8-.6 1.7-.6 2.6 0 3.2 2.6 5.8 5.8 5.8s5.8-2.6 5.8-5.8c0-2.8-2-5.2-4.7-5.8l-.2.3zm-.9 9.1c-2 0-3.6-1.6-3.6-3.6s1.6-3.6 3.6-3.6 3.6 1.6 3.6 3.6-1.6 3.6-3.6 3.6z"/>
+            </svg>
+          </button>
         </div>
 
         {/* Lost Indicator */}

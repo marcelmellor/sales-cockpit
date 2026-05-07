@@ -3,14 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, ArrowUpDown, Settings2, ExternalLink, Download, Search, X } from 'lucide-react';
 import type { DealOverviewItem, RevenueSource } from '@/app/api/deals/overview/route';
+import { hubspotDealUrl } from '@/lib/hubspot/urls';
 
-const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
 const STORAGE_KEY = 'spreadsheet-visible-columns';
-
-function hubspotUrl(dealId: string): string | null {
-  if (!HUBSPOT_PORTAL_ID) return null;
-  return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-3/${dealId}`;
-}
 
 function formatDate(value: string | null): string {
   if (!value) return '—';
@@ -259,23 +254,19 @@ const COLUMNS: ColumnDef[] = [
     label: 'HubSpot',
     sortable: false,
     getSortValue: () => null,
-    render: (d) => {
-      const url = hubspotUrl(d.id);
-      if (!url) return <span className="text-gray-400">—</span>;
-      return (
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-orange-600 hover:text-orange-700"
-          onClick={(e) => e.stopPropagation()}
-        >
-          Öffnen
-          <ExternalLink className="h-3 w-3" />
-        </a>
-      );
-    },
-    getCsvValue: (d) => hubspotUrl(d.id) ?? '',
+    render: (d) => (
+      <a
+        href={hubspotDealUrl(d.id)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 text-orange-600 hover:text-orange-700"
+        onClick={(e) => e.stopPropagation()}
+      >
+        Öffnen
+        <ExternalLink className="h-3 w-3" />
+      </a>
+    ),
+    getCsvValue: (d) => hubspotDealUrl(d.id),
   },
   {
     key: 'dealId',

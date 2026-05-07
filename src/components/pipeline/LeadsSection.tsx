@@ -4,6 +4,11 @@ import { useMemo, useState } from 'react';
 import { ArrowUpDown, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
 import type { DealsGrouping } from '@/app/page';
+import {
+  hubspotCompanyUrl,
+  hubspotContactUrl,
+  hubspotDealUrl,
+} from '@/lib/hubspot/urls';
 import { AgeLabel } from './AgeLabel';
 
 type LeadSortField = 'company' | 'source' | 'minuten' | 'age';
@@ -17,25 +22,13 @@ function leadMinutenForSort(lead: LeadOverviewItem): number {
   return lower ?? -1;
 }
 
-const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
-
-function hubspotDealUrl(dealId: string): string | null {
-  if (!HUBSPOT_PORTAL_ID) return null;
-  return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-3/${dealId}`;
-}
-
+// HubSpot Leads haben keine eigene, sinnvoll öffenbare Record-Detail-Seite —
+// sie existieren nur als Side-Panel im Prospecting Workspace. Daher
+// verlinken wir stattdessen den primären Contact (oder hilfsweise die
+// Firma), wo der eigentliche Kontext (Name, Mail, Historie) liegt.
 function hubspotRecordUrl(lead: LeadOverviewItem): string | null {
-  if (!HUBSPOT_PORTAL_ID) return null;
-  // HubSpot Leads haben keine eigene, sinnvoll öffenbare Record-Detail-Seite —
-  // sie existieren nur als Side-Panel im Prospecting Workspace. Daher
-  // verlinken wir stattdessen den primären Contact (oder hilfsweise die
-  // Firma), wo der eigentliche Kontext (Name, Mail, Historie) liegt.
-  if (lead.contactId) {
-    return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/contact/${lead.contactId}`;
-  }
-  if (lead.companyId) {
-    return `https://app-eu1.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/company/${lead.companyId}`;
-  }
+  if (lead.contactId) return hubspotContactUrl(lead.contactId);
+  if (lead.companyId) return hubspotCompanyUrl(lead.companyId);
   return null;
 }
 
@@ -368,8 +361,7 @@ function LeadRow({ lead, showAge }: { lead: LeadOverviewItem; showAge: 'leadAge'
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              const url = hubspotDealUrl(lead.existingDealId!);
-              if (url) window.open(url, '_blank', 'noopener,noreferrer');
+              window.open(hubspotDealUrl(lead.existingDealId!), '_blank', 'noopener,noreferrer');
             }}
             className="hidden sm:inline-block px-2 py-0.5 text-xs font-medium rounded-full bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors max-w-[180px] truncate"
             title={lead.existingDealName ? `Bestehender Deal: ${lead.existingDealName}` : 'Bestehender Deal'}

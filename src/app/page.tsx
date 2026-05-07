@@ -514,34 +514,19 @@ function PipelineOverviewContent() {
     return badges;
   }, [showAgentMrrBadge]);
 
-  // System-Badges für den Leads-Tab. Die Minuten-Badges verwenden eine
-  // OR-Gruppe mit agents_minuten + inbound_volumen, damit Leads, die (noch)
-  // keine Agent-Minuten haben, über ihr Inbound-Volumen matchen können.
+  // System-Badges für den Leads-Tab. Die Minuten-Badges verwenden dieselbe
+  // effektive Minutenzahl wie die Anzeige: agents_minuten, falls gesetzt,
+  // sonst die Untergrenze von inbound_volumen.
   const leadsSystemBadges: FilterBadge<LeadFieldType>[] = useMemo(() => {
     const minMinutenFilter = (threshold: number): FilterState<LeadFieldType> => ({
       logic: 'AND',
       children: [{
-        kind: 'group',
-        id: `sys-lead-min-${threshold}-grp`,
-        logic: 'OR',
-        children: [
-          {
-            kind: 'criterion',
-            id: `sys-lead-min-${threshold}-am`,
-            type: 'agents_minuten',
-            operator: 'after',
-            dateFrom: '',
-            numberFrom: threshold,
-          },
-          {
-            kind: 'criterion',
-            id: `sys-lead-min-${threshold}-iv`,
-            type: 'inbound_volumen',
-            operator: 'after',
-            dateFrom: '',
-            numberFrom: threshold,
-          },
-        ],
+        kind: 'criterion',
+        id: `sys-lead-min-${threshold}`,
+        type: 'effective_minuten',
+        operator: 'after',
+        dateFrom: '',
+        numberFrom: threshold,
       }],
     });
 
