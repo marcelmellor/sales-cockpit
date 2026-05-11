@@ -115,7 +115,6 @@ function PipelineOverviewContent() {
   const { status } = useSession();
   const selectedPipelineId = SALES_PIPELINE_ID;
   const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
-  const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   // Hydration-Guard: clientseitig wird `getCachedData` (localStorage) synchron
   // im useMemo gelesen → der initiale Client-Render sieht ggf. fertige Daten,
   // während der SSR-Render `undefined` hat. Damit der erste Client-Render
@@ -148,15 +147,45 @@ function PipelineOverviewContent() {
     return isPortfolioValue(produktFromUrl) ? produktFromUrl : PORTFOLIO_OPTIONS[0].value;
   }, [searchParams]);
 
-  // Handle product change
+  // viewMode kommt aus der URL (?view=...). Default ist 'dashboard'. So bleibt
+  // der aktive Tab bei Reload/Share-Link erhalten, und Browser-Back/Forward
+  // springt zwischen Tabs.
+  const viewMode = useMemo<ViewMode>(() => {
+    const v = searchParams.get('view');
+    if (v === 'deals' || v === 'leads' || v === 'projects' || v === 'dashboard') return v;
+    return 'dashboard';
+  }, [searchParams]);
+
+  // Aktualisiert URL-Parameter, ohne andere zu verlieren. Wird sowohl für
+  // Produktwechsel als auch für Tab-Wechsel benutzt.
+  const updateUrlParams = useCallback(
+    (updates: Partial<{ produkt: PortfolioValue; view: ViewMode }>) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (updates.produkt) params.set('produkt', updates.produkt);
+      if (updates.view) {
+        if (updates.view === 'dashboard') params.delete('view');
+        else params.set('view', updates.view);
+      }
+      const qs = params.toString();
+      router.replace(qs ? `/?${qs}` : '/', { scroll: false });
+    },
+    [router, searchParams],
+  );
+
   const handleProduktChange = (produkt: PortfolioValue) => {
-    router.replace(`/?produkt=${produkt}`, { scroll: false });
+    updateUrlParams({ produkt });
   };
+
+  const setViewMode = useCallback(
+    (view: ViewMode) => {
+      updateUrlParams({ view });
+    },
+    [updateUrlParams],
+  );
 
   // Wenn das Produkt von AI Agents weg gewechselt wird, während gerade die
   // Projekte-Ansicht aktiv ist, fallen wir effektiv auf das Dashboard zurück.
-  // Wir leiten den effektiven View-Mode aus state + Produkt ab, statt einen
-  // useEffect zu setzen — das vermeidet Cascading-Renders. Der Projekte-Tab
+  // Wir leiten den effektiven View-Mode aus URL + Produkt ab — der Projekte-Tab
   // wird gleichzeitig ausgeblendet, sobald `selectedProdukt !== 'frontdesk'`.
   const effectiveViewMode: ViewMode =
     viewMode === 'projects' && selectedProdukt !== 'frontdesk' ? 'dashboard' : viewMode;
