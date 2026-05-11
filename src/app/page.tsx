@@ -11,6 +11,7 @@ import { DashboardView } from '@/components/pipeline/DashboardView';
 import { SpreadsheetView } from '@/components/pipeline/SpreadsheetView';
 import { LeadsSection } from '@/components/pipeline/LeadsSection';
 import { LeadsSpreadsheetView } from '@/components/pipeline/LeadsSpreadsheetView';
+import { ProjectsView } from '@/components/pipeline/ProjectsView';
 import { FilterBuilder } from '@/components/pipeline/filters/FilterBuilder';
 import {
   getDefaultFilterState,
@@ -40,10 +41,11 @@ import {
   applyLeadFilters,
 } from '@/components/pipeline/filters/leadFilters';
 import type { LeadFieldType } from '@/components/pipeline/filters/leadFilters';
-import { Loader2, LayoutGrid, RefreshCw, BarChart3, Table2, Users } from 'lucide-react';
+import { Loader2, LayoutGrid, RefreshCw, BarChart3, Table2, Users, Calendar } from 'lucide-react';
 import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import type { LeadsOverviewResponse, LeadOverviewItem } from '@/app/api/leads/overview/route';
+import type { ProjectsOverviewResponse } from '@/app/api/projects/overview/route';
 import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
 
 // localStorage-Prefixe für die pro-Tab gespeicherten Filter-Sets und die
@@ -86,7 +88,7 @@ function isPortfolioValue(value: string | null): value is PortfolioValue {
 
 export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'daysInStage' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
-export type ViewMode = 'deals' | 'dashboard' | 'leads';
+export type ViewMode = 'deals' | 'dashboard' | 'leads' | 'projects';
 // Sub-Modus innerhalb Deals- und Leads-Tab: Sales-Sicht (Kachel-/Listenansicht
 // mit Story) oder Sheet (tabellarisch, mit CSV-Export). Wird pro Tab separat
 // gehalten, damit ein Wechsel zwischen Deals und Leads die gewählte Sicht nicht
@@ -114,6 +116,17 @@ function PipelineOverviewContent() {
   const selectedPipelineId = SALES_PIPELINE_ID;
   const [sortByStage, setSortByStage] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
+  // Hydration-Guard: clientseitig wird `getCachedData` (localStorage) synchron
+  // im useMemo gelesen → der initiale Client-Render sieht ggf. fertige Daten,
+  // während der SSR-Render `undefined` hat. Damit der erste Client-Render
+  // identisch zum Server-HTML bleibt, gaten wir loading-abhängige UI hinter
+  // `hydrated`. Erst nach dem ersten Effect dürfen wir abweichen.
+  const [hydrated, setHydrated] = useState(false);
+  // Klassisches "mounted"-Pattern: `setHydrated(true)` direkt im Effect ist
+  // hier gewollt (genau einmal nach Mount), nicht der von der ESLint-Regel
+  // beanstandete State-Sync-Fall.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setHydrated(true); }, []);
   // Getrennte Sub-View-States für Deals und Leads — so merkt sich jeder Tab
   // seine zuletzt gewählte Sicht (Sales vs. Sheet) auch beim Hin- und
   // Herspringen zwischen den Tabs.
@@ -140,13 +153,24 @@ function PipelineOverviewContent() {
     router.replace(`/?produkt=${produkt}`, { scroll: false });
   };
 
+  // Wenn das Produkt von AI Agents weg gewechselt wird, während gerade die
+  // Projekte-Ansicht aktiv ist, fallen wir effektiv auf das Dashboard zurück.
+  // Wir leiten den effektiven View-Mode aus state + Produkt ab, statt einen
+  // useEffect zu setzen — das vermeidet Cascading-Renders. Der Projekte-Tab
+  // wird gleichzeitig ausgeblendet, sobald `selectedProdukt !== 'frontdesk'`.
+  const effectiveViewMode: ViewMode =
+    viewMode === 'projects' && selectedProdukt !== 'frontdesk' ? 'dashboard' : viewMode;
+
   // Cache key includes product for separate caching per product group
   const cacheKey = selectedPipelineId && selectedProdukt ? `${selectedPipelineId}-${selectedProdukt}` : null;
 
-  // Get cached data for initial render
+  // Get cached data for initial render. Gated hinter `hydrated`, weil
+  // `getCachedData` clientseitig synchron aus localStorage liest. Ohne den
+  // Guard wäre Server-Render `null` (kein window), Initial-Client-Render
+  // potenziell ein Cache-Treffer → Hydration-Mismatch.
   const cachedOverview = useMemo(
-    () => cacheKey ? getCachedData<PipelineOverviewResponse>(`overview-${cacheKey}`) : null,
-    [cacheKey]
+    () => hydrated && cacheKey ? getCachedData<PipelineOverviewResponse>(`overview-${cacheKey}`) : null,
+    [hydrated, cacheKey]
   );
 
   // Fetch pipeline overview filtered by product (server-side)
@@ -173,8 +197,8 @@ function PipelineOverviewContent() {
   // keine Pipeline-Auswahl kennt (fix auf LEAD_PIPELINE_ID im Route-Handler).
   const leadsCacheKey = selectedProdukt ? `leads-overview-${selectedProdukt}` : null;
   const cachedLeads = useMemo(
-    () => leadsCacheKey ? getCachedData<LeadsOverviewResponse>(leadsCacheKey) : null,
-    [leadsCacheKey]
+    () => hydrated && leadsCacheKey ? getCachedData<LeadsOverviewResponse>(leadsCacheKey) : null,
+    [hydrated, leadsCacheKey]
   );
 
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
@@ -190,6 +214,34 @@ function PipelineOverviewContent() {
     enabled: isAuthenticated && !!selectedProdukt,
     staleTime: 5 * 60 * 1000,
     initialData: cachedLeads ?? undefined,
+  });
+
+  // Projects (Wochenansicht) — bisher nur für AI Agents implementiert. Andere
+  // Produkte haben weder das `jira_story`-Property noch ein "Ende der
+  // Testphase"-Feld am passenden JIRA-Issue, daher beschränken wir den Tab
+  // serverseitig (400) und clientseitig (Tab versteckt) auf produkt=frontdesk.
+  // Cache-Key versioniert (-v2): das Response-Schema wurde um dealStage /
+  // dealIsLost / projectIsClosed erweitert. Alte localStorage-Einträge ohne
+  // diese Felder hätten sonst die neuen Filter-Badges falsch zählen lassen
+  // (alle als "offen", weil undefined → falsy).
+  const projectsCacheKey = selectedProdukt === 'frontdesk' ? `projects-overview-frontdesk-v4` : null;
+  const cachedProjects = useMemo(
+    () => hydrated && projectsCacheKey ? getCachedData<ProjectsOverviewResponse>(projectsCacheKey) : null,
+    [hydrated, projectsCacheKey]
+  );
+  const { data: projectsData, isLoading: projectsLoading } = useQuery({
+    queryKey: ['projects-overview', selectedProdukt],
+    queryFn: async () => {
+      const response = await fetch(`/api/projects/overview?produkt=${selectedProdukt}`);
+      if (!response.ok) throw new Error('Failed to fetch projects overview');
+      const data = await response.json();
+      const result = data.data as ProjectsOverviewResponse;
+      if (projectsCacheKey) setCachedData(projectsCacheKey, result);
+      return result;
+    },
+    enabled: isAuthenticated && selectedProdukt === 'frontdesk',
+    staleTime: 5 * 60 * 1000,
+    initialData: cachedProjects ?? undefined,
   });
 
   // Extract deal IDs for meetings query
@@ -778,7 +830,7 @@ function PipelineOverviewContent() {
               </button>
             ))}
 
-            {(overviewLoading || secondaryDataLoading) && (
+            {hydrated && (overviewLoading || secondaryDataLoading) && (
               <div className="flex items-center gap-2 text-sm text-gray-500 ml-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {secondaryDataLoading && !overviewLoading ? 'Termine laden...' : 'Laden...'}
@@ -880,6 +932,24 @@ function PipelineOverviewContent() {
                       </span>
                     )}
                   </button>
+                  {selectedProdukt === 'frontdesk' && (
+                    <button
+                      onClick={() => setViewMode('projects')}
+                      className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                        viewMode === 'projects'
+                          ? 'border-gray-900 text-gray-900 font-medium'
+                          : 'border-transparent text-gray-400 hover:text-gray-600'
+                      }`}
+                    >
+                      <Calendar className="h-3.5 w-3.5" />
+                      Projekte
+                      {projectsData && (
+                        <span className="ml-0.5 text-xs text-gray-400">
+                          ({projectsData.projects.length})
+                        </span>
+                      )}
+                    </button>
+                  )}
                 </div>
                 <div className="flex items-center gap-4">
                   {(viewMode === 'deals' || viewMode === 'leads') && (
@@ -943,7 +1013,7 @@ function PipelineOverviewContent() {
             </div>
 
             {/* View Content */}
-            {viewMode === 'dashboard' ? (
+            {effectiveViewMode === 'dashboard' ? (
               /* Dashboard View */
               <DashboardView
                 key={`${selectedPipelineId ?? 'none'}-${selectedProdukt ?? 'none'}`}
@@ -956,7 +1026,10 @@ function PipelineOverviewContent() {
                 produkt={selectedProdukt}
                 leads={leadsData?.leads ?? []}
               />
-            ) : viewMode === 'leads' ? (
+            ) : effectiveViewMode === 'projects' ? (
+              /* Projekte: Wochenansicht laufender AI-Agent-Projekte */
+              <ProjectsView data={projectsData} isLoading={projectsLoading} />
+            ) : effectiveViewMode === 'leads' ? (
               /* Leads-Tab: Sales- oder Sheet-Sicht */
               <>
                 <FilterBuilder<LeadFieldType>

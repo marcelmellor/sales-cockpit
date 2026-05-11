@@ -186,3 +186,112 @@ Checklist when writing a new endpoint that touches N deals:
    request fails loudly; the client can retry the whole query.
 3. Never persist an error-derived `null` into the localStorage cache.
    Only cache responses from successful, complete fetches.
+
+## JIRA authentication — sipgate Atlassian Cloud (sipgatede.atlassian.net)
+
+**TL;DR:** The app reads JIRA via a personal **Atlassian Cloud API token**,
+sent as HTTP Basic Auth (`email:token`, base64). Three env vars in
+`.env.local`:
+
+```
+JIRA_BASE_URL=https://sipgatede.atlassian.net
+JIRA_EMAIL=<the sipgate mail you log into JIRA with>
+JIRA_API_TOKEN=<the token from id.atlassian.com>
+```
+
+Read-only — Phase 1 does not write to JIRA.
+
+### Where the token comes from
+
+Create at https://id.atlassian.com/manage-profile/security/api-tokens.
+**Use the left button "Create API token"**, NOT the right one ("Create API
+token with scopes"). The scoped variant is OAuth-2.0-flavored and would
+require a different auth mechanism (Bearer against
+`api.atlassian.com/ex/jira/{cloudId}/...` instead of Basic against the
+tenant URL). Both token types share the `ATATT3xFf…=CHECKSUM` shape, so
+you cannot tell them apart from the value alone — only by which button
+was clicked. If `/rest/api/3/myself` returns 401 with "Client must be
+authenticated" despite a freshly minted token, you almost certainly used
+the wrong button. Revoke and recreate.
+
+### Where JIRA is linked to a deal
+
+HubSpot deal property: **`jira_story`** (label "Jira Story", description
+"CS Agents (Nils)"). Single-line URL field. The URL format varies — we
+have seen all of:
+
+- `https://sipgatede.atlassian.net/browse/PDH-322`
+- `https://sipgatede.atlassian.net/browse/SC-12?atlOrigin=…`
+- `https://sipgatede.atlassian.net/jira/core/projects/SC/board?selectedIssue=SC-4`
+
+Project keys are not constrained to one project (`SC`, `PDH`, …). Use
+`extractJiraIssueKey()` from `src/lib/jira/parse.ts` — it handles all
+three shapes plus bare keys.
+
+The HubSpot field is also misnamed: despite "story", it can point at any
+issue type. SC-167 for example is a Developer Task, not an Epic. Code
+that consumes it must not assume hierarchy — `getEpicChildren` simply
+returns an empty array when the issue has no children, which is the
+correct read for a non-epic issue.
+
+### What the client offers (`src/lib/jira/client.ts`)
+
+- `getIssue(key)` — single issue projected onto a minimal `JiraIssue`
+  shape (summary, status, assignee, story points, parent, timestamps).
+- `getEpicChildren(key)` — JQL `parent = "<key>"` paginated via the new
+  `/rest/api/3/search/jql` POST endpoint. Returns an array.
+- `getEpicWithChildren(key)` — convenience wrapper that fans both calls
+  out in parallel.
+- `getIssuesByKeys(keys)` — JQL `key in (...)` batch, chunked at 100.
+- `getChildrenForParents(keys)` — JQL `parent in (...)` batch, returns a
+  `Map<parentKey, JiraIssue[]>`.
+
+### Sub-Task hierarchy: parent-field vs. issue-links
+
+In the sipgate SC project, child issues are almost always linked to their
+parent via a JIRA **issue-link of type "Parent"** (inward "is a parent of"),
+not via the `parent` field. Concrete example: SC-53 (DER SPIEGEL) has
+SC-60 and SC-61 as children — both linked exclusively via issue-links,
+their `parent` field is empty.
+
+That means `getChildrenForParents()` alone is not enough — it only finds
+parent-field children. The full picture requires also reading `issuelinks`
+from the parent issue (now part of `ISSUE_FIELDS`) and extracting all
+inward "is a parent of" links. `JiraIssue.linkedChildKeys` carries those
+keys. The `/api/projects/overview` route merges both sources to compute
+the sub-task dot counts.
+
+Filter on `type.name === 'Parent'` OR `type.inward` containing "parent of"
+(robust against German localisation). Other link types ("blocks",
+"relates to", …) must NOT be treated as parent-child.
+
+We use the **new** `/rest/api/3/search/jql` endpoint, not the deprecated
+`GET /rest/api/3/search`. Pagination is via `nextPageToken`, with a
+50-iteration safety cap (5000 child issues per epic).
+
+### Story points custom field
+
+JIRA story-point custom field IDs vary per portal. The client probes
+`customfield_10016` → `customfield_10026` → `customfield_10004` in
+order and uses the first one that has a numeric value. sipgate's portal
+uses `customfield_10016` at the time of writing.
+
+### API routes
+
+- `GET /api/jira/issue/<KEY>` — `JiraIssue`.
+- `GET /api/jira/epic/<KEY>` — `{ epic: JiraIssue, children: JiraIssue[] }`.
+- `GET /api/projects/overview?produkt=frontdesk` — feeds the **Projekte**
+  tab in the UI. Walks all frontdesk-deals with `jira_story`, resolves
+  each to a JIRA issue, plus children (via parent-field AND issue-links).
+
+  Each `ProjectOverviewItem` carries a `dateSource`:
+  - `jira-test-phase` — JIRA `customfield_11758` ("Ende der Testphase")
+    is set; bar runs `end - 27d` to `end`.
+  - `deal-won-fallback` — JIRA date is missing but the HubSpot deal is
+    won; bar runs from `closedate` to `closedate + 27d`. Rendered hatched
+    in the UI to signal the missing JIRA data.
+
+  Deals where neither anchor is available end up in `unscheduledCount`.
+
+The first two routes validate the key with `isJiraIssueKey()` and return
+400 on garbage, 404 if JIRA returns 404, 502 on other JIRA errors.

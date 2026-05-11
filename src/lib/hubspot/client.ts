@@ -82,6 +82,7 @@ export class HubSpotClient {
       'canvas_next_steps',
       'canvas_roadmap',
       'canvas_next_appointment',
+      'jira_story',
     ];
 
     // Fetch all deals with pagination (HubSpot search API returns max 100 per request)
@@ -160,6 +161,7 @@ export class HubSpotClient {
       'hs_mrr',
       'hs_num_of_associated_line_items',
       'icp_tier',
+      'jira_story',
     ];
 
     // Fetch all deals with pagination (HubSpot search API returns max 100 per request)
