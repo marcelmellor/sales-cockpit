@@ -46,6 +46,11 @@ export interface LeadOverviewItem {
   utmCampaign: string | null;
   utmTerm: string | null;
   utmContent: string | null;
+  // Deal-IDs, mit denen dieser Lead in HubSpot direkt assoziiert ist
+  // (leads → deals). Brauchen wir, um im Dashboard Deals nach Lead-Source
+  // zu gruppieren — die umgekehrte Assoc (deals → leads) existiert in
+  // HubSpot nicht, wir müssen den Join lead-seitig auflösen.
+  associatedDealIds: string[];
 }
 
 // UTM-Parameter aus einer URL extrahieren. Akzeptiert absolute wie relative
@@ -241,6 +246,7 @@ export async function GET(request: Request) {
         analyticsSource: analytics?.source ?? null,
         analyticsFirstUrl: analytics?.firstUrl ?? null,
         ...parseUtmParams(analytics?.firstUrl ?? null),
+        associatedDealIds: (lead.associations?.deals?.results ?? []).map(a => a.id),
       };
     });
 

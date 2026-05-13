@@ -809,9 +809,10 @@ export class HubSpotClient {
     const leadIds = allLeads.map(l => l.id);
     const companyAssocMap = new Map<string, string[]>();
     const contactAssocMap = new Map<string, string[]>();
+    const dealAssocMap = new Map<string, string[]>();
 
     const readAssoc = async (
-      toObject: 'companies' | 'contacts',
+      toObject: 'companies' | 'contacts' | 'deals',
       target: Map<string, string[]>,
     ) => {
       const batchSize = 100;
@@ -837,6 +838,7 @@ export class HubSpotClient {
       await Promise.all([
         readAssoc('companies', companyAssocMap),
         readAssoc('contacts', contactAssocMap),
+        readAssoc('deals', dealAssocMap),
       ]);
     }
 
@@ -846,6 +848,7 @@ export class HubSpotClient {
         associations: {
           companies: { results: (companyAssocMap.get(l.id) || []).map(id => ({ id, type: 'company' })) },
           contacts: { results: (contactAssocMap.get(l.id) || []).map(id => ({ id, type: 'contact' })) },
+          deals: { results: (dealAssocMap.get(l.id) || []).map(id => ({ id, type: 'deal' })) },
         },
       })),
     };

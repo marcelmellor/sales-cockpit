@@ -187,6 +187,16 @@ Checklist when writing a new endpoint that touches N deals:
 3. Never persist an error-derived `null` into the localStorage cache.
    Only cache responses from successful, complete fetches.
 
+### Lead ↔ Deal association is one-directional
+
+HubSpot in `27058496` only stores the association in the `leads → deals`
+direction (typically with type `Primary`, typeId 582). The reverse call
+`/crm/v4/associations/deals/leads/batch/read` returns
+`NO_ASSOCIATIONS_FOUND` for every deal — even ones that clearly came
+from a lead. Endpoints that need to join a deal to its originating lead
+must fetch `leads → deals` for the lead set and invert the map locally;
+see `getLeadsWithAssociations` and `LeadOverviewItem.associatedDealIds`.
+
 ## JIRA authentication — sipgate Atlassian Cloud (sipgatede.atlassian.net)
 
 **TL;DR:** The app reads JIRA via a personal **Atlassian Cloud API token**,

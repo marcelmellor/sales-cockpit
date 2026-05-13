@@ -677,44 +677,135 @@ export function DashboardView({
   const referenceNow = weeks[weeks.length - 1]?.getTime() ?? 0;
 
   // ── Trends ──
-  const prospectsTrend = useMemo(() => weeks.map(weekEnd => {
+  // Deals pro Woche, gruppiert nach der Source des verknüpften Leads.
+  // Hintergrund: HubSpot kennt keine `deals → leads`-Association — die
+  // Verknüpfung läuft umgekehrt (`leads → deals`, oft als "Primary"). Wir
+  // bauen daher aus den Leads (die `associatedDealIds` mitbringen) einen
+  // Lookup deal-id → lead-source. Source-Resolution analog zur Leads-
+  // Overview: bevorzugt das Freitext-Feld `lead_source`, sonst das enum
+  // `source`. Fehlt beides (oder gibt es keinen verknüpften Lead), landet
+  // der Deal im "Unbekannt"-Bucket.
+  const leadSourceByDealId = useMemo(() => {
+    const map = new Map<string, { leadSource: string | null; source: string | null }>();
+    for (const l of leads) {
+      const hasSignal = !!(l.leadSource || l.source);
+      for (const dealId of l.associatedDealIds) {
+        // Bevorzuge einen Lead mit Source-Signal, falls ein Deal an
+        // mehreren Leads hängt.
+        const existing = map.get(dealId);
+        if (!existing || (!existing.leadSource && !existing.source && hasSignal)) {
+          map.set(dealId, { leadSource: l.leadSource, source: l.source });
+        }
+      }
+    }
+    return map;
+  }, [leads]);
+
+  const dealSourceKey = useCallback((d: DealOverviewItem): string => {
+    const info = leadSourceByDealId.get(d.id);
+    const raw = ((info?.leadSource || info?.source) || '').trim();
+    return raw ? raw.toLowerCase() : 'unbekannt';
+  }, [leadSourceByDealId]);
+  const dealSourceLabel = useCallback((d: DealOverviewItem): string => {
+    const info = leadSourceByDealId.get(d.id);
+    return ((info?.leadSource || info?.source) || '').trim() || 'Unbekannt';
+  }, [leadSourceByDealId]);
+
+  // Pro Woche: alle Deals, die in dieser Woche erstellt wurden.
+  const prospectsPerWeekDeals = useMemo(() => weeks.map((weekEnd, i) => {
     const endMs = weekEnd.getTime();
+    const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - MS_PER_WEEK;
     return filteredDeals.filter(d => {
       const created = d.createdate ? new Date(d.createdate).getTime() : null;
-      return created != null && created <= endMs;
-    }).length;
+      return created != null && created > startMs && created <= endMs;
+    });
   }), [filteredDeals, weeks]);
 
-  const prospectsDeltas = useMemo(() => prospectsTrend.map((v, i) => {
-    const delta = i === 0 ? v : v - prospectsTrend[i - 1];
-    return `+${delta}`;
-  }), [prospectsTrend]);
+  const prospectsTrend = useMemo(
+    () => prospectsPerWeekDeals.map(ds => ds.length),
+    [prospectsPerWeekDeals],
+  );
+
+  const prospectsTooltip = useMemo(
+    () => prospectsTrend.map(v => `${v} Deal${v === 1 ? '' : 's'}`),
+    [prospectsTrend],
+  );
+
+  const prospectsAvg = useMemo(() => {
+    if (prospectsTrend.length === 0) return 0;
+    return Math.round(
+      (prospectsTrend.reduce((sum, v) => sum + v, 0) / prospectsTrend.length) * 10,
+    ) / 10;
+  }, [prospectsTrend]);
+
+  // Top-4 Sources über alle Wochen summiert + "Andere"-Bucket. Identische
+  // Logik zur Leads-Overview (case-insensitive-Konsolidierung, häufigste
+  // Schreibweise gewinnt als Label).
+  const { topProspectSources, prospectSourceLabelByKey } = useMemo(() => {
+    const totals = new Map<string, number>();
+    const casingCounts = new Map<string, Map<string, number>>();
+    for (const ds of prospectsPerWeekDeals) {
+      for (const d of ds) {
+        const key = dealSourceKey(d);
+        const display = dealSourceLabel(d);
+        totals.set(key, (totals.get(key) || 0) + 1);
+        if (!casingCounts.has(key)) casingCounts.set(key, new Map());
+        const cm = casingCounts.get(key)!;
+        cm.set(display, (cm.get(display) || 0) + 1);
+      }
+    }
+    const labelByKey = new Map<string, string>();
+    for (const [key, cm] of casingCounts) {
+      const best = Array.from(cm.entries()).sort((a, b) => b[1] - a[1])[0];
+      labelByKey.set(key, best ? best[0] : key);
+    }
+    const top = Array.from(totals.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([key]) => key);
+    return { topProspectSources: top, prospectSourceLabelByKey: labelByKey };
+  }, [prospectsPerWeekDeals, dealSourceKey, dealSourceLabel]);
+
+  const prospectsBySource = useMemo(() => {
+    const displayKeys = [
+      ...topProspectSources.map(k => prospectSourceLabelByKey.get(k) || k),
+      'Andere',
+    ];
+    const perWeek: Record<string, number[]> = {};
+    for (const k of displayKeys) perWeek[k] = new Array(prospectsPerWeekDeals.length).fill(0);
+    const topSet = new Set(topProspectSources);
+    prospectsPerWeekDeals.forEach((ds, wi) => {
+      for (const d of ds) {
+        const key = dealSourceKey(d);
+        const bucket = topSet.has(key) ? (prospectSourceLabelByKey.get(key) || key) : 'Andere';
+        perWeek[bucket][wi]++;
+      }
+    });
+    return { keys: displayKeys, perWeek };
+  }, [prospectsPerWeekDeals, topProspectSources, prospectSourceLabelByKey, dealSourceKey]);
+
+  const prospectsSourceStacks = useMemo(
+    () => prospectsBySource.keys.map((k, i) => ({
+      key: k,
+      color: LEAD_SOURCE_COLORS[i] || '#D4D4D4',
+      values: prospectsBySource.perWeek[k],
+    })),
+    [prospectsBySource],
+  );
 
   const prospectTooltipLines = useMemo(() => {
-    return weeks.map((weekEnd, i) => {
-      const endMs = weekEnd.getTime();
-      const startMs = i > 0 ? weeks[i - 1].getTime() : null;
-      const dealsInRange = filteredDeals
-        .filter(d => {
-          const created = d.createdate ? new Date(d.createdate).getTime() : null;
-          if (created == null) return false;
-          return startMs == null ? created <= endMs : created > startMs && created <= endMs;
-        })
-        .sort((a, b) => {
-          const aTs = a.createdate ? new Date(a.createdate).getTime() : 0;
-          const bTs = b.createdate ? new Date(b.createdate).getTime() : 0;
-          return aTs - bTs;
-        });
-
-      if (dealsInRange.length === 0) return ['Keine neuen Deals'];
-
-      const visibleDeals = dealsInRange.slice(0, 6).map(d => d.companyName);
-      if (dealsInRange.length > 6) {
-        visibleDeals.push(`+${dealsInRange.length - 6} weitere`);
-      }
-      return visibleDeals;
+    return prospectsPerWeekDeals.map(ds => {
+      if (ds.length === 0) return ['Keine neuen Deals'];
+      const sorted = [...ds].sort((a, b) => {
+        const aTs = a.createdate ? new Date(a.createdate).getTime() : 0;
+        const bTs = b.createdate ? new Date(b.createdate).getTime() : 0;
+        return aTs - bTs;
+      });
+      const visible = sorted.slice(0, 6).map(d => d.companyName);
+      if (sorted.length > 6) visible.push(`+${sorted.length - 6} weitere`);
+      return visible;
     });
-  }, [filteredDeals, weeks]);
+  }, [prospectsPerWeekDeals]);
 
   const wonDealsTrend = useMemo(() => weeks.map(weekEnd => {
     const endMs = weekEnd.getTime();
@@ -1156,16 +1247,28 @@ export function DashboardView({
           Trends ({weeks.length} Wochen)
         </div>
         <div className="grid grid-cols-2 gap-5">
-          <ChartCard title="Prospects kumulativ" current={`${currentProspects}`} target="/ 50">
+          <ChartCard title="Prospects / Woche" current={`${currentProspects}`}>
             <Sparkline
               data={prospectsTrend}
               color="#E8AC68"
               weeks={weeks}
-              tooltipOverride={prospectsDeltas}
+              tooltipOverride={prospectsTooltip}
               tooltipLines={prospectTooltipLines}
-              dashLast
+              bars
+              targetValue={prospectsAvg}
+              targetLabel={`Ø ${prospectsAvg}`}
+              targetColor="#2C3333"
+              stacks={prospectsSourceStacks.map(s => ({ values: s.values, color: s.color }))}
             />
             <WeekLabels weeks={weeks} />
+            <div className="flex items-center gap-3 mt-2 text-[10px] flex-wrap">
+              {prospectsSourceStacks.map(s => (
+                <span key={s.key} className="flex items-center gap-1" title={s.key}>
+                  <span className="inline-block w-2 h-2 rounded-sm" style={{ background: s.color }} />
+                  <span className="max-w-[140px] truncate text-gray-500">{s.key}</span>
+                </span>
+              ))}
+            </div>
           </ChartCard>
           <ChartCard title="Won Deals kumulativ" current={`${currentWonDeals}`} target="/ 25">
             <Sparkline
