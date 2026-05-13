@@ -21,7 +21,16 @@ export type DealFieldType =
   | 'agents_minuten'
   | 'mrr'
   | 'status'
-  | 'icp_tier';
+  | 'icp_tier'
+  | 'produkt_pur';
+
+// Auswahl-Optionen für `produkt_pur` ("Nur Produkt"). Tokens entsprechen den
+// HubSpot-Multi-Select-Werten in `angebotene_produkte`. Aktuell nur AI Agents
+// — weitere Produkt-Tokens hier ergänzen, sobald sie cockpit-seitig relevant
+// werden.
+export const DEAL_PRODUKT_PUR_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'frontdesk', label: 'AI Agents' },
+];
 
 export const DEAL_DEFAULT_FIELD: DealFieldType = 'createdate';
 
@@ -98,6 +107,12 @@ export function buildDealFieldConfigs(
         { value: 'S4', label: 'S4' },
       ],
     },
+    {
+      type: 'produkt_pur',
+      label: 'Nur Produkt',
+      inputKind: 'enum',
+      enumOptions: DEAL_PRODUKT_PUR_OPTIONS.map(o => ({ ...o })),
+    },
   ];
 }
 
@@ -112,6 +127,7 @@ export function getDealInputKind(type: DealFieldType): FieldInputKind {
       return 'number';
     case 'status':
     case 'icp_tier':
+    case 'produkt_pur':
       return 'enum';
   }
 }
@@ -147,6 +163,15 @@ function matchDealCriterion(
 
   if (c.type === 'icp_tier') {
     return deal.icpTier === c.stringValue;
+  }
+
+  if (c.type === 'produkt_pur') {
+    // HubSpot serialisiert das Multi-Select `angebotene_produkte` als
+    // semicolon-separierte Token-Liste. Wir matchen exakt dann, wenn genau
+    // ein Token gesetzt ist und er der gewählten Option entspricht — d.h.
+    // der Deal enthält ausschließlich dieses Produkt.
+    const tokens = deal.angeboteneProdukte.split(';').map(p => p.trim()).filter(Boolean);
+    return tokens.length === 1 && tokens[0] === c.stringValue;
   }
 
   if (c.type === 'createdate') {

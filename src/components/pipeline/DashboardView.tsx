@@ -83,6 +83,7 @@ const DASHBOARD_SYSTEM_BADGE_ICP_S1 = 'system:dashboard-icp-s1';
 const DASHBOARD_SYSTEM_BADGE_ICP_S2 = 'system:dashboard-icp-s2';
 const DASHBOARD_SYSTEM_BADGE_ICP_S3 = 'system:dashboard-icp-s3';
 const DASHBOARD_SYSTEM_BADGE_ICP_S4 = 'system:dashboard-icp-s4';
+const DASHBOARD_SYSTEM_BADGE_PURE_FRONTDESK = 'system:dashboard-pure-frontdesk';
 
 // Filter-Typen/Engine sind in ./filters/ ausgelagert.
 
@@ -489,6 +490,22 @@ export function DashboardView({
             operator: 'after',
             dateFrom: '',
             numberFrom: 449,
+          }],
+        },
+      });
+      badges.push({
+        id: DASHBOARD_SYSTEM_BADGE_PURE_FRONTDESK,
+        label: 'Nur AI Agents',
+        system: true,
+        filter: {
+          logic: 'AND',
+          children: [{
+            kind: 'criterion',
+            id: 'sys-dash-pure-frontdesk',
+            type: 'produkt_pur',
+            operator: 'after',
+            dateFrom: '',
+            stringValue: 'frontdesk',
           }],
         },
       });
