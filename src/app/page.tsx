@@ -253,7 +253,7 @@ function PipelineOverviewContent() {
   // dealIsLost / projectIsClosed erweitert. Alte localStorage-Einträge ohne
   // diese Felder hätten sonst die neuen Filter-Badges falsch zählen lassen
   // (alle als "offen", weil undefined → falsy).
-  const projectsCacheKey = selectedProdukt === 'frontdesk' ? `projects-overview-frontdesk-v4` : null;
+  const projectsCacheKey = selectedProdukt === 'frontdesk' ? `projects-overview-frontdesk-v5` : null;
   const cachedProjects = useMemo(
     () => hydrated && projectsCacheKey ? getCachedData<ProjectsOverviewResponse>(projectsCacheKey) : null,
     [hydrated, projectsCacheKey]

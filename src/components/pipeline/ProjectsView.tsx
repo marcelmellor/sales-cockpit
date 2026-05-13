@@ -135,7 +135,11 @@ export function ProjectsView({ data, isLoading }: Props) {
 
   const filteredProjects = useMemo(() => {
     return allProjects.filter((p) => {
-      if (filterWonOpenDeals && p.dealIsLost) return false;
+      // "Gewonnen / Offene Deals" schließt sowohl Lost-Deals als auch reine
+      // Negotiation-Projektionen aus — letztere sind noch keine Verbindlichkeit.
+      if (filterWonOpenDeals && (p.dealIsLost || p.dateSource === 'negotiation-projected')) {
+        return false;
+      }
       if (filterOpenProjects && p.projectIsClosed) return false;
       return true;
     });
@@ -159,7 +163,7 @@ export function ProjectsView({ data, isLoading }: Props) {
 
   // Counts pro Badge — als kleine Zahl neben dem Label.
   const wonOpenDealsCount = useMemo(
-    () => allProjects.filter((p) => !p.dealIsLost).length,
+    () => allProjects.filter((p) => !p.dealIsLost && p.dateSource !== 'negotiation-projected').length,
     [allProjects],
   );
   const openProjectsCount = useMemo(
@@ -288,23 +292,30 @@ export function ProjectsView({ data, isLoading }: Props) {
           const isInferred = project.dateSource === 'deal-won-fallback';
           const isOverdue = !isCompleted && plannedEnd.getTime() < now.getTime();
 
-          // Sub-Balken. Zwei Kinds:
-          //   normal = alles, was nicht akut überfällig ist (gelb).
-          //            Umfasst sowohl die ursprüngliche Testphase als auch
-          //            bereits abgeschlossene Projekte.
-          //   late   = offen, plannedEnd liegt in der Vergangenheit, ab
-          //            plannedEnd bis ans Ende der aktuellen Woche (rot).
+          // Sub-Balken. Drei Kinds:
+          //   normal    = alles, was nicht akut überfällig oder bloß
+          //               projektiert ist (gelb).
+          //   late      = offen, plannedEnd liegt in der Vergangenheit, ab
+          //               plannedEnd bis ans Ende der aktuellen Woche (rot).
+          //   projected = potenzielles Projekt aus einem Negotiation-Deal,
+          //               start = heute (grau).
           // Schraffur ist orthogonal: gilt für alle Segmente, wenn das Datum
           // aus dem Won-Fallback abgeleitet ist (`isInferred`) UND das
           // Projekt noch nicht abgeschlossen ist.
           const segments: Array<{
             left: number;
             width: number;
-            kind: 'normal' | 'late';
+            kind: 'normal' | 'late' | 'projected';
           }> = [];
+          const isProjected = project.dateSource === 'negotiation-projected';
           const hatched = isInferred && !isCompleted;
 
-          if (isCompleted) {
+          if (isProjected) {
+            // Potenzielles Projekt aus Negotiation-Deal: kompletter Balken grau.
+            const left = pct(projStart);
+            const right = pct(barEnd);
+            if (right > left) segments.push({ left, width: right - left, kind: 'projected' });
+          } else if (isCompleted) {
             // Resolved → Balken bis zum tatsächlichen Ende.
             const left = pct(projStart);
             const right = pct(barEnd);
@@ -368,16 +379,25 @@ export function ProjectsView({ data, isLoading }: Props) {
                   open={project.childTasks.open}
                   done={project.childTasks.done}
                 />
-                <a
-                  href={project.jiraUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[11px] text-gray-400 hover:text-gray-600 inline-flex items-center gap-0.5 flex-shrink-0"
-                  title={project.jiraSummary}
-                >
-                  {project.jiraKey}
-                  <ExternalLink className="h-2.5 w-2.5" />
-                </a>
+                {project.jiraKey && project.jiraUrl ? (
+                  <a
+                    href={project.jiraUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] text-gray-400 hover:text-gray-600 inline-flex items-center gap-0.5 flex-shrink-0"
+                    title={project.jiraSummary}
+                  >
+                    {project.jiraKey}
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
+                ) : (
+                  <span
+                    className="text-[11px] text-gray-300 flex-shrink-0"
+                    title="Kein JIRA-Issue verlinkt"
+                  >
+                    kein JIRA
+                  </span>
+                )}
               </div>
 
               <div className="flex-1 relative">
@@ -401,15 +421,18 @@ export function ProjectsView({ data, isLoading }: Props) {
                 {segments.map((seg, i) => {
                   const isFirst = i === 0;
                   const isLast = i === segments.length - 1;
-                  // Zwei-Farben-Schema:
-                  //   late  → rot (offen + Test-Ende in der Vergangenheit)
-                  //   normal → gelb (alles andere — inkl. abgeschlossen, läuft, in der Zukunft).
+                  // Drei-Farben-Schema:
+                  //   late      → rot (offen + Test-Ende in der Vergangenheit)
+                  //   projected → grau (potenzielles Projekt aus Negotiation-Deal)
+                  //   normal    → gelb (alles andere — inkl. abgeschlossen, läuft, in der Zukunft).
                   // Die Schraffur (hatched, won-fallback) bleibt unabhängig
                   // erhalten und liegt über dem gelben Untergrund.
                   const cls =
                     seg.kind === 'late'
                       ? 'bg-red-200 border-red-300'
-                      : 'bg-amber-200 border-amber-300';
+                      : seg.kind === 'projected'
+                        ? 'bg-gray-200 border-gray-300'
+                        : 'bg-amber-200 border-amber-300';
                   const radius =
                     isFirst && isLast
                       ? 'rounded'

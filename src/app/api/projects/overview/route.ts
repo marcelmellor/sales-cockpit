@@ -19,7 +19,12 @@ const SALES_PIPELINE_ID = '3576006860';
 //   also leiten wir den 4-Wochen-Block aus dem Won-Datum ab. Das ist eine
 //   Annahme, die im Frontend schraffiert dargestellt wird, damit klar ist:
 //   im JIRA fehlt das Datum.
-export type ProjectDateSource = 'jira-test-phase' | 'deal-won-fallback';
+// - negotiation-projected: Deal ist in Commercial Negotiation, der PoC ist
+//   noch nicht angefangen. Wir projizieren auf "heute + 4 Wochen", als ob
+//   der Deal heute gewonnen würde — damit man potenzielle Projekte sieht.
+//   Im Frontend grau dargestellt; standardmäßig versteckt hinter dem
+//   "Gewonnen/Offene Deals"-Filter.
+export type ProjectDateSource = 'jira-test-phase' | 'deal-won-fallback' | 'negotiation-projected';
 
 export interface ProjectOverviewItem {
   dealId: string;
@@ -117,15 +122,27 @@ export async function GET(request: Request) {
       produkt,
     );
 
-    // We only care about deals that already point at a JIRA issue.
+    type DealRow = (typeof dealsWithAssociations.results)[number];
+
+    function isNegotiationStage(label: string): boolean {
+      return label.toLowerCase().includes('negotiation');
+    }
+
+    // Deals mit jira_story brauchen wir für den JIRA-Fetch.
     const dealsWithJira = dealsWithAssociations.results
       .map((deal) => ({
         deal,
         jiraKey: extractJiraIssueKey(deal.properties.jira_story ?? null),
       }))
-      .filter((entry): entry is { deal: typeof entry.deal; jiraKey: string } => !!entry.jiraKey);
+      .filter((entry): entry is { deal: DealRow; jiraKey: string } => !!entry.jiraKey);
 
-    if (dealsWithJira.length === 0) {
+    // Negotiation-Deals zeigen wir zusätzlich als "potenzielle Projekte" an —
+    // auch wenn sie keine `jira_story` verlinkt haben.
+    const dealsInNegotiation = dealsWithAssociations.results.filter((d) =>
+      isNegotiationStage(stageLabelById.get(d.properties.dealstage ?? '') ?? ''),
+    );
+
+    if (dealsWithJira.length === 0 && dealsInNegotiation.length === 0) {
       const empty: ProjectsOverviewResponse = { projects: [], unscheduledCount: 0 };
       return NextResponse.json({ data: empty });
     }
@@ -135,10 +152,12 @@ export async function GET(request: Request) {
     // Projekte tab only shows already-active projects, so the noisier company
     // disambiguation logic isn't needed.
     const companyIds = new Set<string>();
-    for (const { deal } of dealsWithJira) {
+    const collectCompany = (deal: DealRow) => {
       const companyAssoc = deal.associations?.companies?.results?.[0];
       if (companyAssoc) companyIds.add(companyAssoc.id);
-    }
+    };
+    for (const { deal } of dealsWithJira) collectCompany(deal);
+    for (const deal of dealsInNegotiation) collectCompany(deal);
 
     const companiesMap = new Map<string, { name: string }>();
     if (companyIds.size > 0) {
@@ -196,87 +215,58 @@ export async function GET(request: Request) {
     const projects: ProjectOverviewItem[] = [];
     let unscheduledCount = 0;
 
-    for (const { deal, jiraKey } of dealsWithJira) {
-      const issue = issuesByKey.get(jiraKey);
-      if (!issue) {
-        // Linked issue missing or inaccessible — count, but don't fail the whole response.
-        unscheduledCount += 1;
-        continue;
-      }
+    const todayIso = new Date().toISOString().slice(0, 10);
 
-      // Anker bestimmen: bevorzugt JIRA "Ende der Testphase". Fallback: wenn
-      // der Deal gewonnen ist, nehmen wir das Won-Datum als Projektstart und
-      // setzen Ende auf +27d. So fällt der Balken trotzdem in die Wochen-
-      // ansicht — schraffiert, damit klar ist, dass das JIRA-Datum fehlt.
-      let startDate: string;
-      let endDate: string;
-      let dateSource: ProjectDateSource;
-
-      if (issue.testPhaseEnd) {
-        endDate = issue.testPhaseEnd;
-        startDate = shiftIsoDate(endDate, -(PROJECT_LENGTH_DAYS - 1));
-        dateSource = 'jira-test-phase';
-      } else {
-        const closedateRaw = deal.properties.closedate;
-        const stageLabel = stageLabelById.get(deal.properties.dealstage ?? '') ?? '';
-        const isWon = isWonStageLabel(stageLabel);
-        if (!closedateRaw || !isWon) {
-          unscheduledCount += 1;
-          continue;
-        }
-        // closedate kommt als ISO-Timestamp (`2026-04-29T11:33:59.867Z`).
-        // Wir nehmen den Datumsteil — der Won-Tag ist die Konvention für den
-        // Beginn der 4-wöchigen Implementation/Testphase.
-        const closeDay = closedateRaw.slice(0, 10);
-        startDate = closeDay;
-        endDate = shiftIsoDate(closeDay, PROJECT_LENGTH_DAYS - 1);
-        dateSource = 'deal-won-fallback';
-      }
-
+    // Helper: baut ein ProjectOverviewItem aus einem Deal + optional Issue +
+    // dem ausgehandelten Datumspaar/dateSource. JIRA-spezifische Felder sind
+    // leer, wenn kein Issue (negotiation ohne jira_story).
+    function buildItem(
+      deal: DealRow,
+      issue: typeof issues[number] | null,
+      startDate: string,
+      endDate: string,
+      dateSource: ProjectDateSource,
+    ): ProjectOverviewItem {
       const companyId = deal.associations?.companies?.results?.[0]?.id;
       const companyName =
         (companyId ? companiesMap.get(companyId)?.name : undefined) ||
         deal.properties.dealname ||
         'Unknown';
-
-      // resolutiondate kommt als ISO-Timestamp; wir nehmen den Datumsteil.
-      const actualEndDate = issue.resolutionDate ? issue.resolutionDate.slice(0, 10) : null;
-
-      // Flags für die Frontend-Filter-Badges berechnen wir serverseitig, damit
-      // UI und API dieselbe Klassifizierung verwenden.
       const dealStageLabel = stageLabelById.get(deal.properties.dealstage ?? '') ?? '';
       const dealIsLost = isLostStageLabel(dealStageLabel);
-      const jiraStatusLower = issue.status.name.toLowerCase();
-      const projectIsClosed =
+      const actualEndDate = issue?.resolutionDate ? issue.resolutionDate.slice(0, 10) : null;
+
+      const jiraStatusLower = issue?.status.name.toLowerCase() ?? '';
+      const projectIsClosed = !!issue && (
         !!issue.resolutionDate ||
         jiraStatusLower.includes('fertig') ||
         jiraStatusLower.includes('done') ||
         jiraStatusLower.includes('closed') ||
         jiraStatusLower.includes('abgeschlossen') ||
-        jiraStatusLower.includes('kunde verloren');
+        jiraStatusLower.includes('kunde verloren')
+      );
 
-      // Sub-Tasks (Children) auszählen — "done" wenn JIRA Status-Kategorie
-      // "done" liefert (deckt "Fertig", "Abgeschlossen", "Done" usw. ab) oder
-      // resolutiondate gesetzt ist; sonst "open".
-      const childIssues = childrenByParent.get(issue.key) ?? [];
       let childOpen = 0;
       let childDone = 0;
-      for (const c of childIssues) {
-        const done = c.resolutionDate || c.status.statusCategory?.key === 'done';
-        if (done) childDone += 1;
-        else childOpen += 1;
+      if (issue) {
+        const childIssues = childrenByParent.get(issue.key) ?? [];
+        for (const c of childIssues) {
+          const done = c.resolutionDate || c.status.statusCategory?.key === 'done';
+          if (done) childDone += 1;
+          else childOpen += 1;
+        }
       }
 
-      projects.push({
+      return {
         dealId: deal.id,
         dealName: deal.properties.dealname || 'Unknown',
         hubspotUrl: `https://app.hubspot.com/contacts/27058496/record/0-3/${deal.id}`,
         companyName,
-        jiraKey: issue.key,
-        jiraUrl: issue.url,
-        jiraSummary: issue.summary,
-        jiraStatus: issue.status.name,
-        jiraIssueType: issue.issueType.name,
+        jiraKey: issue?.key ?? '',
+        jiraUrl: issue?.url ?? '',
+        jiraSummary: issue?.summary ?? '',
+        jiraStatus: issue?.status.name ?? '',
+        jiraIssueType: issue?.issueType.name ?? '',
         endDate,
         startDate,
         actualEndDate,
@@ -285,7 +275,68 @@ export async function GET(request: Request) {
         dealIsLost,
         projectIsClosed,
         childTasks: { open: childOpen, done: childDone },
-      });
+      };
+    }
+
+    // Dedupe: ein Deal soll nur ein Item pro Aufruf produzieren. Wenn er in
+    // Negotiation ist UND eine jira_story hat, gewinnt der jira_story-Pfad
+    // (testPhaseEnd oder Won-Fallback). Erst wenn weder testPhaseEnd noch Won-
+    // Fallback greifen, fällt der Deal in den negotiation-projected-Pfad.
+    const emittedDealIds = new Set<string>();
+
+    // Pfad 1: Deals mit jira_story
+    for (const { deal, jiraKey } of dealsWithJira) {
+      const issue = issuesByKey.get(jiraKey);
+      const stageLabel = stageLabelById.get(deal.properties.dealstage ?? '') ?? '';
+      const isWon = isWonStageLabel(stageLabel);
+      const isNegotiation = isNegotiationStage(stageLabel);
+
+      if (!issue) {
+        // Linked issue missing or inaccessible — count, aber den Deal nicht verlieren,
+        // falls er in Negotiation ist: dann fließt er gleich in den Negotiation-Pfad.
+        if (!isNegotiation) unscheduledCount += 1;
+        continue;
+      }
+
+      if (issue.testPhaseEnd) {
+        const endDate = issue.testPhaseEnd;
+        const startDate = shiftIsoDate(endDate, -(PROJECT_LENGTH_DAYS - 1));
+        projects.push(buildItem(deal, issue, startDate, endDate, 'jira-test-phase'));
+        emittedDealIds.add(deal.id);
+        continue;
+      }
+
+      const closedateRaw = deal.properties.closedate;
+      if (isWon && closedateRaw) {
+        const closeDay = closedateRaw.slice(0, 10);
+        projects.push(
+          buildItem(deal, issue, closeDay, shiftIsoDate(closeDay, PROJECT_LENGTH_DAYS - 1), 'deal-won-fallback'),
+        );
+        emittedDealIds.add(deal.id);
+        continue;
+      }
+
+      if (isNegotiation) {
+        // Negotiation mit jira_story aber ohne nutzbares Datum → projected.
+        // Issue trotzdem mitgeben, damit Sub-Task-Counts und Link funktionieren.
+        projects.push(
+          buildItem(deal, issue, todayIso, shiftIsoDate(todayIso, PROJECT_LENGTH_DAYS - 1), 'negotiation-projected'),
+        );
+        emittedDealIds.add(deal.id);
+        continue;
+      }
+
+      // Hat jira_story aber kein nutzbares Datum + nicht in Negotiation → unscheduled.
+      unscheduledCount += 1;
+    }
+
+    // Pfad 2: Negotiation-Deals ohne jira_story (oder die in Pfad 1 nicht
+    // emittet wurden — z.B. weil das verlinkte Issue nicht zugreifbar war).
+    for (const deal of dealsInNegotiation) {
+      if (emittedDealIds.has(deal.id)) continue;
+      projects.push(
+        buildItem(deal, null, todayIso, shiftIsoDate(todayIso, PROJECT_LENGTH_DAYS - 1), 'negotiation-projected'),
+      );
     }
 
     // Sort by start date so the UI gets a stable, chronologically meaningful order.
