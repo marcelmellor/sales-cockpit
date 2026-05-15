@@ -7,13 +7,13 @@
 
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
-import type { FieldConfig, FieldInputKind, FilterCriterion, FilterNode } from './types';
+import type { FieldConfig, FieldInputKind, FilterCriterion, FilterNode } from '@sipgate/revop-ui';
 import {
   applyFilters as applyFiltersGeneric,
   criterionIsComplete,
   hasCriterionOfTypes,
   matchTimestamp,
-} from './engine';
+} from '@sipgate/revop-ui';
 
 export type DealFieldType =
   | 'createdate'

@@ -9,7 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@sipgate/revop-ui": "github:sipgate/sipgate-revop-ui#v0.0.3",
+    "@sipgate/revop-ui": "github:sipgate/sipgate-revop-ui#v0.0.4",
     "@tanstack/react-query": "^5.90.20",
     "@tiptap/extension-placeholder": "^3.17.1",
     "@tiptap/react": "^3.17.1",

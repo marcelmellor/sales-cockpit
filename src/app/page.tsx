@@ -12,8 +12,8 @@ import { SpreadsheetView } from '@/components/pipeline/SpreadsheetView';
 import { LeadsSection } from '@/components/pipeline/LeadsSection';
 import { LeadsSpreadsheetView } from '@/components/pipeline/LeadsSpreadsheetView';
 import { ProjectsView } from '@/components/pipeline/ProjectsView';
-import { FilterBuilder } from '@/components/pipeline/filters/FilterBuilder';
 import {
+  FilterBuilder,
   getDefaultFilterState,
   loadFilterSets,
   saveFilterSets,
@@ -21,12 +21,12 @@ import {
   combineFilterWithBadges,
   loadActiveBadgeIds,
   saveActiveBadgeIds,
-} from '@/components/pipeline/filters/engine';
+} from '@sipgate/revop-ui';
 import type {
   FilterBadge,
   FilterState,
   SavedFilterSet,
-} from '@/components/pipeline/filters/types';
+} from '@sipgate/revop-ui';
 import {
   DEAL_DEFAULT_FIELD,
   buildDealFieldConfigs,

@@ -7,8 +7,8 @@ import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
-import { FilterBuilder } from './filters/FilterBuilder';
 import {
+  FilterBuilder,
   getDefaultFilterState,
   makeCriterion,
   makeId,
@@ -18,8 +18,8 @@ import {
   combineFilterWithBadges,
   loadActiveBadgeIds,
   saveActiveBadgeIds,
-} from './filters/engine';
-import type { FilterBadge, FilterState, SavedFilterSet } from './filters/types';
+} from '@sipgate/revop-ui';
+import type { FilterBadge, FilterState, SavedFilterSet } from '@sipgate/revop-ui';
 import {
   DEAL_DEFAULT_FIELD,
   DEAL_DATE_FIELD_TYPES,

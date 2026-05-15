@@ -4,12 +4,12 @@
 // Minuten/Alter/In-Stage).
 
 import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
-import type { FieldConfig, FieldInputKind, FilterCriterion, FilterNode } from './types';
+import type { FieldConfig, FieldInputKind, FilterCriterion, FilterNode } from '@sipgate/revop-ui';
 import {
   applyFilters as applyFiltersGeneric,
   criterionIsComplete,
   matchTimestamp,
-} from './engine';
+} from '@sipgate/revop-ui';
 
 export type LeadFieldType =
   | 'createdate'
