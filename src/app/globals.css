@@ -4,7 +4,12 @@
 /*
  * Brand tokens (fonts + sipgate color scales + Tailwind 4 @theme) live in
  * @sipgate/revop-ui/tokens.css. Anything below is cockpit-specific.
+ *
+ * Tailwind 4 ignores node_modules by default, so library component class
+ * names (e.g. rounded-full in FilterBuilder badges) would not be emitted
+ * into the bundle. Explicitly tell Tailwind to scan the shipped sources.
  */
+@source "../../node_modules/@sipgate/revop-ui/dist/**/*.js";
 
 body {
   background: var(--background);
