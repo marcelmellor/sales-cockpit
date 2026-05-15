@@ -193,14 +193,13 @@ function PipelineOverviewContent() {
   // Cache key includes product for separate caching per product group
   const cacheKey = selectedPipelineId && selectedProdukt ? `${selectedPipelineId}-${selectedProdukt}` : null;
 
-  // Get cached data for initial render. Gated hinter `hydrated`, weil
-  // `getCachedData` clientseitig synchron aus localStorage liest. Ohne den
-  // Guard wäre Server-Render `null` (kein window), Initial-Client-Render
-  // potenziell ein Cache-Treffer → Hydration-Mismatch.
-  const cachedOverview = useMemo(
-    () => hydrated && cacheKey ? getCachedData<PipelineOverviewResponse>(`overview-${cacheKey}`) : null,
-    [hydrated, cacheKey]
-  );
+  // Cache aus localStorage als `initialData`-Funktion lesen — lazy, läuft nur
+  // beim ersten Mount der jeweiligen Query und nur clientseitig (`getCachedData`
+  // bricht serverseitig sofort ab, weil `window === undefined`). Damit ist die
+  // Query beim Reload sofort im success-State, ohne erst einen Fetch zu
+  // starten und beim Mount-Effect den Cache nachzuziehen — letzteres war zuvor
+  // wirkungslos, weil React Query `initialData` nur beim allerersten Render
+  // ausliest. Loading-abhängige UI bleibt weiter hinter `hydrated` gegated.
 
   // Fetch pipeline overview filtered by product (server-side)
   const { data: overviewData, isLoading: overviewLoading, error: overviewError } = useQuery({
@@ -215,20 +214,16 @@ function PipelineOverviewContent() {
     },
     enabled: isAuthenticated && !!selectedPipelineId && !!selectedProdukt,
     staleTime: 5 * 60 * 1000,
-    initialData: cachedOverview ?? undefined,
+    initialData: () =>
+      cacheKey ? getCachedData<PipelineOverviewResponse>(`overview-${cacheKey}`) ?? undefined : undefined,
   });
   const overviewDeals = overviewData?.deals;
   const overviewStages = overviewData?.stages;
 
   // Fetch leads for the selected portfolio (separate CRM object, own pipeline).
-  // Wird analog zu Deals auch in localStorage gecached, damit nach einem Reload
-  // sofort Inhalte dastehen. Cache-Key nur nach Produkt, weil der Leads-Endpoint
-  // keine Pipeline-Auswahl kennt (fix auf LEAD_PIPELINE_ID im Route-Handler).
+  // Cache-Key nur nach Produkt, weil der Leads-Endpoint keine Pipeline-Auswahl
+  // kennt (fix auf LEAD_PIPELINE_ID im Route-Handler).
   const leadsCacheKey = selectedProdukt ? `leads-overview-${selectedProdukt}` : null;
-  const cachedLeads = useMemo(
-    () => hydrated && leadsCacheKey ? getCachedData<LeadsOverviewResponse>(leadsCacheKey) : null,
-    [hydrated, leadsCacheKey]
-  );
 
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
     queryKey: ['pipeline-leads', selectedProdukt],
@@ -242,7 +237,8 @@ function PipelineOverviewContent() {
     },
     enabled: isAuthenticated && !!selectedProdukt,
     staleTime: 5 * 60 * 1000,
-    initialData: cachedLeads ?? undefined,
+    initialData: () =>
+      leadsCacheKey ? getCachedData<LeadsOverviewResponse>(leadsCacheKey) ?? undefined : undefined,
   });
 
   // Projects (Wochenansicht) — bisher nur für AI Agents implementiert. Andere
@@ -254,10 +250,6 @@ function PipelineOverviewContent() {
   // diese Felder hätten sonst die neuen Filter-Badges falsch zählen lassen
   // (alle als "offen", weil undefined → falsy).
   const projectsCacheKey = selectedProdukt === 'frontdesk' ? `projects-overview-frontdesk-v5` : null;
-  const cachedProjects = useMemo(
-    () => hydrated && projectsCacheKey ? getCachedData<ProjectsOverviewResponse>(projectsCacheKey) : null,
-    [hydrated, projectsCacheKey]
-  );
   const { data: projectsData, isLoading: projectsLoading } = useQuery({
     queryKey: ['projects-overview', selectedProdukt],
     queryFn: async () => {
@@ -270,7 +262,8 @@ function PipelineOverviewContent() {
     },
     enabled: isAuthenticated && selectedProdukt === 'frontdesk',
     staleTime: 5 * 60 * 1000,
-    initialData: cachedProjects ?? undefined,
+    initialData: () =>
+      projectsCacheKey ? getCachedData<ProjectsOverviewResponse>(projectsCacheKey) ?? undefined : undefined,
   });
 
   // Extract deal IDs for meetings query
@@ -880,11 +873,17 @@ function PipelineOverviewContent() {
               </p>
             </div>
           </div>
-        ) : overviewLoading ? (
+        ) : !hydrated || overviewLoading || leadsLoading ? (
+          // `!hydrated` mit reinnehmen, damit Server-Render (kein localStorage)
+          // und Initial-Client-Render (mit Cache via `initialData`) dasselbe
+          // HTML produzieren — sonst gibt's einen Hydration-Mismatch.
+          // Außerdem auf `leadsLoading` warten, damit das Dashboard nicht
+          // erst mit fehlender Source-Aufteilung ("Prospects/Woche" cascade,
+          // "Leads/Woche" leer) erscheint und sich Sekunden später nachfüllt.
           <div className="max-w-7xl mx-auto px-4">
             <div className="flex items-center justify-center gap-2 text-gray-400 py-12">
               <Loader2 className="h-6 w-6 animate-spin" />
-              Deals werden geladen...
+              Daten werden geladen...
             </div>
           </div>
         ) : (

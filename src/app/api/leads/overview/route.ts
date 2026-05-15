@@ -114,7 +114,17 @@ export async function GET(request: Request) {
 
     const client = getHubSpotClient();
 
-    const pipelinesResp = await client.getLeadPipelines();
+    // Phase 1 — alle drei Top-Level-Calls parallel anstoßen. Die existing-
+    // Deals-Lookup hängt nicht von den Leads ab und kann gleichzeitig mit
+    // pipelines + leads laufen.
+    const [pipelinesResp, leadsResp, existingDealsByContact] = await Promise.all([
+      client.getLeadPipelines(),
+      client.getLeadsWithAssociations(LEAD_PIPELINE_ID, produkt || undefined),
+      produkt
+        ? client.getContactsWithDealInProdukt(DEALS_PIPELINE_ID, produkt)
+        : Promise.resolve(new Map<string, { dealId: string; dealName: string }>()),
+    ]);
+
     const pipeline = pipelinesResp.results.find(p => p.id === LEAD_PIPELINE_ID);
 
     if (!pipeline) {
@@ -126,20 +136,50 @@ export async function GET(request: Request) {
 
     const stagesById = new Map(pipeline.stages.map(s => [s.id, s]));
 
-    const leadsResp = await client.getLeadsWithAssociations(LEAD_PIPELINE_ID, produkt || undefined);
-
-    // Batch-fetch company names
+    // IDs aus den Leads für Phase 2 sammeln.
     const companyIds = new Set<string>();
+    const contactIdsForAnalytics = new Set<string>();
     for (const l of leadsResp.results) {
       const cid = l.associations?.companies?.results?.[0]?.id;
       if (cid) companyIds.add(cid);
+      const contactId = l.associations?.contacts?.results?.[0]?.id;
+      if (contactId) contactIdsForAnalytics.add(contactId);
     }
+    const leadIds = leadsResp.results.map(l => l.id);
+
+    // Phase 2 — Companies + StageHistory + ContactAnalytics parallel.
+    // ContactAnalytics fail-safe: bricht der Batch-Read (fehlender Scope, 429,
+    // ...), zeigen wir leere Spalten statt den ganzen Leads-View zu killen.
+    const [companiesResp, stageHistories, contactsResp] = await Promise.all([
+      companyIds.size > 0
+        ? client.getCompanies(Array.from(companyIds))
+        : Promise.resolve({ results: [] as Array<{ id: string; properties: { name?: string } }> }),
+      client.getLeadStageHistories(leadIds),
+      contactIdsForAnalytics.size > 0
+        ? client.getContacts(Array.from(contactIdsForAnalytics), [
+            'hs_analytics_source',
+            'hs_analytics_first_url',
+          ]).catch((err) => {
+            console.error('[leads/overview] contact analytics batch failed:', err);
+            return { results: [] as Array<{ id: string; properties: Record<string, string> }> };
+          })
+        : Promise.resolve({ results: [] as Array<{ id: string; properties: Record<string, string> }> }),
+    ]);
+
     const companiesMap = new Map<string, { name: string }>();
-    if (companyIds.size > 0) {
-      const companies = await client.getCompanies(Array.from(companyIds));
-      for (const c of companies.results) {
-        companiesMap.set(c.id, { name: c.properties.name || 'Unknown' });
-      }
+    for (const c of companiesResp.results) {
+      companiesMap.set(c.id, { name: c.properties.name || 'Unknown' });
+    }
+
+    const contactAnalyticsById = new Map<
+      string,
+      { source: string | null; firstUrl: string | null }
+    >();
+    for (const c of contactsResp.results) {
+      contactAnalyticsById.set(c.id, {
+        source: c.properties.hs_analytics_source || null,
+        firstUrl: c.properties.hs_analytics_first_url || null,
+      });
     }
 
     const calculateLeadAge = (createdate: string | undefined): number => {
@@ -149,18 +189,14 @@ export async function GET(request: Request) {
       return Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24));
     };
 
-    // Stage-Historie für alle Leads batch-lesen und daraus pro Lead den
-    // letzten Eintritt in die aktuelle Stage + Tage in Stage berechnen.
-    const leadIds = leadsResp.results.map(l => l.id);
-    const stageHistories = await client.getLeadStageHistories(leadIds);
+    // Pro Lead: letzter Eintritt in die aktuelle Stage + Tage in Stage.
+    // HubSpot liefert die Historie absteigend (neueste zuerst); wir suchen den
+    // neuesten Eintrag, dessen Wert die aktuelle Stage ist.
     const stageInfoById = new Map<string, { daysInStage: number; stageEnteredAt: string | null }>();
     const nowMs = Date.now();
     for (const lead of leadsResp.results) {
       const currentStage = lead.properties.hs_pipeline_stage;
       const history = stageHistories.get(lead.id) || [];
-      // HubSpot liefert die Historie absteigend (neueste zuerst). Wir suchen
-      // den neuesten Eintrag, dessen Wert die aktuelle Stage ist — das ist
-      // der Zeitpunkt, an dem der Lead in die jetzige Stage gewechselt hat.
       const latestEntry = history.find(h => h.value === currentStage);
       if (latestEntry?.timestamp) {
         const t = new Date(latestEntry.timestamp).getTime();
@@ -170,46 +206,6 @@ export async function GET(request: Request) {
         stageInfoById.set(lead.id, { daysInStage: -1, stageEnteredAt: null });
       }
     }
-
-    // Analytics-Properties (Original Source + First URL) des primären Kontakts
-    // batch-lesen. HubSpot trackt pro Contact, wie er reingekommen ist — genau
-    // der Vermerk, den man im Contact-Sidebar als "This contact was created
-    // from … Traffic from <url>" sieht.
-    const contactIdsForAnalytics = new Set<string>();
-    for (const l of leadsResp.results) {
-      const cid = l.associations?.contacts?.results?.[0]?.id;
-      if (cid) contactIdsForAnalytics.add(cid);
-    }
-    const contactAnalyticsById = new Map<
-      string,
-      { source: string | null; firstUrl: string | null }
-    >();
-    if (contactIdsForAnalytics.size > 0) {
-      try {
-        const contactsResp = await client.getContacts(
-          Array.from(contactIdsForAnalytics),
-          ['hs_analytics_source', 'hs_analytics_first_url'],
-        );
-        for (const c of contactsResp.results) {
-          contactAnalyticsById.set(c.id, {
-            source: c.properties.hs_analytics_source || null,
-            firstUrl: c.properties.hs_analytics_first_url || null,
-          });
-        }
-      } catch (err) {
-        // Analytics sind nicht-kritisch — wenn der Batch-Read fehlschlägt
-        // (fehlender Scope, 429 o.ä.) zeigen wir einfach leere Spalten statt
-        // den ganzen Leads-View abzubrechen.
-        console.error('[leads/overview] contact analytics batch failed:', err);
-      }
-    }
-
-    // Prüfen, ob der primäre Kontakt eines Leads bereits an einem Deal im
-    // gleichen Produkt-Bucket hängt (nur wenn produkt-gefiltert, sonst zu
-    // unspezifisch für das Tag).
-    const existingDealsByContact = produkt
-      ? await client.getContactsWithDealInProdukt(DEALS_PIPELINE_ID, produkt)
-      : new Map<string, { dealId: string; dealName: string }>();
 
     const leads: LeadOverviewItem[] = leadsResp.results.map((lead) => {
       const companyId = lead.associations?.companies?.results?.[0]?.id;
