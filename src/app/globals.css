@@ -9,7 +9,7 @@
  * names (e.g. rounded-full in FilterBuilder badges) would not be emitted
  * into the bundle. Explicitly tell Tailwind to scan the shipped sources.
  */
-@source "../../node_modules/@sipgate/revop-ui/dist/**/*.js";
+@source "../../node_modules/@sipgate/revop-ui";
 
 body {
   background: var(--background);
