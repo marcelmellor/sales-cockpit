@@ -152,13 +152,26 @@ fails, it *skips* affected deals from the returned map so the caller's
 `!categories` branch treats them as "keep, unknown category" rather than
 "drop". **Fix the scope — don't paper over this in code.**
 
-### Rate limits (known, not yet hardened)
+### Rate limits
 
-The endpoint `/api/deals/overview` can hit HubSpot's `ten_secondly_rolling`
-limit (~100 req/10s) because it fans out batch reads for deals,
-associations, line items, and owners. We currently rely on the client
-retrying on the next request. Hardening (concurrency cap, 429 backoff with
-`Retry-After`, short-TTL caches on pipelines/owners) is a deferred task.
+HubSpot enforces a per-second (~10 req/s) and a 10-secondly (~100 req/10s)
+limit per Private App. On page load, `/api/deals/overview`,
+`/api/leads/overview` and `/api/projects/overview` fire in parallel and each
+fans out 4–8 batch reads, which used to blow past the secondly limit and
+break the whole UI with 500s ("You have reached your secondly limit.").
+
+`src/lib/hubspot/client.ts` now handles this at the transport layer:
+
+- **Module-level semaphore** caps in-flight HubSpot requests at
+  `MAX_CONCURRENT_HUBSPOT_REQUESTS = 4`. One Node process = one bucket,
+  so this implicitly throttles all three overview endpoints together.
+- **429 retry** in `HubSpotClient.request`: up to `MAX_429_RETRIES = 5`,
+  honouring the `Retry-After` header (clamped to 10 s) with small jitter.
+  The semaphore slot is held during the backoff so the queue
+  back-pressures instead of stampeding on retry.
+
+Do not paper over residual 429s in callers — fix the limits here. If
+HubSpot pressure changes, tune the constants at the top of `client.ts`.
 
 ### Never fan out per deal — always batch
 

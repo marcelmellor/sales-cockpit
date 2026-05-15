@@ -19,6 +19,55 @@ function getAccessToken(): string {
   return pat;
 }
 
+// ---------------------------------------------------------------------------
+// Rate limiting
+//
+// HubSpot enforces a per-second (~10 req/s) and a 10-secondly (~100 req/10s)
+// limit per Private App. On page load, /api/deals/overview, /api/leads/overview
+// and /api/projects/overview fire in parallel and each fans out a handful of
+// batch reads — without throttling that blows past the secondly limit and the
+// whole UI breaks with 500s. We cap in-flight requests with a module-level
+// semaphore (single Node process == one bucket) and retry on 429 honouring
+// the Retry-After header. The slot stays held during the backoff so the
+// queue back-pressures naturally instead of stampeding on retry.
+// ---------------------------------------------------------------------------
+
+const MAX_CONCURRENT_HUBSPOT_REQUESTS = 4;
+const MAX_429_RETRIES = 5;
+
+let inFlightRequests = 0;
+const slotWaiters: Array<() => void> = [];
+
+function acquireSlot(): Promise<void> {
+  if (inFlightRequests < MAX_CONCURRENT_HUBSPOT_REQUESTS) {
+    inFlightRequests++;
+    return Promise.resolve();
+  }
+  // Hand off slots directly: when releaseSlot finds a waiter, it does NOT
+  // decrement inFlightRequests — the slot transfers to the waiter as-is.
+  return new Promise<void>(resolve => slotWaiters.push(resolve));
+}
+
+function releaseSlot(): void {
+  const next = slotWaiters.shift();
+  if (next) {
+    next();
+    return;
+  }
+  inFlightRequests--;
+}
+
+function parseRetryAfterMs(header: string | null): number {
+  if (!header) return 1000;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.min(seconds * 1000, 10_000);
+  }
+  return 1000;
+}
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
 /**
  * Creates a HubSpotClient. Reads the token lazily from env on each request.
  */
@@ -32,26 +81,46 @@ export class HubSpotClient {
     options: RequestInit = {}
   ): Promise<T> {
     const token = getAccessToken();
-
-    const response = await fetch(`${HUBSPOT_API_BASE}${endpoint}`, {
+    const url = `${HUBSPOT_API_BASE}${endpoint}`;
+    const init: RequestInit = {
       ...options,
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
         ...options.headers,
       },
-    });
+    };
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new HubSpotError(
-        error.message || `HubSpot API error: ${response.status}`,
-        response.status,
-        error
-      );
+    await acquireSlot();
+    try {
+      let attempt = 0;
+      while (true) {
+        const response = await fetch(url, init);
+
+        if (response.status === 429 && attempt < MAX_429_RETRIES) {
+          const delayMs =
+            parseRetryAfterMs(response.headers.get('Retry-After')) +
+            Math.floor(Math.random() * 150);
+          await response.text().catch(() => {});
+          await sleep(delayMs);
+          attempt++;
+          continue;
+        }
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new HubSpotError(
+            error.message || `HubSpot API error: ${response.status}`,
+            response.status,
+            error
+          );
+        }
+
+        return (await response.json()) as T;
+      }
+    } finally {
+      releaseSlot();
     }
-
-    return response.json();
   }
 
   // Deals
