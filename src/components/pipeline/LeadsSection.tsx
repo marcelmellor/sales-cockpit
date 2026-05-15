@@ -9,7 +9,7 @@ import {
   hubspotContactUrl,
   hubspotDealUrl,
 } from '@/lib/hubspot/urls';
-import { AgeLabel } from './AgeLabel';
+import { AgeLabel } from '@sipgate/revop-ui';
 
 type LeadSortField = 'company' | 'source' | 'minuten' | 'age';
 type LeadSortDirection = 'asc' | 'desc';

@@ -5,7 +5,7 @@ import { ExternalLink, Loader2 } from 'lucide-react';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import { getStageColor } from '@/lib/stage-colors';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
-import { AgeLabel } from './AgeLabel';
+import { AgeLabel } from '@sipgate/revop-ui';
 
 function formatRelativeDate(date: Date): { relative: string; absolute: string } {
   const now = new Date();

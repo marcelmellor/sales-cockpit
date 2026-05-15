@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { SalesCanvas } from '@/components/canvas/SalesCanvas';
 import { ExportButton } from '@/components/canvas/ExportButton';
 import { UserMenu } from '@/components/UserMenu';
-import { Autosuggest } from '@/components/ui/Autosuggest';
+import { Autosuggest } from '@sipgate/revop-ui';
 import { useCanvasStore } from '@/stores/canvas-store';
 import { Loader2, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';

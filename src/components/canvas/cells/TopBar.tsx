@@ -4,7 +4,7 @@ import { ExternalLink } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvas-store';
 import { getStageColor } from '@/lib/stage-colors';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
-import { AgeLabel } from '@/components/pipeline/AgeLabel';
+import { AgeLabel } from '@sipgate/revop-ui';
 
 export function TopBar() {
   const { canvasData } = useCanvasStore();
