@@ -14,6 +14,8 @@ import { LeadsSpreadsheetView } from '@/components/pipeline/LeadsSpreadsheetView
 import { ProjectsView } from '@/components/pipeline/ProjectsView';
 import {
   FilterBuilder,
+  Tab,
+  TabBar,
   getDefaultFilterState,
   loadFilterSets,
   saveFilterSets,
@@ -920,124 +922,85 @@ function PipelineOverviewContent() {
                   <RefreshCw className={`h-4 w-4 ${secondaryDataLoading || overviewLoading ? 'animate-spin' : ''}`} />
                 </button>
               </div>
-              <div className="flex items-center justify-between border-b border-gray-200">
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setViewMode('dashboard')}
-                    className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
-                      viewMode === 'dashboard'
-                        ? 'border-gray-900 text-gray-900 font-medium'
-                        : 'border-transparent text-gray-400 hover:text-gray-600'
-                    }`}
-                  >
-                    <BarChart3 className="h-3.5 w-3.5" />
-                    Dashboard
-                  </button>
-                  <button
-                    onClick={() => setViewMode('deals')}
-                    className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
-                      viewMode === 'deals'
-                        ? 'border-gray-900 text-gray-900 font-medium'
-                        : 'border-transparent text-gray-400 hover:text-gray-600'
-                    }`}
-                  >
-                    <LayoutGrid className="h-3.5 w-3.5" />
-                    Deals
-                  </button>
-                  <button
-                    onClick={() => setViewMode('leads')}
-                    className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
-                      viewMode === 'leads'
-                        ? 'border-gray-900 text-gray-900 font-medium'
-                        : 'border-transparent text-gray-400 hover:text-gray-600'
-                    }`}
-                  >
-                    <Users className="h-3.5 w-3.5" />
-                    Leads
-                    {leadsData && (
-                      <span className="ml-0.5 text-xs text-gray-400">
-                        ({leadsData.leads.filter(l => !l.leadStageIsClosed).length})
-                      </span>
+              <TabBar<ViewMode>
+                activeId={viewMode}
+                onChange={setViewMode}
+                trailing={
+                  <div className="flex items-center gap-4">
+                    {(viewMode === 'deals' || viewMode === 'leads') && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() =>
+                            viewMode === 'deals' ? setDealsSubView('sales') : setLeadsSubView('sales')
+                          }
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                            (viewMode === 'deals' ? dealsSubView : leadsSubView) === 'sales'
+                              ? 'bg-gray-900 text-white'
+                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          }`}
+                        >
+                          <LayoutGrid className="h-3 w-3" />
+                          Sales
+                        </button>
+                        <button
+                          onClick={() =>
+                            viewMode === 'deals' ? setDealsSubView('sheet') : setLeadsSubView('sheet')
+                          }
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                            (viewMode === 'deals' ? dealsSubView : leadsSubView) === 'sheet'
+                              ? 'bg-gray-900 text-white'
+                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          }`}
+                        >
+                          <Table2 className="h-3 w-3" />
+                          Sheet
+                        </button>
+                      </div>
                     )}
-                  </button>
-                  {selectedProdukt === 'frontdesk' && (
-                    <button
-                      onClick={() => setViewMode('projects')}
-                      className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
-                        viewMode === 'projects'
-                          ? 'border-gray-900 text-gray-900 font-medium'
-                          : 'border-transparent text-gray-400 hover:text-gray-600'
-                      }`}
-                    >
-                      <Calendar className="h-3.5 w-3.5" />
-                      Projekte
-                      {projectsData && (
-                        <span className="ml-0.5 text-xs text-gray-400">
-                          ({projectsData.projects.length})
-                        </span>
-                      )}
-                    </button>
-                  )}
-                </div>
-                <div className="flex items-center gap-4">
-                  {(viewMode === 'deals' || viewMode === 'leads') && (
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() =>
-                          viewMode === 'deals' ? setDealsSubView('sales') : setLeadsSubView('sales')
-                        }
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          (viewMode === 'deals' ? dealsSubView : leadsSubView) === 'sales'
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        <LayoutGrid className="h-3 w-3" />
-                        Sales
-                      </button>
-                      <button
-                        onClick={() =>
-                          viewMode === 'deals' ? setDealsSubView('sheet') : setLeadsSubView('sheet')
-                        }
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          (viewMode === 'deals' ? dealsSubView : leadsSubView) === 'sheet'
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        <Table2 className="h-3 w-3" />
-                        Sheet
-                      </button>
-                    </div>
-                  )}
-                  {((viewMode === 'deals' && dealsSubView === 'sales') ||
-                    (viewMode === 'leads' && leadsSubView === 'sales')) && (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-gray-400">Gruppierung</span>
-                      <button
-                        onClick={() => setGrouping('stage')}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          grouping === 'stage'
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        Nach Stage
-                      </button>
-                      <button
-                        onClick={() => setGrouping('none')}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          grouping === 'none'
-                            ? 'bg-gray-900 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        Keine
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
+                    {((viewMode === 'deals' && dealsSubView === 'sales') ||
+                      (viewMode === 'leads' && leadsSubView === 'sales')) && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-gray-400">Gruppierung</span>
+                        <button
+                          onClick={() => setGrouping('stage')}
+                          className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                            grouping === 'stage'
+                              ? 'bg-gray-900 text-white'
+                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          }`}
+                        >
+                          Nach Stage
+                        </button>
+                        <button
+                          onClick={() => setGrouping('none')}
+                          className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                            grouping === 'none'
+                              ? 'bg-gray-900 text-white'
+                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          }`}
+                        >
+                          Keine
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                }
+              >
+                <Tab id="dashboard" icon={BarChart3}>Dashboard</Tab>
+                <Tab id="deals" icon={LayoutGrid}>Deals</Tab>
+                <Tab
+                  id="leads"
+                  icon={Users}
+                  count={leadsData ? leadsData.leads.filter(l => !l.leadStageIsClosed).length : undefined}
+                >
+                  Leads
+                </Tab>
+                {selectedProdukt === 'frontdesk' && (
+                  <Tab id="projects" icon={Calendar} count={projectsData?.projects.length}>
+                    Projekte
+                  </Tab>
+                )}
+              </TabBar>
             </div>
 
             {/* View Content */}
