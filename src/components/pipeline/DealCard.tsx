@@ -6,6 +6,7 @@ import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import { getStageColor } from '@/lib/stage-colors';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
 import { AgeLabel } from '@sipgate/revop-ui';
+import { formatAmplitudeEvent, formatAmplitudeMonth } from '@/lib/amplitude/format';
 
 function formatRelativeDate(date: Date): { relative: string; absolute: string } {
   const now = new Date();
@@ -165,6 +166,17 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
           <h4 className="font-medium text-gray-900 truncate group-hover:text-blue-600 transition-colors">
             {deal.companyName}
           </h4>
+          {deal.amplitudeSource && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded-full bg-blue-50 text-blue-700 border border-blue-100 shrink-0"
+              title={`Amplitude: ${deal.amplitudeSource.eventType} · ${new Date(deal.amplitudeSource.occurredAt).toLocaleDateString('de-DE')}`}
+            >
+              {formatAmplitudeEvent(deal.amplitudeSource.eventType)}
+              <span className="text-blue-500/70 tabular-nums">
+                {formatAmplitudeMonth(deal.amplitudeSource.occurredAt)}
+              </span>
+            </span>
+          )}
           <button
             type="button"
             onClick={(e) => {

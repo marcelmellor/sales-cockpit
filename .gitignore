@@ -49,6 +49,9 @@ hubspot.config.yml
 # Local Netlify folder
 .netlify
 
+# local server-cache fallback (Netlify Blobs in prod, see src/lib/server-cache.ts)
+/.cache/
+
 # Claude Code local state (hooks + settings.json are tracked; these are not)
 /.claude/settings.local.json
 /.claude/worktrees/

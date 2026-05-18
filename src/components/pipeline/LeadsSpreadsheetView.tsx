@@ -8,6 +8,7 @@ import {
   hubspotContactUrl,
   hubspotDealUrl,
 } from '@/lib/hubspot/urls';
+import { formatAmplitudeEvent, formatAmplitudeMonth } from '@/lib/amplitude/format';
 
 const STORAGE_KEY = 'leads-spreadsheet-visible-columns';
 
@@ -88,6 +89,7 @@ function formatAnalyticsSource(value: string | null): string {
     .join(' ');
 }
 
+
 type ColumnKey =
   | 'companyName'
   | 'leadName'
@@ -105,6 +107,7 @@ type ColumnKey =
   | 'existingDeal'
   | 'analyticsSource'
   | 'analyticsFirstUrl'
+  | 'amplitudeSource'
   | 'utmSource'
   | 'utmMedium'
   | 'utmCampaign'
@@ -305,6 +308,32 @@ const COLUMNS: ColumnDef[] = [
     },
   },
   {
+    key: 'amplitudeSource',
+    label: 'Amplitude',
+    // Sortierung nach Datum (ältestes zuerst aufsteigend) — Leads ohne
+    // Match bleiben unten.
+    sortable: true,
+    getSortValue: (l) => (l.amplitudeSource ? new Date(l.amplitudeSource.occurredAt).getTime() : null),
+    render: (l) => {
+      const amp = l.amplitudeSource;
+      if (!amp) return <span className="text-gray-400">—</span>;
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-blue-50 text-blue-700 border border-blue-100"
+          title={`${amp.eventType} · ${new Date(amp.occurredAt).toLocaleString('de-DE')} · ${amp.anchor}`}
+        >
+          {formatAmplitudeEvent(amp.eventType)}
+          <span className="text-blue-500/70 tabular-nums">{formatAmplitudeMonth(amp.occurredAt)}</span>
+        </span>
+      );
+    },
+    getCsvValue: (l) => {
+      const amp = l.amplitudeSource;
+      if (!amp) return '';
+      return `${amp.eventType} (${new Date(amp.occurredAt).toISOString().slice(0, 10)})`;
+    },
+  },
+  {
     key: 'analyticsFirstUrl',
     label: 'Erste URL',
     sortable: true,
@@ -439,6 +468,7 @@ const DEFAULT_VISIBLE: ColumnKey[] = [
   'companyName',
   'leadStage',
   'leadSource',
+  'amplitudeSource',
   'product',
   'minuten',
   'leadAge',

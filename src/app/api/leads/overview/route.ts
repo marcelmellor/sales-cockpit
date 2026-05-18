@@ -1,6 +1,20 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getHubSpotClient } from '@/lib/hubspot/client';
+import { getOrFetch } from '@/lib/server-cache';
+import {
+  AmplitudeAttribution,
+  getAiAgentsAttributionByEmail,
+} from '@/lib/amplitude/attribution';
+
+const CACHE_TTL_SECONDS = 5 * 60;
+
+class LeadPipelineNotFoundError extends Error {
+  constructor(public pipelineId: string) {
+    super(`Lead pipeline ${pipelineId} not found`);
+    this.name = 'LeadPipelineNotFoundError';
+  }
+}
 
 // HubSpot has multiple lead pipelines in sipgate 2025 — "Inbound", "Outbound",
 // "Cold Calls", etc. The one tied to the sales portfolio (same logical pipeline
@@ -51,6 +65,11 @@ export interface LeadOverviewItem {
   // zu gruppieren — die umgekehrte Assoc (deals → leads) existiert in
   // HubSpot nicht, wir müssen den Join lead-seitig auflösen.
   associatedDealIds: string[];
+  // Amplitude-Attribution: das früheste AI-Agents-flavoured Event des
+  // primären Kontakts (Match über LOWER(email) = Amplitude `user_id`).
+  // Phase 1 nur für `?produkt=frontdesk`. null wenn kein Match oder anderer
+  // Produkt-Filter aktiv ist.
+  amplitudeSource: AmplitudeAttribution | null;
 }
 
 // UTM-Parameter aus einer URL extrahieren. Akzeptiert absolute wie relative
@@ -111,7 +130,31 @@ export async function GET(request: Request) {
     }
 
     const produkt = searchParams.get('produkt');
+    const forceRefresh = searchParams.get('refresh') === '1';
 
+    const cacheKey = `leads-overview:${produkt ?? '_all'}`;
+    const { data: response, meta } = await getOrFetch<LeadsOverviewResponse>(
+      cacheKey,
+      CACHE_TTL_SECONDS,
+      () => buildLeadsOverview(produkt),
+      { forceRefresh },
+    );
+
+    return NextResponse.json({ success: true, data: response, cache: meta });
+  } catch (error) {
+    if (error instanceof LeadPipelineNotFoundError) {
+      return NextResponse.json({ error: error.message }, { status: 404 });
+    }
+    console.error('Error fetching leads overview:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json(
+      { error: 'Failed to fetch leads overview', details: errorMessage },
+      { status: 500 }
+    );
+  }
+}
+
+async function buildLeadsOverview(produkt: string | null): Promise<LeadsOverviewResponse> {
     const client = getHubSpotClient();
 
     // Phase 1 — alle drei Top-Level-Calls parallel anstoßen. Die existing-
@@ -128,10 +171,7 @@ export async function GET(request: Request) {
     const pipeline = pipelinesResp.results.find(p => p.id === LEAD_PIPELINE_ID);
 
     if (!pipeline) {
-      return NextResponse.json(
-        { error: `Lead pipeline ${LEAD_PIPELINE_ID} not found` },
-        { status: 404 }
-      );
+      throw new LeadPipelineNotFoundError(LEAD_PIPELINE_ID);
     }
 
     const stagesById = new Map(pipeline.stages.map(s => [s.id, s]));
@@ -150,16 +190,19 @@ export async function GET(request: Request) {
     // Phase 2 — Companies + StageHistory + ContactAnalytics parallel.
     // ContactAnalytics fail-safe: bricht der Batch-Read (fehlender Scope, 429,
     // ...), zeigen wir leere Spalten statt den ganzen Leads-View zu killen.
+    // Bei AI-Agents-View (produkt=frontdesk) ziehen wir zusätzlich `email`,
+    // um die Amplitude-Attribution per Email zu joinen.
+    const wantAmplitude = produkt === 'frontdesk';
+    const contactProperties = wantAmplitude
+      ? ['hs_analytics_source', 'hs_analytics_first_url', 'email']
+      : ['hs_analytics_source', 'hs_analytics_first_url'];
     const [companiesResp, stageHistories, contactsResp] = await Promise.all([
       companyIds.size > 0
         ? client.getCompanies(Array.from(companyIds))
         : Promise.resolve({ results: [] as Array<{ id: string; properties: { name?: string } }> }),
       client.getLeadStageHistories(leadIds),
       contactIdsForAnalytics.size > 0
-        ? client.getContacts(Array.from(contactIdsForAnalytics), [
-            'hs_analytics_source',
-            'hs_analytics_first_url',
-          ]).catch((err) => {
+        ? client.getContacts(Array.from(contactIdsForAnalytics), contactProperties).catch((err) => {
             console.error('[leads/overview] contact analytics batch failed:', err);
             return { results: [] as Array<{ id: string; properties: Record<string, string> }> };
           })
@@ -173,14 +216,32 @@ export async function GET(request: Request) {
 
     const contactAnalyticsById = new Map<
       string,
-      { source: string | null; firstUrl: string | null }
+      { source: string | null; firstUrl: string | null; email: string | null }
     >();
     for (const c of contactsResp.results) {
       contactAnalyticsById.set(c.id, {
         source: c.properties.hs_analytics_source || null,
         firstUrl: c.properties.hs_analytics_first_url || null,
+        email: c.properties.email || null,
       });
     }
+
+    // Amplitude-Attribution: einen einzigen BQ-Query für alle Lead-Kontakte.
+    // Fail-safe — bricht BQ (fehlende Creds, IAM, Netz), liefern wir leere
+    // Map und der Rest des Views funktioniert weiter ohne Amplitude-Badge.
+    const amplitudeByEmail = await (async (): Promise<Map<string, AmplitudeAttribution>> => {
+      if (!wantAmplitude) return new Map();
+      const emails = Array.from(contactAnalyticsById.values())
+        .map(c => c.email)
+        .filter((e): e is string => !!e);
+      if (emails.length === 0) return new Map();
+      try {
+        return await getAiAgentsAttributionByEmail(emails);
+      } catch (err) {
+        console.error('[leads/overview] amplitude attribution lookup failed:', err);
+        return new Map();
+      }
+    })();
 
     const calculateLeadAge = (createdate: string | undefined): number => {
       if (!createdate) return 0;
@@ -243,6 +304,9 @@ export async function GET(request: Request) {
         analyticsFirstUrl: analytics?.firstUrl ?? null,
         ...parseUtmParams(analytics?.firstUrl ?? null),
         associatedDealIds: (lead.associations?.deals?.results ?? []).map(a => a.id),
+        amplitudeSource: analytics?.email
+          ? amplitudeByEmail.get(analytics.email.toLowerCase()) ?? null
+          : null,
       };
     });
 
@@ -261,13 +325,5 @@ export async function GET(request: Request) {
       leads,
     };
 
-    return NextResponse.json({ success: true, data: response });
-  } catch (error) {
-    console.error('Error fetching leads overview:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return NextResponse.json(
-      { error: 'Failed to fetch leads overview', details: errorMessage },
-      { status: 500 }
-    );
-  }
+    return response;
 }

@@ -210,6 +210,75 @@ from a lead. Endpoints that need to join a deal to its originating lead
 must fetch `leads → deals` for the lead set and invert the map locally;
 see `getLeadsWithAssociations` and `LeadOverviewItem.associatedDealIds`.
 
+## Server-side response cache (Netlify Blobs)
+
+To keep HubSpot quota usage flat regardless of how many users hit the
+app, the five HubSpot-backed overview endpoints write their aggregated
+response into a shared, server-side TTL cache before returning it to the
+client. The browser still keeps its own `localStorage` cache (see
+`src/lib/pipeline-cache.ts`) on top — the server cache exists for
+*cross-user* and *cross-tab* hits, not for replacing the browser cache.
+
+### Cached endpoints
+
+| Route | Cache key | TTL |
+|---|---|---|
+| `GET /api/deals/overview` | `deals-overview:<pipelineId>:<produkt>` | 5 min |
+| `GET /api/leads/overview` | `leads-overview:<produkt>` | 5 min |
+| `GET /api/projects/overview` | `projects-overview:<produkt>` | 5 min |
+| `GET /api/deals/overview/meetings` | `deal-meetings:<sha1(dealIds)>` | 5 min |
+| `GET /api/deals/overview/stage-history` | `deal-stage-history:<sha1(dealIds)>` | 5 min |
+
+Each response now includes a `cache: { hit, cachedAt, ageMs, ttlSeconds }`
+field next to `data` so the client can tell stale-from-cache apart from
+fresh-from-HubSpot.
+
+### Storage backend
+
+`src/lib/server-cache.ts` picks the backend at runtime:
+
+- **Production (Netlify Functions, `NETLIFY=true`):** `@netlify/blobs`
+  store named `hubspot-cache`. Provisioned automatically by the
+  `@netlify/plugin-nextjs` runtime — no setup, no env vars.
+- **Local dev (`next dev`, no Netlify context):** file-system fallback
+  in `.cache/blobs/` (gitignored). Without this fallback, `getStore()`
+  would throw because there are no Netlify credentials in the dev
+  process. We do not require `netlify dev` because the project's
+  `scripts/dev-prep.sh` runs `next dev` directly.
+
+Read/write errors are logged and swallowed — a broken cache must never
+break the request path. A cache miss simply re-fetches from HubSpot.
+
+### Bypass for user-initiated refresh
+
+Every cached endpoint accepts `?refresh=1`, which skips the read step
+and forces a fresh fetch (the result is still written back to the
+cache). The frontend wires this through the dashboard's refresh button:
+
+- `src/app/page.tsx` keeps a `pendingServerRefresh` ref keyed by
+  endpoint (`overview` / `leads` / `projects` / `meetings` /
+  `stageHistory`).
+- `handleRefresh()` sets all five to `true`, then invalidates the
+  matching React Query queries.
+- Each `queryFn` reads its flag via `takeRefreshFlag(key)` and resets
+  it after consuming it. Background refetches (window focus, network
+  reconnect, etc.) therefore never set `?refresh=1` and continue to hit
+  the server cache as intended.
+
+If you add a new HubSpot-backed endpoint, wrap it with `getOrFetch()`
+and — if the dashboard's refresh button should bust it — extend the
+`pendingServerRefresh` map and pass the flag into the `queryFn`'s
+fetch URL.
+
+### When to remove this layer
+
+This is a stopgap until the planned BigQuery replication is online.
+Once HubSpot data flows into BigQuery and the API routes read from
+there, both this cache and `src/lib/pipeline-cache.ts` can go. Swap the
+`fetcher` argument to `getOrFetch()` for a BigQuery query (or remove
+the wrapper entirely if BQ is already fast enough) and delete the
+browser-side counterpart.
+
 ## JIRA authentication — sipgate Atlassian Cloud (sipgatede.atlassian.net)
 
 **TL;DR:** The app reads JIRA via a personal **Atlassian Cloud API token**,

@@ -4,6 +4,9 @@ import { getHubSpotClient } from '@/lib/hubspot/client';
 import { getJiraClient, JiraError } from '@/lib/jira/client';
 import { extractJiraIssueKey } from '@/lib/jira/parse';
 import { isWonStageLabel, isLostStageLabel } from '@/lib/hubspot/mrr';
+import { getOrFetch } from '@/lib/server-cache';
+
+const CACHE_TTL_SECONDS = 5 * 60;
 
 // Length of a project in days. The project is anchored to its end date
 // (JIRA "Ende der Testphase") and runs for 4 weeks before that — so
@@ -106,6 +109,28 @@ export async function GET(request: Request) {
       );
     }
 
+    const forceRefresh = searchParams.get('refresh') === '1';
+    const cacheKey = `projects-overview:${produkt}`;
+    const { data: response, meta } = await getOrFetch<ProjectsOverviewResponse>(
+      cacheKey,
+      CACHE_TTL_SECONDS,
+      () => buildProjectsOverview(produkt),
+      { forceRefresh },
+    );
+    return NextResponse.json({ data: response, cache: meta });
+  } catch (error) {
+    if (error instanceof JiraError) {
+      return NextResponse.json(
+        { error: error.message, status: error.status },
+        { status: 502 },
+      );
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+async function buildProjectsOverview(produkt: string): Promise<ProjectsOverviewResponse> {
     const hubspot = getHubSpotClient();
 
     // Pipeline-Stages für den Won-Stage-Lookup (Fallback, wenn JIRA kein
@@ -143,8 +168,7 @@ export async function GET(request: Request) {
     );
 
     if (dealsWithJira.length === 0 && dealsInNegotiation.length === 0) {
-      const empty: ProjectsOverviewResponse = { projects: [], unscheduledCount: 0 };
-      return NextResponse.json({ data: empty });
+      return { projects: [], unscheduledCount: 0 };
     }
 
     // Resolve company names. Same pattern as /api/deals/overview, but kept
@@ -342,16 +366,5 @@ export async function GET(request: Request) {
     // Sort by start date so the UI gets a stable, chronologically meaningful order.
     projects.sort((a, b) => a.startDate.localeCompare(b.startDate));
 
-    const response: ProjectsOverviewResponse = { projects, unscheduledCount };
-    return NextResponse.json({ data: response });
-  } catch (error) {
-    if (error instanceof JiraError) {
-      return NextResponse.json(
-        { error: error.message, status: error.status },
-        { status: 502 },
-      );
-    }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+    return { projects, unscheduledCount };
 }

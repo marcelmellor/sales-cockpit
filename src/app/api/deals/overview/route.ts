@@ -1,6 +1,20 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getHubSpotClient } from '@/lib/hubspot/client';
+import { getOrFetch } from '@/lib/server-cache';
+import {
+  AmplitudeAttribution,
+  getAiAgentsAttributionByEmail,
+} from '@/lib/amplitude/attribution';
+
+const CACHE_TTL_SECONDS = 5 * 60;
+
+class PipelineNotFoundError extends Error {
+  constructor(public pipelineId: string) {
+    super(`Pipeline ${pipelineId} not found`);
+    this.name = 'PipelineNotFoundError';
+  }
+}
 
 // How `revenue` (MRR) was derived. Shown in the spreadsheet view so the user
 // can see whether the MRR came from an actual line-item `hs_mrr`, from the
@@ -32,6 +46,11 @@ export interface DealOverviewItem {
     date: string;
     title: string;
   } | null;
+  // Amplitude-Attribution: das früheste AI-Agents-flavoured Event über alle
+  // verknüpften Kontakte des Deals (Email-Match gegen Amplitude `user_id`).
+  // Phase 1 nur für `?produkt=frontdesk`. null wenn kein Match oder anderer
+  // Produkt-Filter aktiv ist.
+  amplitudeSource: AmplitudeAttribution | null;
 }
 
 export interface PipelineOverviewResponse {
@@ -85,6 +104,7 @@ export async function GET(request: Request) {
 
     const pipelineId = searchParams.get('pipelineId');
     const produkt = searchParams.get('produkt');
+    const forceRefresh = searchParams.get('refresh') === '1';
 
     if (!pipelineId) {
       return NextResponse.json(
@@ -93,6 +113,36 @@ export async function GET(request: Request) {
       );
     }
 
+    const cacheKey = `deals-overview:${pipelineId}:${produkt ?? '_all'}`;
+    const { data: response, meta } = await getOrFetch<PipelineOverviewResponse>(
+      cacheKey,
+      CACHE_TTL_SECONDS,
+      () => buildPipelineOverview(pipelineId, produkt),
+      { forceRefresh },
+    );
+
+    return NextResponse.json({
+      success: true,
+      data: response,
+      cache: meta,
+    });
+  } catch (error) {
+    if (error instanceof PipelineNotFoundError) {
+      return NextResponse.json({ error: error.message }, { status: 404 });
+    }
+    console.error('Error fetching pipeline overview:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json(
+      { error: 'Failed to fetch pipeline overview', details: errorMessage },
+      { status: 500 }
+    );
+  }
+}
+
+async function buildPipelineOverview(
+  pipelineId: string,
+  produkt: string | null,
+): Promise<PipelineOverviewResponse> {
     const client = getHubSpotClient();
 
     // Fetch pipeline info
@@ -100,10 +150,7 @@ export async function GET(request: Request) {
     const pipeline = pipelines.results.find(p => p.id === pipelineId);
 
     if (!pipeline) {
-      return NextResponse.json(
-        { error: 'Pipeline not found' },
-        { status: 404 }
-      );
+      throw new PipelineNotFoundError(pipelineId);
     }
 
     // Fetch deals with associations (filtered by product if specified)
@@ -163,20 +210,41 @@ export async function GET(request: Request) {
       }
     }
 
-    // Batch fetch contacts mit company + mastersipid für sipgate-Account-Fallback
-    const contactsMap = new Map<string, { company: string; mastersipid: string }>();
+    // Batch fetch contacts mit company + mastersipid für sipgate-Account-Fallback.
+    // Bei AI-Agents-View (produkt=frontdesk) ziehen wir zusätzlich `email`, um
+    // die Amplitude-Attribution per Email zu joinen.
+    const wantAmplitude = produkt === 'frontdesk';
+    const contactProps = wantAmplitude
+      ? ['company', 'mastersipid', 'email']
+      : ['company', 'mastersipid'];
+    const contactsMap = new Map<string, { company: string; mastersipid: string; email: string }>();
     if (contactIds.size > 0) {
-      const contacts = await client.getContacts(
-        Array.from(contactIds),
-        ['company', 'mastersipid'],
-      );
+      const contacts = await client.getContacts(Array.from(contactIds), contactProps);
       for (const contact of contacts.results) {
         contactsMap.set(contact.id, {
           company: contact.properties.company || '',
           mastersipid: contact.properties.mastersipid || '',
+          email: contact.properties.email || '',
         });
       }
     }
+
+    // Amplitude-Attribution: einen einzigen BQ-Query für alle Kontakte aller
+    // gefilterten Deals. Fail-safe — bricht BQ (Creds, IAM, Netz), liefern wir
+    // leere Map und die View funktioniert weiter ohne Amplitude-Badge.
+    const amplitudeByEmail = await (async (): Promise<Map<string, AmplitudeAttribution>> => {
+      if (!wantAmplitude) return new Map();
+      const emails = Array.from(contactsMap.values())
+        .map(c => c.email)
+        .filter((e): e is string => !!e);
+      if (emails.length === 0) return new Map();
+      try {
+        return await getAiAgentsAttributionByEmail(emails);
+      } catch (err) {
+        console.error('[deals/overview] amplitude attribution lookup failed:', err);
+        return new Map();
+      }
+    })();
 
     // Helper to calculate deal age in days
     const calculateDealAge = (createdate: string | undefined): number => {
@@ -280,6 +348,23 @@ export async function GET(request: Request) {
       const icpTier: IcpTier | null =
         rawIcp === 'S1' || rawIcp === 'S2' || rawIcp === 'S3' || rawIcp === 'S4' ? rawIcp : null;
 
+      // Earliest Amplitude-Attribution über alle Kontakte des Deals. Ein Deal
+      // kann mehrere Kontakte haben (Käufer, Tech-Lead, Admin …); wir zeigen
+      // den frühesten Touchpoint irgendeines davon.
+      const amplitudeSource = ((): AmplitudeAttribution | null => {
+        let best: AmplitudeAttribution | null = null;
+        for (const contactAssoc of deal.associations?.contacts?.results ?? []) {
+          const contact = contactsMap.get(contactAssoc.id);
+          if (!contact?.email) continue;
+          const attr = amplitudeByEmail.get(contact.email.toLowerCase());
+          if (!attr) continue;
+          if (!best || attr.occurredAt < best.occurredAt) {
+            best = attr;
+          }
+        }
+        return best;
+      })();
+
       return {
         id: deal.id,
         companyName: sipgateAccountCompany || company?.name || deal.properties.dealname || 'Unknown',
@@ -297,6 +382,7 @@ export async function GET(request: Request) {
         createdate: deal.properties.createdate || null,
         closedate: deal.properties.closedate || null,
         nextAppointment: null, // Loaded separately via /api/deals/overview/meetings
+        amplitudeSource,
       };
     });
 
@@ -312,16 +398,5 @@ export async function GET(request: Request) {
       deals,
     };
 
-    return NextResponse.json({
-      success: true,
-      data: response,
-    });
-  } catch (error) {
-    console.error('Error fetching pipeline overview:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return NextResponse.json(
-      { error: 'Failed to fetch pipeline overview', details: errorMessage },
-      { status: 500 }
-    );
-  }
+    return response;
 }

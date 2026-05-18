@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState, useMemo } from 'react';
+import { Suspense, useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -43,11 +43,13 @@ import {
   applyLeadFilters,
 } from '@/components/pipeline/filters/leadFilters';
 import type { LeadFieldType } from '@/components/pipeline/filters/leadFilters';
-import { Loader2, LayoutGrid, RefreshCw, BarChart3, Table2, Users, Calendar } from 'lucide-react';
+import { Loader2, LayoutGrid, RefreshCw, BarChart3, Table2, Users, Calendar, Megaphone } from 'lucide-react';
 import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import type { LeadsOverviewResponse, LeadOverviewItem } from '@/app/api/leads/overview/route';
 import type { ProjectsOverviewResponse } from '@/app/api/projects/overview/route';
+import type { MarketingFunnelResponse } from '@/app/api/marketing/funnel/route';
+import { MarketingView } from '@/components/pipeline/MarketingView';
 import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
 
 // localStorage-Prefixe für die pro-Tab gespeicherten Filter-Sets und die
@@ -90,7 +92,7 @@ function isPortfolioValue(value: string | null): value is PortfolioValue {
 
 export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'daysInStage' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
-export type ViewMode = 'deals' | 'dashboard' | 'leads' | 'projects';
+export type ViewMode = 'deals' | 'dashboard' | 'leads' | 'projects' | 'marketing';
 // Sub-Modus innerhalb Deals- und Leads-Tab: Sales-Sicht (Kachel-/Listenansicht
 // mit Story) oder Sheet (tabellarisch, mit CSV-Export). Wird pro Tab separat
 // gehalten, damit ein Wechsel zwischen Deals und Leads die gewählte Sicht nicht
@@ -154,7 +156,7 @@ function PipelineOverviewContent() {
   // springt zwischen Tabs.
   const viewMode = useMemo<ViewMode>(() => {
     const v = searchParams.get('view');
-    if (v === 'deals' || v === 'leads' || v === 'projects' || v === 'dashboard') return v;
+    if (v === 'deals' || v === 'leads' || v === 'projects' || v === 'dashboard' || v === 'marketing') return v;
     return 'dashboard';
   }, [searchParams]);
 
@@ -186,11 +188,13 @@ function PipelineOverviewContent() {
   );
 
   // Wenn das Produkt von AI Agents weg gewechselt wird, während gerade die
-  // Projekte-Ansicht aktiv ist, fallen wir effektiv auf das Dashboard zurück.
-  // Wir leiten den effektiven View-Mode aus URL + Produkt ab — der Projekte-Tab
-  // wird gleichzeitig ausgeblendet, sobald `selectedProdukt !== 'frontdesk'`.
+  // Projekte- oder Marketing-Ansicht aktiv ist (beide sind frontdesk-only),
+  // fallen wir effektiv auf das Dashboard zurück. Wir leiten den effektiven
+  // View-Mode aus URL + Produkt ab — die Tabs werden gleichzeitig ausgeblendet.
   const effectiveViewMode: ViewMode =
-    viewMode === 'projects' && selectedProdukt !== 'frontdesk' ? 'dashboard' : viewMode;
+    (viewMode === 'projects' || viewMode === 'marketing') && selectedProdukt !== 'frontdesk'
+      ? 'dashboard'
+      : viewMode;
 
   // Cache key includes product for separate caching per product group
   const cacheKey = selectedPipelineId && selectedProdukt ? `${selectedPipelineId}-${selectedProdukt}` : null;
@@ -203,11 +207,26 @@ function PipelineOverviewContent() {
   // wirkungslos, weil React Query `initialData` nur beim allerersten Render
   // ausliest. Loading-abhängige UI bleibt weiter hinter `hydrated` gegated.
 
+  // Beim Klick auf "Refresh" soll der server-seitige Blob-Cache (siehe
+  // src/lib/server-cache.ts) für genau diesen einen Fetch umgangen werden,
+  // damit der User frische HubSpot-Daten bekommt — ohne dass background-
+  // refetches (Tab-Focus, Reconnect) jedesmal HubSpot treffen.
+  // Pattern: handleRefresh flaggt alle fünf Endpoints; jede queryFn liest
+  // den Flag und resettet ihn nach dem Fetch.
+  const pendingServerRefresh = useRef<Record<string, boolean>>({});
+  const takeRefreshFlag = (key: string): string => {
+    if (pendingServerRefresh.current[key]) {
+      pendingServerRefresh.current[key] = false;
+      return '&refresh=1';
+    }
+    return '';
+  };
+
   // Fetch pipeline overview filtered by product (server-side)
   const { data: overviewData, isLoading: overviewLoading, error: overviewError } = useQuery({
     queryKey: ['pipeline-overview', selectedPipelineId, selectedProdukt],
     queryFn: async () => {
-      const response = await fetch(`/api/deals/overview?pipelineId=${selectedPipelineId}&produkt=${selectedProdukt}`);
+      const response = await fetch(`/api/deals/overview?pipelineId=${selectedPipelineId}&produkt=${selectedProdukt}${takeRefreshFlag('overview')}`);
       if (!response.ok) throw new Error('Failed to fetch pipeline overview');
       const data = await response.json();
       const result = data.data as PipelineOverviewResponse;
@@ -230,7 +249,7 @@ function PipelineOverviewContent() {
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
     queryKey: ['pipeline-leads', selectedProdukt],
     queryFn: async () => {
-      const response = await fetch(`/api/leads/overview?produkt=${selectedProdukt}`);
+      const response = await fetch(`/api/leads/overview?produkt=${selectedProdukt}${takeRefreshFlag('leads')}`);
       if (!response.ok) throw new Error('Failed to fetch leads overview');
       const data = await response.json();
       const result = data.data as LeadsOverviewResponse;
@@ -255,7 +274,7 @@ function PipelineOverviewContent() {
   const { data: projectsData, isLoading: projectsLoading } = useQuery({
     queryKey: ['projects-overview', selectedProdukt],
     queryFn: async () => {
-      const response = await fetch(`/api/projects/overview?produkt=${selectedProdukt}`);
+      const response = await fetch(`/api/projects/overview?produkt=${selectedProdukt}${takeRefreshFlag('projects')}`);
       if (!response.ok) throw new Error('Failed to fetch projects overview');
       const data = await response.json();
       const result = data.data as ProjectsOverviewResponse;
@@ -268,6 +287,27 @@ function PipelineOverviewContent() {
       projectsCacheKey ? getCachedData<ProjectsOverviewResponse>(projectsCacheKey) ?? undefined : undefined,
   });
 
+  // Marketing-Funnel: AI-Agents-only, lazy — wir lassen die Query nur laufen
+  // wenn der Marketing-Tab aktiv ist UND das Produkt frontdesk ist. Spart den
+  // teuren BQ-Roundtrip auf jedem Pageload.
+  const marketingCacheKey =
+    selectedProdukt === 'frontdesk' ? `marketing-funnel-frontdesk-v5` : null;
+  const { data: marketingData, isLoading: marketingLoading } = useQuery({
+    queryKey: ['marketing-funnel', selectedProdukt],
+    queryFn: async () => {
+      const response = await fetch(`/api/marketing/funnel?produkt=${selectedProdukt}${takeRefreshFlag('marketing')}`);
+      if (!response.ok) throw new Error('Failed to fetch marketing funnel');
+      const data = await response.json();
+      const result = data.data as MarketingFunnelResponse;
+      if (marketingCacheKey) setCachedData(marketingCacheKey, result);
+      return result;
+    },
+    enabled: isAuthenticated && selectedProdukt === 'frontdesk' && effectiveViewMode === 'marketing',
+    staleTime: 30 * 60 * 1000,
+    initialData: () =>
+      marketingCacheKey ? getCachedData<MarketingFunnelResponse>(marketingCacheKey) ?? undefined : undefined,
+  });
+
   // Extract deal IDs for meetings query
   const dealIds = useMemo(() => overviewDeals?.map(d => d.id) || [], [overviewDeals]);
 
@@ -275,6 +315,7 @@ function PipelineOverviewContent() {
   async function fetchInBatches<T extends Record<string, unknown>>(
     endpoint: string,
     ids: string[],
+    refreshSuffix: string,
     batchSize = 100,
   ): Promise<T> {
     const batches: string[][] = [];
@@ -283,7 +324,7 @@ function PipelineOverviewContent() {
     }
     const results = await Promise.all(
       batches.map(async (batch) => {
-        const response = await fetch(`${endpoint}?dealIds=${batch.join(',')}`);
+        const response = await fetch(`${endpoint}?dealIds=${batch.join(',')}${refreshSuffix}`);
         if (!response.ok) throw new Error(`Failed to fetch ${endpoint}`);
         const data = await response.json();
         return data.data as T;
@@ -303,7 +344,7 @@ function PipelineOverviewContent() {
     queryKey: ['pipeline-meetings', selectedPipelineId, selectedProdukt, dealIds.join(',')],
     queryFn: async () => {
       if (dealIds.length === 0) return {} as DealMeetingsMap;
-      const result = await fetchInBatches<DealMeetingsMap>('/api/deals/overview/meetings', dealIds);
+      const result = await fetchInBatches<DealMeetingsMap>('/api/deals/overview/meetings', dealIds, takeRefreshFlag('meetings'));
       if (cacheKey) setCachedData(`meetings-${cacheKey}`, result);
       return result;
     },
@@ -323,7 +364,7 @@ function PipelineOverviewContent() {
     queryKey: ['pipeline-stage-history', selectedPipelineId, selectedProdukt, dealIds.join(',')],
     queryFn: async () => {
       if (dealIds.length === 0) return {} as DealStageHistoryMap;
-      const result = await fetchInBatches<DealStageHistoryMap>('/api/deals/overview/stage-history', dealIds);
+      const result = await fetchInBatches<DealStageHistoryMap>('/api/deals/overview/stage-history', dealIds, takeRefreshFlag('stageHistory'));
       if (cacheKey) setCachedData(`stage-history-${cacheKey}`, result);
       return result;
     },
@@ -348,10 +389,22 @@ function PipelineOverviewContent() {
     if (cacheKey) {
       clearPipelineCache(cacheKey, selectedProdukt ?? undefined);
     }
+    // Server-Cache (Netlify Blobs / lokales FS) für genau diesen Klick
+    // bypassen. Background-Refetches (Tab-Focus, Reconnect) bleiben unberührt.
+    pendingServerRefresh.current = {
+      overview: true,
+      leads: true,
+      projects: true,
+      marketing: true,
+      meetings: true,
+      stageHistory: true,
+    };
     queryClient.invalidateQueries({ queryKey: ['pipeline-overview', selectedPipelineId, selectedProdukt] });
     queryClient.invalidateQueries({ queryKey: ['pipeline-meetings', selectedPipelineId, selectedProdukt] });
     queryClient.invalidateQueries({ queryKey: ['pipeline-stage-history', selectedPipelineId, selectedProdukt] });
     queryClient.invalidateQueries({ queryKey: ['pipeline-leads', selectedProdukt] });
+    queryClient.invalidateQueries({ queryKey: ['projects-overview', selectedProdukt] });
+    queryClient.invalidateQueries({ queryKey: ['marketing-funnel', selectedProdukt] });
   };
 
   // Combined loading state for secondary data
@@ -1000,6 +1053,11 @@ function PipelineOverviewContent() {
                     Projekte
                   </Tab>
                 )}
+                {selectedProdukt === 'frontdesk' && (
+                  <Tab id="marketing" icon={Megaphone} count={marketingData?.journeys.length}>
+                    Marketing
+                  </Tab>
+                )}
               </TabBar>
             </div>
 
@@ -1020,6 +1078,9 @@ function PipelineOverviewContent() {
             ) : effectiveViewMode === 'projects' ? (
               /* Projekte: Wochenansicht laufender AI-Agent-Projekte */
               <ProjectsView data={projectsData} isLoading={projectsLoading} />
+            ) : effectiveViewMode === 'marketing' ? (
+              /* Marketing: Amplitude-Funnel + Deal-Journeys (AI Agents) */
+              <MarketingView data={marketingData} isLoading={marketingLoading} />
             ) : effectiveViewMode === 'leads' ? (
               /* Leads-Tab: Sales- oder Sheet-Sicht */
               <>

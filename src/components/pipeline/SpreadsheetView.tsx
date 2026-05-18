@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, ArrowUpDown, Settings2, ExternalLink, Download, Search, X } from 'lucide-react';
 import type { DealOverviewItem, RevenueSource } from '@/app/api/deals/overview/route';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
+import { formatAmplitudeEvent, formatAmplitudeMonth } from '@/lib/amplitude/format';
 
 const STORAGE_KEY = 'spreadsheet-visible-columns';
 
@@ -77,6 +78,7 @@ type ColumnKey =
   | 'closedate'
   | 'nextAppointmentDate'
   | 'nextAppointmentTitle'
+  | 'amplitudeSource'
   | 'hubspotLink'
   | 'dealId';
 
@@ -250,6 +252,31 @@ const COLUMNS: ColumnDef[] = [
     getCsvValue: (d) => d.nextAppointment?.title || '',
   },
   {
+    key: 'amplitudeSource',
+    label: 'Amplitude',
+    sortable: true,
+    getSortValue: (d) =>
+      d.amplitudeSource ? new Date(d.amplitudeSource.occurredAt).getTime() : null,
+    render: (d) => {
+      const amp = d.amplitudeSource;
+      if (!amp) return <span className="text-gray-400">—</span>;
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-blue-50 text-blue-700 border border-blue-100"
+          title={`${amp.eventType} · ${new Date(amp.occurredAt).toLocaleString('de-DE')} · ${amp.anchor}`}
+        >
+          {formatAmplitudeEvent(amp.eventType)}
+          <span className="text-blue-500/70 tabular-nums">{formatAmplitudeMonth(amp.occurredAt)}</span>
+        </span>
+      );
+    },
+    getCsvValue: (d) => {
+      const amp = d.amplitudeSource;
+      if (!amp) return '';
+      return `${amp.eventType} (${new Date(amp.occurredAt).toISOString().slice(0, 10)})`;
+    },
+  },
+  {
     key: 'hubspotLink',
     label: 'HubSpot',
     sortable: false,
@@ -328,6 +355,7 @@ const DEFAULT_VISIBLE: ColumnKey[] = [
   'revenueSource',
   'productManager',
   'nextAppointmentDate',
+  'amplitudeSource',
   'hubspotLink',
 ];
 

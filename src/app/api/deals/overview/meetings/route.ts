@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getHubSpotClient } from '@/lib/hubspot/client';
+import { getOrFetch, hashIdList } from '@/lib/server-cache';
 import type { DealMeetingsMap } from '../route';
+
+const CACHE_TTL_SECONDS = 5 * 60;
 
 export async function GET(request: Request) {
   try {
@@ -36,41 +39,19 @@ export async function GET(request: Request) {
       });
     }
 
-    const client = getHubSpotClient();
-    const now = new Date();
-
-    // Single pair of batch calls instead of 2 per deal — stays inside
-    // HubSpot's 10 req/s limit even for large pipelines. Previously the
-    // per-deal fan-out silently swallowed 429s and cached nulls in the
-    // client, which is how "no next meeting" showed up on deals that clearly
-    // had one (e.g. 497714974930 "Taxi Höhne - AI Agents").
-    const meetingsPerDeal = await client.getMeetingsForDeals(dealIdList);
-
-    const meetingsMap: DealMeetingsMap = {};
-    for (const dealId of dealIdList) {
-      const meetings = meetingsPerDeal.get(dealId) || [];
-      const upcomingMeetings = meetings
-        .filter(m => {
-          const startTime = m.properties.hs_meeting_start_time;
-          return startTime && new Date(startTime) > now;
-        })
-        .sort((a, b) => {
-          const aTime = new Date(a.properties.hs_meeting_start_time!).getTime();
-          const bTime = new Date(b.properties.hs_meeting_start_time!).getTime();
-          return aTime - bTime;
-        });
-      const nextMeeting = upcomingMeetings[0];
-      meetingsMap[dealId] = nextMeeting
-        ? {
-            date: nextMeeting.properties.hs_meeting_start_time!,
-            title: nextMeeting.properties.hs_meeting_title || 'Meeting',
-          }
-        : null;
-    }
+    const forceRefresh = searchParams.get('refresh') === '1';
+    const cacheKey = `deal-meetings:${hashIdList(dealIdList)}`;
+    const { data: meetingsMap, meta } = await getOrFetch<DealMeetingsMap>(
+      cacheKey,
+      CACHE_TTL_SECONDS,
+      () => buildMeetingsMap(dealIdList),
+      { forceRefresh },
+    );
 
     return NextResponse.json({
       success: true,
       data: meetingsMap,
+      cache: meta,
     });
   } catch (error) {
     console.error('Error fetching meetings:', error);
@@ -80,4 +61,39 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
+}
+
+async function buildMeetingsMap(dealIdList: string[]): Promise<DealMeetingsMap> {
+  const client = getHubSpotClient();
+  const now = new Date();
+
+  // Single pair of batch calls instead of 2 per deal — stays inside
+  // HubSpot's 10 req/s limit even for large pipelines. Previously the
+  // per-deal fan-out silently swallowed 429s and cached nulls in the
+  // client, which is how "no next meeting" showed up on deals that clearly
+  // had one (e.g. 497714974930 "Taxi Höhne - AI Agents").
+  const meetingsPerDeal = await client.getMeetingsForDeals(dealIdList);
+
+  const meetingsMap: DealMeetingsMap = {};
+  for (const dealId of dealIdList) {
+    const meetings = meetingsPerDeal.get(dealId) || [];
+    const upcomingMeetings = meetings
+      .filter(m => {
+        const startTime = m.properties.hs_meeting_start_time;
+        return startTime && new Date(startTime) > now;
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a.properties.hs_meeting_start_time!).getTime();
+        const bTime = new Date(b.properties.hs_meeting_start_time!).getTime();
+        return aTime - bTime;
+      });
+    const nextMeeting = upcomingMeetings[0];
+    meetingsMap[dealId] = nextMeeting
+      ? {
+          date: nextMeeting.properties.hs_meeting_start_time!,
+          title: nextMeeting.properties.hs_meeting_title || 'Meeting',
+        }
+      : null;
+  }
+  return meetingsMap;
 }

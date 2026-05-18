@@ -10,6 +10,7 @@ import {
   hubspotDealUrl,
 } from '@/lib/hubspot/urls';
 import { AgeLabel } from '@sipgate/revop-ui';
+import { formatAmplitudeEvent, formatAmplitudeMonth } from '@/lib/amplitude/format';
 
 type LeadSortField = 'company' | 'source' | 'minuten' | 'age';
 type LeadSortDirection = 'asc' | 'desc';
@@ -384,10 +385,25 @@ function LeadRow({ lead, showAge }: { lead: LeadOverviewItem; showAge: 'leadAge'
         )}
 
         <div
-          className="hidden md:block w-[180px] text-gray-500 text-xs truncate"
-          title={sourceDisplay}
+          className="hidden md:flex w-[180px] items-center gap-1.5 text-xs"
         >
-          {sourceDisplay}
+          {lead.amplitudeSource && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 shrink-0"
+              title={`Amplitude: ${lead.amplitudeSource.eventType} · ${new Date(lead.amplitudeSource.occurredAt).toLocaleDateString('de-DE')}`}
+            >
+              {formatAmplitudeEvent(lead.amplitudeSource.eventType)}
+              <span className="text-blue-500/70 tabular-nums">
+                {formatAmplitudeMonth(lead.amplitudeSource.occurredAt)}
+              </span>
+            </span>
+          )}
+          <span
+            className="text-gray-500 truncate min-w-0"
+            title={sourceDisplay}
+          >
+            {sourceDisplay}
+          </span>
         </div>
 
         <div className="w-[110px] text-right text-gray-600 text-xs tabular-nums">
