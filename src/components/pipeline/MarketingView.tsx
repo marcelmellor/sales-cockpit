@@ -2,14 +2,11 @@
 
 import { useMemo, useState } from 'react';
 import { Loader2, ExternalLink } from 'lucide-react';
-import type {
-  MarketingFunnelResponse,
-} from '@/app/api/marketing/funnel/route';
+import type { MarketingFunnelResponse, MarketingFunnelJourney } from '@/lib/marketing/funnel-types';
 import type { Touchpoint } from '@/lib/amplitude/journeys';
 import { formatAmplitudeEvent } from '@/lib/amplitude/format';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
 import { MarketingSankey, COLUMN_REGISTRY, type ColumnKey } from './MarketingSankey';
-import type { MarketingFunnelJourney } from '@/app/api/marketing/funnel/route';
 
 interface MarketingViewProps {
   data: MarketingFunnelResponse | undefined;

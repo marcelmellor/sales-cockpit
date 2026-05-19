@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import type { MarketingFunnelJourney } from '@/app/api/marketing/funnel/route';
+import type { MarketingFunnelJourney } from '@/lib/marketing/funnel-types';
 import type { Touchpoint } from '@/lib/amplitude/journeys';
 
 // 4-column Sankey-flow visualisation der AI-Agents-Marketing-Deals.

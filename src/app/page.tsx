@@ -48,7 +48,7 @@ import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import type { LeadsOverviewResponse, LeadOverviewItem } from '@/app/api/leads/overview/route';
 import type { ProjectsOverviewResponse } from '@/app/api/projects/overview/route';
-import type { MarketingFunnelResponse } from '@/app/api/marketing/funnel/route';
+import type { MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
 import { MarketingView } from '@/components/pipeline/MarketingView';
 import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
 
