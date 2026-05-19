@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "preinstall": "bash scripts/netlify-git-auth.sh",
     "dev": "bash scripts/dev-prep.sh",
     "build": "next build",
     "start": "next start",
