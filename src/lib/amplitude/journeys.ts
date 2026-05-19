@@ -13,10 +13,11 @@ import { getBigQuery } from './client';
 export type TouchpointAnchor =
   | 'signup_atlantis_frontdesk'        // Self-service Trial-Signup mit Produkt-Wahl AI Agents
   | 'signup_atlantis_other_product'    // Signup Atlantis mit anderem Produkt (TEAM_NEOPBX, TRUNKING …) — Cross-Sell-Kontext, kein AI-Agents-Marketing-Touchpoint
-  | 'lead_completed_frontdesk'         // Lead-Form submission mit Frontdesk-Source
-  | 'sipgate_ai_domain'                // Marketing-Site sipgate.ai (Demo-/Trial-Klick, Form-Submit)
+  | 'lead_form_submitted'              // Form Submitted: Contact Form — der echte Lead-Form-Submit (z.B. /rueckruf-anfordern)
+  | 'sipgate_ai_domain'                // Marketing-Site sipgate.ai (Demo-/Trial-Klick, Signup-Form-Submit)
   | 'agents_qualification_onboarding'  // Quali-Submit innerhalb 60min nach Erstanmeldung (Self-Service-Pfad)
   | 'agents_qualification_inproduct'   // Quali-Submit von Bestandskunde aus dem sipgate-App-Portal (Cross-/Upsell)
+  | 'customer_since'                   // Pseudo-Anker für Bestandskunden ohne Signup-Event — sipgate-Account-Anlage-Datum als Journey-Start
   | 'hubspot_lead_created'             // HubSpot Lifecycle: assoziierter Lead wurde in HubSpot angelegt
   | 'hubspot_deal_created';            // HubSpot Lifecycle: dieser Deal wurde in HubSpot angelegt
 
@@ -27,13 +28,16 @@ export interface Touchpoint {
   leadSourceDetails: string | null;
   inboundValue: string | null;   // nur bei agents_qualification_* gesetzt (z.B. "0-1000")
   signupProduct: string | null;  // nur bei signup_atlantis_* gesetzt (z.B. "FRONTDESK", "TEAM_NEOPBX")
+  pageDomain: string | null;     // [Amplitude] Page Domain (z.B. "www.sipgate.ai") — null bei HubSpot/Lifecycle-Pseudoevents
 }
 
 const EVENTS_TABLE = 'ff-amplitude.ampli_live_events.EVENTS_100008946';
 
-// Whitelist + Phase-2 additions (pricing_view, feature_view). Lead Completed is
-// kept in here even though it overlaps with the HubSpot Lead Created event —
-// it carries `lead_source_details` which is useful for the journey timeline.
+// Whitelist von Events, die als Marketing-Touchpoint zählen. `Lead Completed`
+// und `lead_form_all` waren früher hier, sind aber rausgeflogen: das sind
+// nachgelagerte HubSpot-Lifecycle-Events (Workflow-getriggert, ~30 min Delay
+// nach der eigentlichen Form-Submission). Stattdessen nutzen wir
+// `Form Submitted: Contact Form` als den echten Form-Submit-Event.
 const TOUCHPOINT_EVENT_TYPES = [
   'Click Demo buchen',
   'Click Kostenlos testen',
@@ -44,8 +48,6 @@ const TOUCHPOINT_EVENT_TYPES = [
   'Form Submitted: Signup Form',
   'Form Submitted: Signup Modal',
   'Signup Atlantis',
-  'Lead Completed',
-  'lead_form_all',
   'su5_registration',
   'su4_form_submit',
 ];
@@ -62,16 +64,19 @@ SELECT * FROM (
       WHEN event_type = 'Signup Atlantis' AND JSON_VALUE(event_properties, '$.product') IS NOT NULL
         AND JSON_VALUE(event_properties, '$.product') != 'FRONTDESK'
         THEN 'signup_atlantis_other_product'
-      WHEN event_type = 'Lead Completed' AND (
-        LOWER(IFNULL(JSON_VALUE(event_properties, '$.lead_source_details'), '')) LIKE '%frontdesk%'
-        OR JSON_VALUE(event_properties, '$.lead_source_details') = 'Agent Qualifizierungsfragen im Produkt'
-      ) THEN 'lead_completed_frontdesk'
+      WHEN event_type = 'Form Submitted: Contact Form'
+        THEN 'lead_form_submitted'
       WHEN TO_JSON_STRING(event_properties) LIKE '%sipgate.ai%'
         THEN 'sipgate_ai_domain'
       ELSE NULL
     END AS anchor,
     JSON_VALUE(event_properties, '$.lead_source_details') AS lead_source_details,
-    JSON_VALUE(event_properties, '$.product') AS signup_product
+    JSON_VALUE(event_properties, '$.product') AS signup_product,
+    -- "[Amplitude] Page Domain" lässt sich nicht via JSON_VALUE adressieren
+    -- (Bracket-Key). Regex auf dem JSON-String: der Schlüssel "Page Domain"
+    -- ist unique, daher reicht das ohne die [Amplitude]-Brackets explizit
+    -- zu matchen (vermeidet RE2-Escaping-Komplikationen).
+    REGEXP_EXTRACT(TO_JSON_STRING(event_properties), r'Page Domain":"([^"]+)"') AS page_domain
   FROM \`${EVENTS_TABLE}\`
   WHERE event_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 365 DAY)
     AND user_id IS NOT NULL
@@ -89,6 +94,7 @@ interface RawRow {
   anchor: TouchpointAnchor;
   lead_source_details: string | null;
   signup_product: string | null;
+  page_domain: string | null;
 }
 
 /**
@@ -128,6 +134,7 @@ export async function getTouchpointsByEmail(
       leadSourceDetails: row.lead_source_details,
       inboundValue: null,
       signupProduct: row.signup_product,
+      pageDomain: row.page_domain,
     });
     result.set(row.email, list);
   }

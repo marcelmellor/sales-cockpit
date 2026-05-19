@@ -23,12 +23,15 @@ const TOUCHPOINT_EVENT_TYPES = [
   'Form Submitted: Signup Form',
   'Form Submitted: Signup Modal',
   'Signup Atlantis',
-  'Lead Completed',
-  'lead_form_all',
   'su5_registration',
   'su4_form_submit',
 ];
 
+// AI-Agents-Anchor: dieselben drei Signaltypen wie in journeys.ts —
+// Signup Atlantis FRONTDESK, Form-Submitted: Contact Form (Lead-Formular)
+// oder Marketing-Site sipgate.ai.
+// Hard-Floor 2026-01-01 — vorher gab es die AI-Agents-Lead-Pipeline kaum,
+// und die In-Product-Quali ging erst im Januar live. Zahlen davor verzerren.
 const QUERY = `
 WITH per_user AS (
   SELECT
@@ -40,16 +43,13 @@ WITH per_user AS (
     LOGICAL_OR(
       CASE
         WHEN event_type = 'Signup Atlantis' AND JSON_VALUE(event_properties, '$.product') = 'FRONTDESK' THEN TRUE
-        WHEN event_type = 'Lead Completed' AND (
-          LOWER(IFNULL(JSON_VALUE(event_properties, '$.lead_source_details'), '')) LIKE '%frontdesk%'
-          OR JSON_VALUE(event_properties, '$.lead_source_details') = 'Agent Qualifizierungsfragen im Produkt'
-        ) THEN TRUE
+        WHEN event_type = 'Form Submitted: Contact Form' THEN TRUE
         WHEN TO_JSON_STRING(event_properties) LIKE '%sipgate.ai%' THEN TRUE
         ELSE FALSE
       END
     ) AS had_ai_agents_touch
   FROM \`${EVENTS_TABLE}\`
-  WHERE event_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 365 DAY)
+  WHERE event_time >= TIMESTAMP('2026-01-01')
     AND user_id IS NOT NULL
     AND user_id LIKE '%@%'
     AND LOWER(user_id) NOT LIKE '%@sipgate.de'

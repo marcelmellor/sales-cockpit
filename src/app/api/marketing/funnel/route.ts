@@ -6,6 +6,7 @@ import { getAiAgentsFunnelTop } from '@/lib/amplitude/funnel';
 import { getTouchpointsByEmail, Touchpoint } from '@/lib/amplitude/journeys';
 import { getAgentsQualificationByMastersipid } from '@/lib/amplitude/agents-events';
 import { getCustomerCreationByMastersipid } from '@/lib/amplitude/customer-info';
+import { computeDealRevenue } from '@/lib/hubspot/mrr';
 
 // Phase 2 — Marketing-Tab. AI Agents only. Goal: show "how the deals came
 // about" by combining two perspectives:
@@ -22,6 +23,19 @@ const CACHE_TTL_SECONDS = 30 * 60;
 const DEALS_PIPELINE_ID = '3576006860'; // "Sales sipgate Portfolio"
 const LEAD_PIPELINE_ID = '3591532731';  // "sipgate Portfolio" auf dem Leads-Objekt
 
+// Forms, die als HubSpot-`first_conversion_event_name` aufgefasst werden,
+// aber KEIN Customer-facing Marketing-Touchpoint sind — typischerweise
+// interne Sales-/SDR-Tools zum Anlegen von Leads. Substring-Match, case-
+// insensitive. Weitere Forms einfach unten dazu schreiben.
+const INTERNAL_LEAD_FORMS_PATTERNS = [
+  'wingm Qualification Form',  // SDR-Tool zur manuellen Lead-Qualifizierung
+];
+
+function isInternalLeadForm(formName: string): boolean {
+  const lower = formName.toLowerCase();
+  return INTERNAL_LEAD_FORMS_PATTERNS.some(p => lower.includes(p.toLowerCase()));
+}
+
 export interface MarketingFunnelStage {
   key: 'marketingTouch' | 'trialSignup' | 'dealCreated' | 'dealWon';
   label: string;
@@ -29,6 +43,17 @@ export interface MarketingFunnelStage {
 }
 
 export type MarketingJourneyKind = 'deal' | 'lead';
+
+// Bucket-Schwelle für die Minuten-Klassifizierung im Marketing-Sankey-Filter.
+// Entspricht dem AI-Agents-Paket-Cutoff ("Enterprise ab 2.500 Min").
+export const MINUTE_BUCKET_THRESHOLD = 2500;
+export type MinuteBucket = 'lt_threshold' | 'gte_threshold' | 'unknown';
+
+// MRR-Schwelle für die Deal-Klassifizierung. Entspricht dem System-Badge
+// "MRR ≥ 450 €" im Dashboard (siehe DashboardView). 450 €/Mo ist der
+// untere Cutoff für das mittlere AI-Agents-Paket.
+export const MRR_BUCKET_THRESHOLD = 450;
+export type MrrBucket = 'lt_threshold' | 'gte_threshold' | 'unknown';
 
 export interface MarketingFunnelJourney {
   kind: MarketingJourneyKind;
@@ -41,6 +66,21 @@ export interface MarketingFunnelJourney {
   hasDeal: boolean;                 // ein HubSpot AI-Agents-Deal existiert für diesen Entry
   touchpoints: Touchpoint[];        // Amplitude + HubSpot-Lifecycle, chronologisch
   customerSince: string | null;     // sipgate-Account-Anlage-Datum (frühester Contact)
+  // Geschätzte Anzahl Inbound-Minuten pro Monat. Priorität:
+  //   1. HubSpot exakter Wert (Deal: agents_minuten_qualifiziert || agents_minuten,
+  //      Lead: agents_minuten)
+  //   2. HubSpot Range inbound_volumen (Midpoint)
+  //   3. Amplitude `inbound_value` aus dem jüngsten Quali-Event (Midpoint)
+  agentsMinutes: number | null;
+  minuteBucket: MinuteBucket;
+  // Deal-MRR (nur für kind='deal' gesetzt). Berechnet via computeDealRevenue
+  // aus den HubSpot-Properties (line items > agents-package > TCV-Fallback).
+  // null für Lead-only-Entries.
+  mrr: number | null;
+  mrrBucket: MrrBucket;
+  // HubSpot-Erstelldatum dieser Entity — für Deals `deal.createdate`, für Leads
+  // `lead.hs_createdate`. Treibt den Date-Filter im Marketing-Tab.
+  createdate: string | null;
 }
 
 export interface MarketingFunnelResponse {
@@ -59,6 +99,64 @@ function isWonStage(label: string): boolean {
 function isLostStage(label: string): boolean {
   const l = label.toLowerCase();
   return l.includes('closed lost') || l.includes('verloren') || l.includes('lost') || l.includes('abgesagt');
+}
+
+// Range-Strings wie "0-1000", "1000-2000", "2000-5000", ">5000" → numerische
+// Schätzung (Midpoint für geschlossene Ranges, ">N" wird N+1000 zugeordnet).
+// Akzeptiert null/leer → null.
+function parseMinuteRange(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  if (!s) return null;
+  const closed = s.match(/^(\d+)\s*-\s*(\d+)$/);
+  if (closed) {
+    const lo = Number(closed[1]);
+    const hi = Number(closed[2]);
+    if (Number.isFinite(lo) && Number.isFinite(hi)) return Math.round((lo + hi) / 2);
+  }
+  const greater = s.match(/^>\s*(\d+)$/);
+  if (greater) {
+    const n = Number(greater[1]);
+    if (Number.isFinite(n)) return n + 1000;
+  }
+  const less = s.match(/^<\s*(\d+)$/);
+  if (less) {
+    const n = Number(less[1]);
+    if (Number.isFinite(n)) return Math.max(0, n - 500);
+  }
+  const plain = Number(s);
+  return Number.isFinite(plain) ? plain : null;
+}
+
+function bucketize(minutes: number | null): MinuteBucket {
+  if (minutes == null) return 'unknown';
+  return minutes >= MINUTE_BUCKET_THRESHOLD ? 'gte_threshold' : 'lt_threshold';
+}
+
+function bucketizeMrr(mrr: number | null): MrrBucket {
+  if (mrr == null || mrr <= 0) return 'unknown';
+  return mrr >= MRR_BUCKET_THRESHOLD ? 'gte_threshold' : 'lt_threshold';
+}
+
+// Resolves the best-available agents-minutes signal in priority order:
+// exact HubSpot value > HubSpot range > Amplitude Quali range.
+function resolveAgentsMinutes(
+  hubspotExact: number | null,
+  hubspotRange: string | null,
+  touchpoints: Touchpoint[],
+): number | null {
+  if (hubspotExact != null && hubspotExact > 0) return hubspotExact;
+  const rangeFromHubspot = parseMinuteRange(hubspotRange);
+  if (rangeFromHubspot != null) return rangeFromHubspot;
+  // Letzter Quali-Event mit gesetztem inbound_value (= jüngster Wert).
+  for (let i = touchpoints.length - 1; i >= 0; i--) {
+    const t = touchpoints[i];
+    if (t.inboundValue) {
+      const fromAmpli = parseMinuteRange(t.inboundValue);
+      if (fromAmpli != null) return fromAmpli;
+    }
+  }
+  return null;
 }
 
 export async function GET(request: Request) {
@@ -150,13 +248,68 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
 
   const contactEmailById = new Map<string, string>();
   const contactMastersipidById = new Map<string, string>();
+  // HubSpot-Form-Submission-Backstop: wenn Amplitude den Form-Submit nicht
+  // erfasst hat (z.B. weil die Form direkt an HubSpot submitted ohne Custom-
+  // Event auszulösen), pullen wir den first_conversion_event_name +
+  // first_conversion_date als Pseudo-Touchpoint. So sehen wir z.B.
+  // /demo-buchen-Submits auf sipgate.ai trotz Amplitude-Lücke.
+  // `hs_analytics_first_url` liefert die erste URL die der Contact besucht
+  // hat — bei Cold-Traffic-Conversions ist das gleich die Form-Page, daraus
+  // ziehen wir die Domain für den Chip ("Contact Form (sipgate.ai)" o.ä.).
+  const contactFirstConversionById = new Map<
+    string,
+    { name: string; isoDate: string; pageDomain: string | null }
+  >();
   if (contactIds.size > 0) {
-    const contacts = await client.getContacts(Array.from(contactIds), ['email', 'mastersipid']);
+    const contacts = await client.getContacts(Array.from(contactIds), [
+      'email',
+      'mastersipid',
+      'first_conversion_event_name',
+      'first_conversion_date',
+      'hs_analytics_first_url',
+    ]);
     for (const c of contacts.results) {
       const email = (c.properties.email || '').trim().toLowerCase();
       if (email) contactEmailById.set(c.id, email);
       const msid = (c.properties.mastersipid || '').trim();
       if (msid) contactMastersipidById.set(c.id, msid);
+      const fcName = (c.properties.first_conversion_event_name || '').trim();
+      const fcDateRaw = (c.properties.first_conversion_date || '').trim();
+      // Meeting-Links (HubSpot Calendly-Style Booking-Pages, z.B.
+      // "Meetings Link: honta/ai-frontdesk-rep") sind kein Marketing-Touchpoint
+      // — die werden von Personen gebucht, die schon im Sales-Prozess sind.
+      // Rausfiltern. Ebenso interne Sales-Forms (siehe Whitelist oben).
+      const isMeetingLink = /^meetings link:/i.test(fcName);
+      const isInternal = isInternalLeadForm(fcName);
+      if (fcName && fcDateRaw && !isMeetingLink && !isInternal) {
+        // HubSpot liefert Datums-Properties teilweise als Unix-Millis-String
+        // ("1747476600000"), teilweise als ISO-String. Beides parsen.
+        const parsed = /^\d+$/.test(fcDateRaw)
+          ? new Date(Number(fcDateRaw))
+          : new Date(fcDateRaw);
+        if (!Number.isNaN(parsed.getTime())) {
+          let pageDomain: string | null = null;
+          const firstUrl = (c.properties.hs_analytics_first_url || '').trim();
+          if (firstUrl) {
+            try {
+              const host = new URL(firstUrl).hostname.replace(/^www\./, '');
+              // HubSpot's eigene Form-Widget-Domains (*.hsforms.com) sind kein
+              // sinnvoller Marketing-Page-Hinweis — die zeigen nur dass die Form
+              // als HubSpot-Embed gerendert wurde. Auf null setzen.
+              if (!/\.hsforms\.com$/i.test(host)) {
+                pageDomain = host;
+              }
+            } catch {
+              // unparsebarer URL → kein Domain-Hint
+            }
+          }
+          contactFirstConversionById.set(c.id, {
+            name: fcName,
+            isoDate: parsed.toISOString(),
+            pageDomain,
+          });
+        }
+      }
     }
   }
 
@@ -211,6 +364,9 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
 
   // Aggregator: assembles all touchpoints (Amplitude + HubSpot-Lifecycle) for
   // a given set of contact associations, deduped + chronologically sorted.
+  // Per Journey: nur das FRÜHESTE `lead_form_submitted`-Event behalten — pro
+  // Formular feuert Amplitude oft mehrere Events, die User wollen nur den
+  // initialen Submit sehen.
   function assembleTouchpoints(
     contactAssocs: Array<{ id: string }>,
     leadCreatedAt: string | null,
@@ -236,6 +392,59 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
         seen.add(key);
         merged.push(t);
       }
+      // HubSpot-Backstop: first_conversion als pseudo-Form-Submit. Wird gleich
+      // unten zusammen mit Amplitude-Form-Submits auf das früheste Event
+      // dedupliziert — falls Amplitude was Früheres gefunden hat, gewinnt das.
+      const fc = contactFirstConversionById.get(assoc.id);
+      if (fc) {
+        const key = `${fc.name}|${fc.isoDate}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          merged.push({
+            eventType: fc.name,
+            occurredAt: fc.isoDate,
+            anchor: 'lead_form_submitted',
+            leadSourceDetails: null,
+            inboundValue: null,
+            signupProduct: null,
+            pageDomain: fc.pageDomain,
+          });
+        }
+      }
+    }
+    // Deduplicate `lead_form_submitted`: nur das chronologisch erste Event
+    // behalten. Wenn das früheste Event aus HubSpot kommt (= kein pageDomain),
+    // aber Amplitude denselben Form-Submit auch erfasst hat (innerhalb 1h),
+    // übernehmen wir die Amplitude-Domain auf das behaltene Event — so
+    // bekommt der Chip "(sipgate.ai)"/"(sipgate.de)" auch wenn der bessere
+    // HubSpot-Name verwendet wird.
+    const formSubmits: Array<{ idx: number; tp: Touchpoint }> = [];
+    for (let i = 0; i < merged.length; i++) {
+      if (merged[i].anchor === 'lead_form_submitted') {
+        formSubmits.push({ idx: i, tp: merged[i] });
+      }
+    }
+    if (formSubmits.length > 0) {
+      formSubmits.sort((a, b) => a.tp.occurredAt.localeCompare(b.tp.occurredAt));
+      const earliest = formSubmits[0].tp;
+      if (!earliest.pageDomain) {
+        const earliestMs = new Date(earliest.occurredAt).getTime();
+        const ampliClose = formSubmits.find(
+          s =>
+            s.tp.pageDomain &&
+            Math.abs(new Date(s.tp.occurredAt).getTime() - earliestMs) < 60 * 60 * 1000,
+        );
+        if (ampliClose) {
+          earliest.pageDomain = ampliClose.tp.pageDomain;
+        }
+      }
+      const filtered: Touchpoint[] = [];
+      for (const t of merged) {
+        if (t.anchor === 'lead_form_submitted' && t !== earliest) continue;
+        filtered.push(t);
+      }
+      merged.length = 0;
+      merged.push(...filtered);
     }
     if (leadCreatedAt) {
       merged.push({
@@ -245,6 +454,7 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
         leadSourceDetails: null,
         inboundValue: null,
         signupProduct: null,
+        pageDomain: null,
       });
     }
     if (dealCreatedAt) {
@@ -255,6 +465,29 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
         leadSourceDetails: null,
         inboundValue: null,
         signupProduct: null,
+        pageDomain: null,
+      });
+    }
+    // Bestandskunde-Pseudo-Touchpoint: nur einfügen wenn (a) wir eine
+    // Customer-Since-Datum haben UND (b) es KEIN Signup-Atlantis-Event in der
+    // Journey gibt. Bei Self-Service-Signups ist das Signup-Event aussagekräftiger;
+    // hier markieren wir nur Bestandskunden, deren Customer-Beziehung vor dem
+    // Marketing-Tracking-Window begann.
+    const hasSignup = merged.some(
+      t =>
+        t.anchor === 'signup_atlantis_frontdesk' ||
+        t.anchor === 'signup_atlantis_other_product',
+    );
+    if (customerSince && !hasSignup) {
+      const year = new Date(customerSince).getFullYear();
+      merged.push({
+        eventType: `Bestandskunde seit ${year}`,
+        occurredAt: new Date(customerSince).toISOString(),
+        anchor: 'customer_since',
+        leadSourceDetails: null,
+        inboundValue: null,
+        signupProduct: null,
+        pageDomain: null,
       });
     }
     merged.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
@@ -294,6 +527,33 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
       if (won) wonDealsWithTouchCount++;
     }
 
+    // HubSpot-Minuten: bei Deals bevorzugt qualifizierte Minuten, fallback
+    // auf agents_minuten. Range-Feld inbound_volumen ist auf Deals selten
+    // gesetzt, daher null. Range kommt dann ggf. aus Amplitude.
+    const dealMinutesExact =
+      parseInt(deal.properties.agents_minuten_qualifiziert) ||
+      parseInt(deal.properties.agents_minuten) ||
+      null;
+    const agentsMinutes = resolveAgentsMinutes(
+      dealMinutesExact,
+      null,
+      touchpoints,
+    );
+
+    // Deal-MRR — selbe Berechnung wie in /api/deals/overview und im
+    // Dashboard-Badge "MRR ≥ 450 €", reused via computeDealRevenue.
+    const { revenue: dealMrr } = computeDealRevenue({
+      angeboteneProdukte: deal.properties.angebotene_produkte,
+      agentsMinutenQualifiziert: deal.properties.agents_minuten_qualifiziert,
+      agentsMinuten: deal.properties.agents_minuten,
+      hsMrr: deal.properties.hs_mrr,
+      hsNumOfAssociatedLineItems: deal.properties.hs_num_of_associated_line_items,
+      tcv: deal.properties.tcv,
+      vertragsdauer: deal.properties.vertragsdauer,
+      isWonDeal: won,
+    });
+    const mrr = dealMrr > 0 ? dealMrr : null;
+
     journeys.push({
       kind: 'deal',
       entityId: deal.id,
@@ -305,6 +565,11 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
       hasDeal: true,
       touchpoints,
       customerSince,
+      agentsMinutes,
+      minuteBucket: bucketize(agentsMinutes),
+      mrr,
+      mrrBucket: bucketizeMrr(mrr),
+      createdate: dealCreatedAt ? new Date(dealCreatedAt).toISOString() : null,
     });
   }
 
@@ -321,6 +586,15 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
       null,
     );
 
+    const leadMinutesExact = lead.properties.agents_minuten
+      ? Number(lead.properties.agents_minuten)
+      : null;
+    const agentsMinutes = resolveAgentsMinutes(
+      leadMinutesExact,
+      lead.properties.inbound_volumen ?? null,
+      touchpoints,
+    );
+
     journeys.push({
       kind: 'lead',
       entityId: lead.id,
@@ -332,6 +606,11 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
       hasDeal: false,
       touchpoints,
       customerSince,
+      agentsMinutes,
+      minuteBucket: bucketize(agentsMinutes),
+      mrr: null,
+      mrrBucket: 'unknown',
+      createdate: leadCreatedAt ? new Date(leadCreatedAt).toISOString() : null,
     });
   }
 

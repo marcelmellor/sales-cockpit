@@ -2,18 +2,18 @@ import { getBigQuery } from './client';
 
 // Phase 1: AI Agents only. The HubSpot tag for AI Agents is `frontdesk` — that's
 // what `?produkt=frontdesk` selects across leads/deals overview routes. Inside
-// Amplitude the same product appears as `event_properties.product = 'FRONTDESK'`
-// on Signup-Atlantis events, as a lead_source_details substring "frontdesk" on
-// Lead-Completed events, or as the page domain `www.sipgate.ai` on the
-// AI-Agents marketing site events. We anchor on those three signals to be sure
-// we don't attribute, say, a Team-Telefonanlage signup to an AI-Agents deal
-// just because the same person has both pipelines.
+// Amplitude die folgenden Signale gelten als First-Touch:
+//   - Signup Atlantis mit product=FRONTDESK (Self-Service-Trial)
+//   - Form Submitted: Contact Form (Lead-Formular, z.B. /rueckruf-anfordern)
+//   - Marketing-Page-Events auf sipgate.ai (Demo-/Trial-Klicks, Signup-Forms)
+// Wir filtern by user_id (Contact-Email), daher sind alle gefundenen Events
+// automatisch von Personen in unserer AI-Agents-Pipeline.
 
 export interface AmplitudeAttribution {
   email: string;
   eventType: string;
   occurredAt: string; // ISO timestamp
-  anchor: 'signup_atlantis_frontdesk' | 'lead_completed_frontdesk' | 'sipgate_ai_domain';
+  anchor: 'signup_atlantis_frontdesk' | 'lead_form_submitted' | 'sipgate_ai_domain';
 }
 
 const EVENTS_TABLE = 'ff-amplitude.ampli_live_events.EVENTS_100008946';
@@ -28,7 +28,6 @@ WITH events AS (
     event_type,
     event_time,
     JSON_VALUE(event_properties, '$.product') AS ev_product,
-    JSON_VALUE(event_properties, '$.lead_source_details') AS lead_source_details,
     TO_JSON_STRING(event_properties) AS props_string
   FROM \`${EVENTS_TABLE}\`
   WHERE event_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 365 DAY)
@@ -37,7 +36,7 @@ WITH events AS (
     AND event_type IN (
       'Click Demo buchen', 'Click Kostenlos testen', 'plan_select', 'pricing_view',
       'Form Submitted: Contact Form', 'Form Submitted: Signup Form', 'Form Submitted: Signup Modal',
-      'Signup Atlantis', 'Lead Completed', 'lead_form_all', 'su5_registration', 'su4_form_submit'
+      'Signup Atlantis', 'su5_registration', 'su4_form_submit'
     )
 ),
 anchored AS (
@@ -48,10 +47,8 @@ anchored AS (
     CASE
       WHEN event_type = 'Signup Atlantis' AND ev_product = 'FRONTDESK'
         THEN 'signup_atlantis_frontdesk'
-      WHEN event_type = 'Lead Completed' AND (
-        LOWER(IFNULL(lead_source_details, '')) LIKE '%frontdesk%'
-        OR lead_source_details = 'Agent Qualifizierungsfragen im Produkt'
-      ) THEN 'lead_completed_frontdesk'
+      WHEN event_type = 'Form Submitted: Contact Form'
+        THEN 'lead_form_submitted'
       WHEN props_string LIKE '%sipgate.ai%'
         THEN 'sipgate_ai_domain'
       ELSE NULL
@@ -64,11 +61,9 @@ anchored AS (
       WHEN 'Form Submitted: Contact Form' THEN 5
       WHEN 'Signup Atlantis' THEN 6
       WHEN 'su5_registration' THEN 7
-      WHEN 'Lead Completed' THEN 8
-      WHEN 'Form Submitted: Signup Form' THEN 9
-      WHEN 'Form Submitted: Signup Modal' THEN 10
-      WHEN 'su4_form_submit' THEN 11
-      WHEN 'lead_form_all' THEN 12
+      WHEN 'Form Submitted: Signup Form' THEN 8
+      WHEN 'Form Submitted: Signup Modal' THEN 9
+      WHEN 'su4_form_submit' THEN 10
       ELSE 99
     END AS tiebreak
   FROM events

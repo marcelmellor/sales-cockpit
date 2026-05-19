@@ -11,8 +11,8 @@ import type { Touchpoint } from '@/lib/amplitude/journeys';
 
 type Col1 = 'agent_signup' | 'pbx_signup' | 'bestandskunde' | 'andere';
 type Col2 = 'inproduct' | 'onboarding' | 'andere';
-type Col3 = 'lead_created' | 'no_lead';
-type Col4 = 'deal_created' | 'no_deal';
+type Col3 = 'lead_gte_2500' | 'lead_lt_2500' | 'lead_unknown_min' | 'no_lead';
+type Col4 = 'deal_gte_450' | 'deal_lt_450' | 'deal_unknown_mrr' | 'no_deal';
 
 interface DealCategory {
   col1: Col1;
@@ -49,8 +49,20 @@ function categorize(j: MarketingFunnelJourney): DealCategory {
         ? 'inproduct'
         : 'andere';
 
-  const col3: Col3 = j.hasLead ? 'lead_created' : 'no_lead';
-  const col4: Col4 = j.hasDeal ? 'deal_created' : 'no_deal';
+  const col3: Col3 = !j.hasLead
+    ? 'no_lead'
+    : j.minuteBucket === 'lt_threshold'
+      ? 'lead_lt_2500'
+      : j.minuteBucket === 'gte_threshold'
+        ? 'lead_gte_2500'
+        : 'lead_unknown_min';
+  const col4: Col4 = !j.hasDeal
+    ? 'no_deal'
+    : j.mrrBucket === 'gte_threshold'
+      ? 'deal_gte_450'
+      : j.mrrBucket === 'lt_threshold'
+        ? 'deal_lt_450'
+        : 'deal_unknown_mrr';
 
   return { col1, col2, col3, col4 };
 }
@@ -67,18 +79,36 @@ const COL2_META: Record<Col2, { label: string; color: string }> = {
   andere: { label: 'keine Quali', color: '#cbd5e1' },
 };
 const COL3_META: Record<Col3, { label: string; color: string }> = {
-  lead_created: { label: 'Lead angelegt', color: '#3b82f6' },
+  lead_gte_2500: { label: 'Lead ≥ 2.500 Min', color: '#4338ca' },
+  lead_lt_2500: { label: 'Lead < 2.500 Min', color: '#3b82f6' },
+  lead_unknown_min: { label: 'Lead (Min unbekannt)', color: '#93c5fd' },
   no_lead: { label: 'kein Lead', color: '#cbd5e1' },
 };
 const COL4_META: Record<Col4, { label: string; color: string }> = {
-  deal_created: { label: 'Deal angelegt', color: '#0f766e' },
+  deal_gte_450: { label: 'Deal ≥ 450 € MRR', color: '#0f766e' },
+  deal_lt_450: { label: 'Deal < 450 € MRR', color: '#5eead4' },
+  deal_unknown_mrr: { label: 'Deal (MRR unbekannt)', color: '#a7f3d0' },
   no_deal: { label: 'kein Deal', color: '#cbd5e1' },
 };
 
 const COL1_ORDER: Col1[] = ['agent_signup', 'pbx_signup', 'bestandskunde', 'andere'];
 const COL2_ORDER: Col2[] = ['onboarding', 'inproduct', 'andere'];
-const COL3_ORDER: Col3[] = ['lead_created', 'no_lead'];
-const COL4_ORDER: Col4[] = ['deal_created', 'no_deal'];
+const COL3_ORDER: Col3[] = ['lead_gte_2500', 'lead_lt_2500', 'lead_unknown_min', 'no_lead'];
+const COL4_ORDER: Col4[] = ['deal_gte_450', 'deal_lt_450', 'deal_unknown_mrr', 'no_deal'];
+
+export type ColumnKey = 'col1' | 'col2' | 'col3' | 'col4';
+
+// Spalten-Metadaten — wird sowohl von der Sankey-Layout-Funktion als auch
+// vom MarketingView (Toolbar) benutzt, damit die Reihenfolge konsistent bleibt.
+export const COLUMN_REGISTRY: ReadonlyArray<{
+  key: ColumnKey;
+  label: string;
+}> = [
+  { key: 'col1', label: 'First Touch' },
+  { key: 'col2', label: 'Qualifizierung' },
+  { key: 'col3', label: 'HubSpot Lead' },
+  { key: 'col4', label: 'HubSpot Deal' },
+];
 
 interface NodeBox {
   id: string;
@@ -100,29 +130,45 @@ interface FlowLink {
   thickness: number;
 }
 
+type ColDef = {
+  key: ColumnKey;
+  order: readonly string[];
+  meta: Record<string, { label: string; color: string }>;
+  getKey: (c: DealCategory) => string;
+  idx: number;
+};
+
 // Sankey layout: stack node-boxes per column, then route bands between
 // adjacent columns by tracking how much of each node's height has been
 // "consumed" by outgoing/incoming bands.
 function layout(
   cats: DealCategory[],
+  visibleColumns: readonly ColumnKey[],
   width: number,
   height: number,
 ): { nodes: NodeBox[]; links: FlowLink[] } {
   const PADDING = 8;
   const NODE_WIDTH = 12;
-  const COLUMNS = 4;
-  const COL_GAP = (width - COLUMNS * NODE_WIDTH) / (COLUMNS - 1);
 
   const total = cats.length;
   if (total === 0) return { nodes: [], links: [] };
 
-  // For each column: counts per category, ordered.
-  const colDefs = [
-    { order: COL1_ORDER, meta: COL1_META, getKey: (c: DealCategory) => c.col1, idx: 0 },
-    { order: COL2_ORDER, meta: COL2_META, getKey: (c: DealCategory) => c.col2, idx: 1 },
-    { order: COL3_ORDER, meta: COL3_META, getKey: (c: DealCategory) => c.col3, idx: 2 },
-    { order: COL4_ORDER, meta: COL4_META, getKey: (c: DealCategory) => c.col4, idx: 3 },
-  ] as const;
+  // Full registry → filter by visibility + re-index with consecutive idx.
+  const ALL_COLS: ColDef[] = [
+    { key: 'col1', order: COL1_ORDER, meta: COL1_META as Record<string, { label: string; color: string }>, getKey: c => c.col1, idx: 0 },
+    { key: 'col2', order: COL2_ORDER, meta: COL2_META as Record<string, { label: string; color: string }>, getKey: c => c.col2, idx: 0 },
+    { key: 'col3', order: COL3_ORDER, meta: COL3_META as Record<string, { label: string; color: string }>, getKey: c => c.col3, idx: 0 },
+    { key: 'col4', order: COL4_ORDER, meta: COL4_META as Record<string, { label: string; color: string }>, getKey: c => c.col4, idx: 0 },
+  ];
+  const colDefs: ColDef[] = visibleColumns
+    .map(k => ALL_COLS.find(c => c.key === k))
+    .filter((c): c is ColDef => c !== undefined)
+    .map((c, i) => ({ ...c, idx: i }));
+  if (colDefs.length === 0) return { nodes: [], links: [] };
+
+  const COLUMNS = colDefs.length;
+  const COL_GAP =
+    COLUMNS > 1 ? (width - COLUMNS * NODE_WIDTH) / (COLUMNS - 1) : 0;
 
   const nodes: NodeBox[] = [];
   const nodesByColAndKey = new Map<string, NodeBox>();
@@ -205,20 +251,29 @@ interface Props {
   journeys: MarketingFunnelJourney[];
   marketingTouchTotal: number; // global Amplitude-pool size (top-of-funnel)
   trialSignupTotal: number;
+  visibleColumns: readonly ColumnKey[];
 }
 
-export function MarketingSankey({ journeys, marketingTouchTotal, trialSignupTotal }: Props) {
+export function MarketingSankey({ journeys, marketingTouchTotal, trialSignupTotal, visibleColumns }: Props) {
   const cats = useMemo(() => journeys.map(categorize), [journeys]);
   const VIEWBOX_WIDTH = 1000;
   const VIEWBOX_HEIGHT = 380;
   const PADDING_X = 130; // room for left/right labels
   const PADDING_Y = 12;
   const { nodes, links } = useMemo(
-    () => layout(cats, VIEWBOX_WIDTH - 2 * PADDING_X, VIEWBOX_HEIGHT - 2 * PADDING_Y),
-    [cats],
+    () =>
+      layout(
+        cats,
+        visibleColumns,
+        VIEWBOX_WIDTH - 2 * PADDING_X,
+        VIEWBOX_HEIGHT - 2 * PADDING_Y,
+      ),
+    [cats, visibleColumns],
   );
 
-  const columnHeaders = ['First Touch', 'Qualifizierung', 'HubSpot Lead', 'HubSpot Deal'];
+  const columnHeaders = visibleColumns
+    .map(k => COLUMN_REGISTRY.find(c => c.key === k)?.label)
+    .filter((l): l is string => !!l);
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-6">

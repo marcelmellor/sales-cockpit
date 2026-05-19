@@ -103,6 +103,7 @@ export async function getAgentsQualificationByMastersipid(
       leadSourceDetails: null,
       inboundValue: row.inbound_value,
       signupProduct: null,
+      pageDomain: null,
     });
     result.set(row.master_sip_id, list);
   }

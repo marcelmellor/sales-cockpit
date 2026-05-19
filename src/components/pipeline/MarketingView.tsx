@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import { Loader2, ExternalLink } from 'lucide-react';
 import type {
   MarketingFunnelResponse,
@@ -7,7 +8,7 @@ import type {
 import type { Touchpoint } from '@/lib/amplitude/journeys';
 import { formatAmplitudeEvent } from '@/lib/amplitude/format';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
-import { MarketingSankey } from './MarketingSankey';
+import { MarketingSankey, COLUMN_REGISTRY, type ColumnKey } from './MarketingSankey';
 import type { MarketingFunnelJourney } from '@/app/api/marketing/funnel/route';
 
 interface MarketingViewProps {
@@ -15,7 +16,51 @@ interface MarketingViewProps {
   isLoading: boolean;
 }
 
+// Date-Preset-Optionen für den Marketing-Filter. `null` = alle Entries seit
+// HARD_FLOOR_DATE, sonst "Lead/Deal innerhalb der letzten N Tage erstellt".
+type DatePresetDays = 30 | 90 | null;
+const DATE_PRESETS: Array<{ key: string; label: string; days: DatePresetDays }> = [
+  { key: '30', label: '30 Tage', days: 30 },
+  { key: '90', label: '90 Tage', days: 90 },
+  { key: 'all', label: 'seit 01.01.2026', days: null },
+];
+
+// Hartes Floor-Datum: davor existierte die AI-Agents-Lead-Pipeline in HubSpot
+// quasi nicht (vereinzelte Test-Entries). Wird auf alle Date-Filter
+// angewendet — auch "Alle" geht nie weiter zurück.
+const HARD_FLOOR_DATE = new Date('2026-01-01T00:00:00.000Z').getTime();
+
 export function MarketingView({ data, isLoading }: MarketingViewProps) {
+  const [datePresetKey, setDatePresetKey] = useState<string>('90');
+  // Sichtbare Sankey-Spalten — in-memory (kein localStorage). Default: alle 4
+  // in der Registry-Reihenfolge.
+  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() =>
+    COLUMN_REGISTRY.map(c => c.key),
+  );
+  const toggleColumn = (key: ColumnKey) => {
+    setVisibleColumns(prev =>
+      prev.includes(key)
+        ? prev.filter(k => k !== key)
+        // Wieder einfügen in der kanonischen Reihenfolge (Registry-Order), damit
+        // die Spalten nicht plötzlich umgestellt werden.
+        : COLUMN_REGISTRY.map(c => c.key).filter(k => prev.includes(k) || k === key),
+    );
+  };
+
+  const filteredJourneys = useMemo(() => {
+    if (!data) return [];
+    const preset = DATE_PRESETS.find(p => p.key === datePresetKey) ?? DATE_PRESETS[DATE_PRESETS.length - 1];
+    const presetCutoff =
+      preset.days === null ? HARD_FLOOR_DATE : Date.now() - preset.days * 24 * 60 * 60 * 1000;
+    // Floor immer angewendet — auch "Alle" geht nicht weiter zurück.
+    const cutoff = Math.max(presetCutoff, HARD_FLOOR_DATE);
+    return data.journeys.filter(j => {
+      if (!j.createdate) return false;
+      const t = new Date(j.createdate).getTime();
+      return Number.isFinite(t) && t >= cutoff;
+    });
+  }, [data, datePresetKey]);
+
   if (isLoading && !data) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -38,7 +83,7 @@ export function MarketingView({ data, isLoading }: MarketingViewProps) {
   // Journey-Tabelle: nur Deals mit AI-Agents-Touch zeigen. Lead-only- und
   // Deals-ohne-Amplitude-Spur Entries gehören nur ins Sankey, nicht in die
   // detail-orientierte Tabelle (sonst wird's überfüllt).
-  const tableJourneys = data.journeys.filter(
+  const tableJourneys = filteredJourneys.filter(
     j =>
       j.kind === 'deal' &&
       j.touchpoints.some(
@@ -50,12 +95,97 @@ export function MarketingView({ data, isLoading }: MarketingViewProps) {
   );
   return (
     <div className="space-y-6">
+      <DateFilterBar
+        active={datePresetKey}
+        onChange={setDatePresetKey}
+        totalEntries={data.journeys.length}
+        filteredEntries={filteredJourneys.length}
+      />
+      <ColumnToggleBar visible={visibleColumns} onToggle={toggleColumn} />
       <MarketingSankey
-        journeys={data.journeys}
+        journeys={filteredJourneys}
         marketingTouchTotal={marketingTouch}
         trialSignupTotal={trialSignup}
+        visibleColumns={visibleColumns}
       />
       <JourneyTable journeys={tableJourneys} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Date-Filter-Bar
+// ---------------------------------------------------------------------------
+
+interface DateFilterBarProps {
+  active: string;
+  onChange: (key: string) => void;
+  totalEntries: number;
+  filteredEntries: number;
+}
+
+function DateFilterBar({ active, onChange, totalEntries, filteredEntries }: DateFilterBarProps) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 flex items-center justify-between flex-wrap gap-3">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-gray-500">Erstellt in den letzten</span>
+        <div className="flex items-center gap-1">
+          {DATE_PRESETS.map(p => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => onChange(p.key)}
+              className={`px-2 py-0.5 text-xs font-medium rounded transition-colors ${
+                active === p.key
+                  ? 'bg-gray-900 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="text-xs text-gray-500 tabular-nums">
+        {filteredEntries.toLocaleString('de-DE')} von {totalEntries.toLocaleString('de-DE')} Entries
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sankey-Column-Toggle-Bar
+// ---------------------------------------------------------------------------
+
+function ColumnToggleBar({
+  visible,
+  onToggle,
+}: {
+  visible: ColumnKey[];
+  onToggle: (key: ColumnKey) => void;
+}) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 flex items-center gap-3 flex-wrap">
+      <span className="text-xs text-gray-500">Sankey-Spalten</span>
+      <div className="flex items-center gap-1">
+        {COLUMN_REGISTRY.map(c => {
+          const isOn = visible.includes(c.key);
+          return (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => onToggle(c.key)}
+              className={`px-2 py-0.5 text-xs font-medium rounded transition-colors ${
+                isOn
+                  ? 'bg-gray-900 text-white'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}
+            >
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -97,20 +227,12 @@ function JourneyTable({ journeys }: JourneyTableProps) {
                 {j.companyName}
                 <ExternalLink className="h-3 w-3 text-gray-400" />
               </a>
-              <div className="mt-1 flex flex-wrap items-center gap-1">
+              <div className="mt-1">
                 <StageBadge
                   label={j.stageLabel}
                   isWon={j.stageIsWon}
                   isLost={j.stageIsLost}
                 />
-                {j.customerSince && (
-                  <span
-                    className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-gray-50 text-gray-500 border border-gray-200"
-                    title={`sipgate-Account angelegt am ${new Date(j.customerSince).toLocaleDateString('de-DE')}`}
-                  >
-                    Bestandskunde seit {new Date(j.customerSince).getFullYear()}
-                  </span>
-                )}
               </div>
             </div>
             <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1">
@@ -146,6 +268,15 @@ function StageBadge({ label, isWon, isLost }: { label: string; isWon: boolean; i
   );
 }
 
+// Lead-Form-Submit-Chip: einheitlich "Contact Form (<domain>)" — die genaue
+// Form-Bezeichnung (z.B. "Jetzt Beratung vereinbaren...") wird absichtlich
+// nicht im Chip gezeigt, weil sie zu lang und zu uneinheitlich ist. Volle
+// Info bleibt im Tooltip via touchpoint.eventType.
+function formatFormName(_raw: string, pageDomain: string | null): string {
+  const shortDomain = pageDomain ? pageDomain.replace(/^www\./, '') : null;
+  return shortDomain ? `Contact Form (${shortDomain})` : 'Contact Form';
+}
+
 function TouchpointChip({ touchpoint }: { touchpoint: Touchpoint }) {
   const date = new Date(touchpoint.occurredAt);
   const dateStr = date.toLocaleDateString('de-DE', {
@@ -158,10 +289,13 @@ function TouchpointChip({ touchpoint }: { touchpoint: Touchpoint }) {
     // PBX-Signup bleibt in der Signup-Familie (grün), aber als Teal-Variante
     // optisch unterscheidbar vom AI-Agents-spezifischen Emerald.
     signup_atlantis_other_product: 'bg-teal-50 text-teal-700 border-teal-200',
-    lead_completed_frontdesk: 'bg-blue-50 text-blue-700 border-blue-200',
+    lead_form_submitted: 'bg-blue-50 text-blue-700 border-blue-200',
     sipgate_ai_domain: 'bg-violet-50 text-violet-700 border-violet-200',
     agents_qualification_onboarding: 'bg-amber-50 text-amber-700 border-amber-200',
     agents_qualification_inproduct: 'bg-orange-50 text-orange-700 border-orange-200',
+    // Bestandskunde: dezent slate, kein Marketing-Touch sondern Journey-
+    // Startpunkt für Customer ohne Signup-Event.
+    customer_since: 'bg-slate-50 text-slate-600 border-slate-200',
     // HubSpot-Lifecycle bewusst dezent (grau, dashed border) — keine Marketing-
     // Touchpoints, nur Zeitanker damit man die Lücken zwischen Marketing-Event
     // und HubSpot-Schritt lesen kann.
@@ -174,10 +308,11 @@ function TouchpointChip({ touchpoint }: { touchpoint: Touchpoint }) {
   const anchorLabel: Record<Touchpoint['anchor'], string> = {
     signup_atlantis_frontdesk: 'Signup Atlantis (AI Agents)',
     signup_atlantis_other_product: 'Signup Atlantis (anderes Produkt)',
-    lead_completed_frontdesk: 'Lead-Form (Frontdesk)',
+    lead_form_submitted: 'Lead-Formular abgeschickt',
     sipgate_ai_domain: 'sipgate.ai-Domain',
     agents_qualification_onboarding: 'Quali (Onboarding)',
     agents_qualification_inproduct: 'Quali (In-Product)',
+    customer_since: 'sipgate-Account angelegt',
     hubspot_lead_created: 'HubSpot Lifecycle',
     hubspot_deal_created: 'HubSpot Lifecycle',
   };
@@ -190,11 +325,13 @@ function TouchpointChip({ touchpoint }: { touchpoint: Touchpoint }) {
       ? 'Agent Signup'
       : touchpoint.anchor === 'signup_atlantis_other_product'
         ? 'PBX Signup'
-        : touchpoint.anchor === 'agents_qualification_onboarding'
-          ? 'Onboarding-Quali'
-          : touchpoint.anchor === 'agents_qualification_inproduct'
-            ? 'In-Product-Quali'
-            : formatAmplitudeEvent(touchpoint.eventType);
+        : touchpoint.anchor === 'lead_form_submitted'
+          ? formatFormName(touchpoint.eventType, touchpoint.pageDomain)
+          : touchpoint.anchor === 'agents_qualification_onboarding'
+            ? 'Onboarding-Quali'
+            : touchpoint.anchor === 'agents_qualification_inproduct'
+              ? 'In-Product-Quali'
+              : formatAmplitudeEvent(touchpoint.eventType);
   const extras = [
     touchpoint.leadSourceDetails ? `Source: ${touchpoint.leadSourceDetails}` : null,
     touchpoint.inboundValue ? `Inbound: ${touchpoint.inboundValue}` : null,

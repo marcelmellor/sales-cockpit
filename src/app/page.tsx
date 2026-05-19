@@ -291,7 +291,7 @@ function PipelineOverviewContent() {
   // wenn der Marketing-Tab aktiv ist UND das Produkt frontdesk ist. Spart den
   // teuren BQ-Roundtrip auf jedem Pageload.
   const marketingCacheKey =
-    selectedProdukt === 'frontdesk' ? `marketing-funnel-frontdesk-v5` : null;
+    selectedProdukt === 'frontdesk' ? `marketing-funnel-frontdesk-v18` : null;
   const { data: marketingData, isLoading: marketingLoading } = useQuery({
     queryKey: ['marketing-funnel', selectedProdukt],
     queryFn: async () => {
