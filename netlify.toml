@@ -5,6 +5,17 @@
 [build.environment]
   NODE_VERSION = "20"
   SECRETS_SCAN_OMIT_KEYS = "NEXTAUTH_URL"
+  # Force git to rewrite SSH-style github.com URLs to HTTPS during the Netlify
+  # build. npm's git subprocess (used to install `@sipgate/revop-ui` from the
+  # private sipgate-revop-ui repo) prefers SSH for github.com hosts via
+  # hosted-git-info, even when the lockfile spec is git+https. The build
+  # container has no SSH key, so the SSH attempt fails. With this URL rewrite
+  # all clones go over HTTPS, where the Netlify GitHub App injects the token.
+  GIT_CONFIG_COUNT = "2"
+  GIT_CONFIG_KEY_0 = "url.https://github.com/.insteadOf"
+  GIT_CONFIG_VALUE_0 = "ssh://git@github.com/"
+  GIT_CONFIG_KEY_1 = "url.https://github.com/.insteadOf"
+  GIT_CONFIG_VALUE_1 = "git@github.com:"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
