@@ -88,6 +88,7 @@ const DASHBOARD_SYSTEM_BADGE_ICP_S2 = 'system:dashboard-icp-s2';
 const DASHBOARD_SYSTEM_BADGE_ICP_S3 = 'system:dashboard-icp-s3';
 const DASHBOARD_SYSTEM_BADGE_ICP_S4 = 'system:dashboard-icp-s4';
 const DASHBOARD_SYSTEM_BADGE_PURE_FRONTDESK = 'system:dashboard-pure-frontdesk';
+const DASHBOARD_SYSTEM_BADGE_COUNTRY_DE = 'system:dashboard-country-de';
 
 // Filter-Typen/Engine sind in ./filters/ ausgelagert.
 
@@ -149,9 +150,12 @@ export function DashboardView({
     if (!badgesStorageKey) return [];
     const stored = loadActiveBadgeIds(badgesStorageKey);
     // Kein gespeicherter Zustand: Defaults aus den System-Badges übernehmen.
-    // Aktuell nur "MRR ≥ 450 €" bei AI Agents.
+    // "Nur DE" ist immer default-aktiv (DACH-Sales-Sicht), "MRR ≥ 450 €" nur
+    // bei AI Agents.
     if (stored == null) {
-      return produkt === 'frontdesk' ? [DASHBOARD_SYSTEM_BADGE_MIN_MRR] : [];
+      const defaults: string[] = [DASHBOARD_SYSTEM_BADGE_COUNTRY_DE];
+      if (produkt === 'frontdesk') defaults.push(DASHBOARD_SYSTEM_BADGE_MIN_MRR);
+      return defaults;
     }
     return stored;
   });
@@ -223,6 +227,26 @@ export function DashboardView({
         },
       });
     }
+    // Country-Filter: "Nur DE" entfernt Deals mit Landesflagge im Titel.
+    // Inaktiv = "Alle". Pendant zum Deals-Tab-Badge in src/app/page.tsx —
+    // default an, damit das Dashboard standardmäßig den DACH-Blick zeigt.
+    badges.push({
+      id: DASHBOARD_SYSTEM_BADGE_COUNTRY_DE,
+      label: 'Nur DE',
+      system: true,
+      defaultActive: true,
+      filter: {
+        logic: 'AND',
+        children: [{
+          kind: 'criterion',
+          id: 'sys-dash-country-de',
+          type: 'country',
+          operator: 'after',
+          dateFrom: '',
+          stringValue: 'DE',
+        }],
+      },
+    });
     return badges;
   }, [produkt]);
   // Gruppierung für das "Leads / Woche"-Chart: entweder nach Minuten-Bucket

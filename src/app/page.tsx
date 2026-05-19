@@ -68,6 +68,7 @@ const DEAL_SYSTEM_BADGE_ICP_S1 = 'system:deals-icp-s1';
 const DEAL_SYSTEM_BADGE_ICP_S2 = 'system:deals-icp-s2';
 const DEAL_SYSTEM_BADGE_ICP_S3 = 'system:deals-icp-s3';
 const DEAL_SYSTEM_BADGE_ICP_S4 = 'system:deals-icp-s4';
+const DEAL_SYSTEM_BADGE_COUNTRY_DE = 'system:deals-country-de';
 const LEAD_SYSTEM_BADGE_OPEN = 'system:leads-open';
 const LEAD_SYSTEM_BADGE_MIN_1000 = 'system:leads-min-1000';
 const LEAD_SYSTEM_BADGE_MIN_2000 = 'system:leads-min-2000';
@@ -552,7 +553,9 @@ function PipelineOverviewContent() {
       return;
     }
     const stored = loadActiveBadgeIds(dealsActiveBadgesKey);
-    setActiveDealsBadgeIds(stored ?? (selectedProdukt === 'frontdesk' ? [DEAL_SYSTEM_BADGE_MIN_MRR] : []));
+    const defaults: string[] = [DEAL_SYSTEM_BADGE_COUNTRY_DE];
+    if (selectedProdukt === 'frontdesk') defaults.push(DEAL_SYSTEM_BADGE_MIN_MRR);
+    setActiveDealsBadgeIds(stored ?? defaults);
   }, [dealsActiveBadgesKey, selectedProdukt]);
   useEffect(() => {
     if (!leadsActiveBadgesKey) {
@@ -640,6 +643,27 @@ function PipelineOverviewContent() {
         },
       });
     }
+    // Country-Filter: System-Badge "Nur DE" filtert auf Deals ohne
+    // Landesflagge im Titel. Inaktiv = alle Länder (= "Alle"). Default an,
+    // weil das Cockpit primär den DACH-Sales-Blick zeigt — Auslands-Deals
+    // sollen explizit per Toggle dazugeholt werden.
+    badges.push({
+      id: DEAL_SYSTEM_BADGE_COUNTRY_DE,
+      label: 'Nur DE',
+      system: true,
+      defaultActive: true,
+      filter: {
+        logic: 'AND',
+        children: [{
+          kind: 'criterion',
+          id: 'sys-country-de',
+          type: 'country',
+          operator: 'after',
+          dateFrom: '',
+          stringValue: 'DE',
+        }],
+      },
+    });
     return badges;
   }, [showAgentMrrBadge]);
 

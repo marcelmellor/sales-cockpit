@@ -22,7 +22,8 @@ export type DealFieldType =
   | 'mrr'
   | 'status'
   | 'icp_tier'
-  | 'produkt_pur';
+  | 'produkt_pur'
+  | 'country';
 
 // Auswahl-Optionen für `produkt_pur` ("Nur Produkt"). Tokens entsprechen den
 // HubSpot-Multi-Select-Werten in `angebotene_produkte`. Aktuell nur AI Agents
@@ -54,6 +55,18 @@ export function isDealClosed(stageLabel: string | null | undefined): boolean {
   if (!stageLabel) return false;
   const s = stageLabel.toLowerCase();
   return CLOSED_STAGE_KEYWORDS.some(kw => s.includes(kw));
+}
+
+// Country-Flag-Emojis bestehen aus zwei aufeinanderfolgenden Regional-Indicator-
+// Buchstaben (U+1F1E6 bis U+1F1FF). Konvention im sipgate-CRM: Deutsche Deals
+// haben keine Flagge im Titel, ausländische bekommen ein Flag-Prefix (z.B.
+// "🇳🇱 Acme B.V."). Ein einzelnes Regional-Indicator-Zeichen reicht zur
+// Erkennung — paarlose Zeichen kommen organisch nicht vor.
+const FLAG_EMOJI_REGEX = /[\u{1F1E6}-\u{1F1FF}]/u;
+
+export function dealTitleHasCountryFlag(dealName: string | null | undefined): boolean {
+  if (!dealName) return false;
+  return FLAG_EMOJI_REGEX.test(dealName);
 }
 
 export function buildDealFieldConfigs(
@@ -113,6 +126,15 @@ export function buildDealFieldConfigs(
       inputKind: 'enum',
       enumOptions: DEAL_PRODUKT_PUR_OPTIONS.map(o => ({ ...o })),
     },
+    {
+      type: 'country',
+      label: 'Land',
+      inputKind: 'enum',
+      enumOptions: [
+        { value: 'DE', label: 'DE (ohne Flagge im Titel)' },
+        { value: 'non-DE', label: 'Nicht-DE (mit Flagge im Titel)' },
+      ],
+    },
   ];
 }
 
@@ -128,6 +150,7 @@ export function getDealInputKind(type: DealFieldType): FieldInputKind {
     case 'status':
     case 'icp_tier':
     case 'produkt_pur':
+    case 'country':
       return 'enum';
   }
 }
@@ -163,6 +186,11 @@ function matchDealCriterion(
 
   if (c.type === 'icp_tier') {
     return deal.icpTier === c.stringValue;
+  }
+
+  if (c.type === 'country') {
+    const hasFlag = dealTitleHasCountryFlag(deal.dealName);
+    return c.stringValue === 'DE' ? !hasFlag : hasFlag;
   }
 
   if (c.type === 'produkt_pur') {

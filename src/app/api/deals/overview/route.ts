@@ -29,6 +29,7 @@ export type IcpTier = 'S1' | 'S2' | 'S3' | 'S4';
 export interface DealOverviewItem {
   id: string;
   companyName: string;
+  dealName: string;
   revenue: number;
   revenueSource: RevenueSource;
   agentsMinuten: number;
@@ -368,6 +369,7 @@ async function buildPipelineOverview(
       return {
         id: deal.id,
         companyName: sipgateAccountCompany || company?.name || deal.properties.dealname || 'Unknown',
+        dealName: deal.properties.dealname || '',
         revenue,
         revenueSource,
         agentsMinuten: agentMinuten,
