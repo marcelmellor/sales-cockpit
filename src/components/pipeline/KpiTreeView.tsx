@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isWonStageLabel } from '@/lib/hubspot/mrr';
-import { getActivationLabel } from '@/lib/marketing/touchpoint-label';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import type { MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
 import {
@@ -49,17 +48,17 @@ const METRICS: MetricNode[] = [
   // Left column: Leads
   { id: 'leads', label: 'Leads / Woche', fallback: '?', target: '?', parentIds: ['deals'], computed: true },
   { id: 'demo', label: 'Demo-Buchungen / Woche', fallback: '?', target: '?', parentIds: ['leads'], dynamic: true },
-  { id: 'signup-leads', label: 'Leads aus Agent-Signups / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, tooltip: 'Qualifiziert über Minutenvolumen bei Agent Signup' },
-  { id: 'pbx-leads', label: 'Leads aus PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, tooltip: 'Agent-Interesse + ausreichend Volumen bei PBX-Onboarding' },
+  { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.500 Min/Monat' },
+  { id: 'pbx-leads', label: 'Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.500 Min/Monat' },
   // Right column: PQL path
   { id: 'pql', label: 'Product-Qualified Leads / Woche', fallback: '?', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', tooltip: 'Enterprise-Nutzung ohne Jahresvertrag' },
   { id: 'int', label: 'Neue Kunden mit 1+ Integration', fallback: '?', target: '?', parentIds: ['pql'], team: 'onboarding' },
   { id: 'pb', label: 'Neue Kunden mit 3+ Playbooks', fallback: '?', target: '?', parentIds: ['pql'], team: 'onboarding' },
   { id: 'aha', label: 'Aha-Moment', fallback: '?', target: '?', parentIds: ['int', 'pb'], team: 'onboarding' },
-  { id: 'trials', label: 'Previews / Woche', fallback: '?', target: '?', parentIds: ['aha'], team: 'growth', dynamic: true },
+  { id: 'trials', label: 'Agent Previews / Woche', fallback: '?', target: '?', parentIds: ['aha'], team: 'growth', dynamic: true },
   { id: 'signup', label: 'Agent Signups / Woche', fallback: '?', target: '?', parentIds: ['trials'], team: 'growth', dynamic: true },
-  { id: 'preview-pbx', label: 'Previews von PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden, die eine Agent-Preview starten' },
-  { id: 'preview-bestand', label: 'Previews von Bestandskunden / Woche', fallback: '?', target: '?', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'Bestehende sipgate-Kunden ohne neuen Signup' },
+  { id: 'preview-pbx', label: 'Agent Previews von PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden, die eine Agent-Preview starten' },
+  { id: 'preview-bestand', label: 'Agent Previews von Bestandskunden / Woche', fallback: '?', target: '?', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'Bestehende sipgate-Kunden ohne neuen Signup' },
 ];
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -139,15 +138,15 @@ function computeLiveValues(
   const tooltips = new Map<string, string>();
   const weeks = Math.max(days / 7, 1);
   const now = Date.now();
-  const dealCutoff = now - days * 24 * 60 * 60 * 1000;
+  const cutoff = now - days * 24 * 60 * 60 * 1000;
 
   // ── Deal-based metrics (rolling window) ──────────────────────────────────
 
   const recentCreated = deals.filter(
-    d => d.createdate && new Date(d.createdate).getTime() >= dealCutoff,
+    d => d.createdate && new Date(d.createdate).getTime() >= cutoff,
   );
   const recentWon = deals.filter(
-    d => isWonStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= dealCutoff,
+    d => isWonStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff,
   );
 
   // Deals / Woche
@@ -194,31 +193,44 @@ function computeLiveValues(
     tooltips.set('preview-bestand', `${bq.previewTrialBestandskunde} Bestandskunden-Previews in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
 
     // ── Lead classification via Marketing Journeys ─────────────────────────
-    // Reuses getActivationLabel() from the Marketing tab to avoid duplicate
-    // classification logic. Lead-kind journeys are bucketed into:
-    //   • "Agent Signup" → signup-leads
-    //   • "PBX Signup"   → pbx-leads
-    //   • null / other   → demo (catch-all for non-signup-sourced leads)
+    // All three buckets require ICP (minuteBucket ≥ 2.500 Min/Monat).
+    // Non-ICP leads are excluded entirely — the KPI tree tracks the ICP
+    // pipeline only.
+    //
+    //   • signup-leads — In-Product-Quali + ICP
+    //   • pbx-leads    — Onboarding-Quali + ICP
+    //   • demo         — ICP catch-all (neither quali type matched)
 
-    const leadJourneys = marketingData.journeys.filter(j => j.kind === 'lead');
+    const leadJourneys = marketingData.journeys.filter(
+      j => j.kind === 'lead' && j.createdate && new Date(j.createdate).getTime() >= cutoff,
+    );
     if (leadJourneys.length > 0) {
-      let agentLeads = 0;
-      let pbxLeads = 0;
-      let demoLeads = 0;
+      let inProductIcpLeads = 0;
+      let onboardingIcpLeads = 0;
+      let demoIcpLeads = 0;
 
       for (const j of leadJourneys) {
-        const label = getActivationLabel(j.touchpoints);
-        if (label === 'Agent Signup') agentLeads++;
-        else if (label === 'PBX Signup') pbxLeads++;
-        else demoLeads++;
+        const isIcp = j.minuteBucket === 'gte_threshold';
+        if (!isIcp) continue; // nur ICP-Leads zählen
+
+        const hasInProductQuali = j.touchpoints.some(
+          t => t.anchor === 'agents_qualification_inproduct',
+        );
+        const hasOnboardingQuali = j.touchpoints.some(
+          t => t.anchor === 'agents_qualification_onboarding',
+        );
+
+        if (hasInProductQuali) inProductIcpLeads++;
+        else if (hasOnboardingQuali) onboardingIcpLeads++;
+        else demoIcpLeads++;
       }
 
-      values.set('signup-leads', fmtNum(agentLeads / weeks));
-      tooltips.set('signup-leads', `${agentLeads} Agent-Signup-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('pbx-leads', fmtNum(pbxLeads / weeks));
-      tooltips.set('pbx-leads', `${pbxLeads} PBX-Signup-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('demo', fmtNum(demoLeads / weeks));
-      tooltips.set('demo', `${demoLeads} sonstige Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('signup-leads', fmtNum(inProductIcpLeads / weeks));
+      tooltips.set('signup-leads', `${inProductIcpLeads} In-Product-Quali-Leads (≥ 2.500 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('pbx-leads', fmtNum(onboardingIcpLeads / weeks));
+      tooltips.set('pbx-leads', `${onboardingIcpLeads} Onboarding-Quali-Leads (≥ 2.500 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('demo', fmtNum(demoIcpLeads / weeks));
+      tooltips.set('demo', `${demoIcpLeads} sonstige ICP-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
     }
   }
 
