@@ -3,9 +3,14 @@ import { getSession } from '@/lib/auth/session';
 import { getHubSpotClient } from '@/lib/hubspot/client';
 import { getOrFetch } from '@/lib/server-cache';
 import { getAiAgentsFunnelTop } from '@/lib/amplitude/funnel';
+import { getMarketingReachFunnel } from '@/lib/amplitude/marketing-reach-funnel';
 import { getTouchpointsByEmail, Touchpoint } from '@/lib/amplitude/journeys';
+import { getPreSignupPageViewsByEmail } from '@/lib/amplitude/pre-signup-pageviews';
+import { getMarketingAcquisitionByEmail } from '@/lib/amplitude/marketing-acquisition';
 import { getAgentsQualificationByMastersipid } from '@/lib/amplitude/agents-events';
 import { getCustomerCreationByMastersipid } from '@/lib/amplitude/customer-info';
+import { getPreviewTrialsByMastersipid } from '@/lib/amplitude/preview-trials';
+import { getActivationTotals, getPreviewTrialTotals } from '@/lib/amplitude/funnel-totals';
 import { computeDealRevenue } from '@/lib/hubspot/mrr';
 import {
   MINUTE_BUCKET_THRESHOLD,
@@ -139,11 +144,15 @@ export async function GET(request: Request) {
     }
 
     const forceRefresh = searchParams.get('refresh') === '1';
-    const cacheKey = 'marketing-funnel:frontdesk';
+    // Funnel-Datums-Fenster — bestimmt sowohl die Marketing-Reach-Aggregation
+    // in BQ als auch den HubSpot-Side-Cohort-Schnitt. Default 90 Tage.
+    const daysRaw = Number(searchParams.get('days'));
+    const days = Number.isFinite(daysRaw) && daysRaw > 0 && daysRaw <= 365 ? daysRaw : 90;
+    const cacheKey = `marketing-funnel:frontdesk:${days}d`;
     const { data, meta } = await getOrFetch<MarketingFunnelResponse>(
       cacheKey,
       CACHE_TTL_SECONDS,
-      buildMarketingFunnel,
+      () => buildMarketingFunnel(days),
       { forceRefresh },
     );
     return NextResponse.json({ success: true, data, cache: meta });
@@ -157,7 +166,7 @@ export async function GET(request: Request) {
   }
 }
 
-async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
+async function buildMarketingFunnel(days: number): Promise<MarketingFunnelResponse> {
   const client = getHubSpotClient();
 
   // HubSpot: AI-Agents deals + leads in parallel. Deals bring contact assocs
@@ -274,19 +283,49 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
   const allEmails = Array.from(new Set(contactEmailById.values()));
   const allMastersipids = Array.from(new Set(contactMastersipidById.values()));
 
-  // Four BQ queries in parallel — funnel-top (independent), per-email
-  // touchpoints (Marketing-Site + Signup-Atlantis + Lead-Form), per-
-  // mastersipid agents-qualification events (in-product), and per-mastersipid
-  // customer-creation lookup (für die "Bestandskunde seit JJJJ"-Badge).
+  // Zehn BQ queries in parallel — funnel-top, marketing-reach-cascade (Top-
+  // of-Funnel-Stages), activation-totals (Signup Atlantis global),
+  // preview-trial-totals (Contract Finalized global), per-email touchpoints,
+  // per-email anonyme Pre-Signup-Page-Views, per-email Marketing-Acquisition
+  // (UTM/Click-IDs), per-mastersipid agents-qualification events, per-
+  // mastersipid customer-creation, per-mastersipid preview-trial activations.
   // Fail-safe per query so a single failure doesn't blank the whole tab.
-  const [funnelTop, touchpointsByEmail, qualificationByMsid, customerSinceByMsid] = await Promise.all([
+  const [funnelTop, marketingReach, activationTotals, previewTrialTotals, touchpointsByEmail, preSignupViewsByEmail, marketingAcquisitionByEmail, qualificationByMsid, customerSinceByMsid, previewTrialsByMsid] = await Promise.all([
     getAiAgentsFunnelTop().catch(err => {
       console.error('[marketing/funnel] funnel-top failed:', err);
       return { marketingTouch: 0, trialSignup: 0 };
     }),
+    getMarketingReachFunnel(days).catch(err => {
+      console.error('[marketing/funnel] marketing-reach failed:', err);
+      return {
+        marketingTouchDevices: 0,
+        marketingTouchSipgateDe: 0,
+        marketingTouchSipgateAi: 0,
+      };
+    }),
+    getActivationTotals(days).catch(err => {
+      console.error('[marketing/funnel] activation-totals failed:', err);
+      return { agentSignup: 0, otherSignup: 0, total: 0 };
+    }),
+    getPreviewTrialTotals(days).catch(err => {
+      console.error('[marketing/funnel] preview-trial-totals failed:', err);
+      return { total: 0, agentSignup: 0, otherSignup: 0, bestandskunde: 0 };
+    }),
     allEmails.length > 0
       ? getTouchpointsByEmail(allEmails).catch(err => {
           console.error('[marketing/funnel] touchpoints failed:', err);
+          return new Map<string, Touchpoint[]>();
+        })
+      : Promise.resolve(new Map<string, Touchpoint[]>()),
+    allEmails.length > 0
+      ? getPreSignupPageViewsByEmail(allEmails).catch(err => {
+          console.error('[marketing/funnel] pre-signup page-views failed:', err);
+          return new Map<string, Touchpoint[]>();
+        })
+      : Promise.resolve(new Map<string, Touchpoint[]>()),
+    allEmails.length > 0
+      ? getMarketingAcquisitionByEmail(allEmails).catch(err => {
+          console.error('[marketing/funnel] marketing-acquisition failed:', err);
           return new Map<string, Touchpoint[]>();
         })
       : Promise.resolve(new Map<string, Touchpoint[]>()),
@@ -302,6 +341,12 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
           return new Map<string, string>();
         })
       : Promise.resolve(new Map<string, string>()),
+    allMastersipids.length > 0
+      ? getPreviewTrialsByMastersipid(allMastersipids).catch(err => {
+          console.error('[marketing/funnel] preview-trials failed:', err);
+          return new Map<string, Touchpoint[]>();
+        })
+      : Promise.resolve(new Map<string, Touchpoint[]>()),
   ]);
 
   // Pipeline-Stage-Labels für Deals.
@@ -344,7 +389,10 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
       }
       const fromEmail = email ? touchpointsByEmail.get(email) ?? [] : [];
       const fromMsid = msid ? qualificationByMsid.get(msid) ?? [] : [];
-      for (const t of [...fromEmail, ...fromMsid]) {
+      const fromPreSignup = email ? preSignupViewsByEmail.get(email) ?? [] : [];
+      const fromAcquisition = email ? marketingAcquisitionByEmail.get(email) ?? [] : [];
+      const fromPreviewTrial = msid ? previewTrialsByMsid.get(msid) ?? [] : [];
+      for (const t of [...fromEmail, ...fromMsid, ...fromPreSignup, ...fromAcquisition, ...fromPreviewTrial]) {
         const key = `${t.eventType}|${t.occurredAt}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -590,13 +638,136 @@ async function buildMarketingFunnel(): Promise<MarketingFunnelResponse> {
     return bLast.localeCompare(aLast);
   });
 
+  // HubSpot-Stages: zählen direkt die Deals in unserer Pipeline, die einen
+  // marketing_acquisition-Touchpoint haben (= ihr Contact-Device hatte
+  // irgendwann in den letzten 365 Tagen ein UTM-/Click-ID-Event). Lifetime-
+  // Sicht, nicht ans BQ-Date-Window gekoppelt — weil Sales-Cycles regelmäßig
+  // länger sind als das Marketing-Reach-Window oben.
+  //
+  // Activation-Stage = Marketing-attribuierte Journey + echtes Signup-Event
+  // (Agent-Signup ∨ PBX-Signup). Bestandskunden haben kein Signup — sie
+  // tauchen erst in der Preview-Stage auf (dort als Subgroup). Subgroups
+  // mirroren die "Activation"-Spalte im Sankey (col1). Reihenfolge:
+  // agent_signup > pbx_signup. "andere" (= keine Activation) wird nicht
+  // gezählt, ergibt sich in der Bar als Rest auf den Marketing-Touch-Pool.
+  let activationAgent = 0;
+  let activationPbx = 0;
+  let activationBestand = 0;
+  let previewTrialAgent = 0;
+  let previewTrialPbx = 0;
+  let previewTrialBestand = 0;
+  let dealCreatedFromMarketing = 0;
+  let dealWonFromMarketing = 0;
+  for (const j of journeys) {
+    const hasMarketingAttribution = j.touchpoints.some(t => t.anchor === 'marketing_acquisition');
+    if (!hasMarketingAttribution) continue;
+
+    const hasAgentSignup = j.touchpoints.some(t => t.anchor === 'signup_atlantis_frontdesk');
+    const hasPbxSignup = j.touchpoints.some(t => t.anchor === 'signup_atlantis_other_product');
+    const hasBestandskunde = j.touchpoints.some(t => t.anchor === 'customer_since');
+    if (hasAgentSignup) activationAgent++;
+    else if (hasPbxSignup) activationPbx++;
+    else if (hasBestandskunde) activationBestand++;
+
+    const hasPreviewTrial = j.touchpoints.some(t => t.anchor === 'preview_trial_started');
+    if (hasPreviewTrial) {
+      if (hasAgentSignup) previewTrialAgent++;
+      else if (hasPbxSignup) previewTrialPbx++;
+      else if (hasBestandskunde) previewTrialBestand++;
+    }
+
+    if (j.kind !== 'deal') continue;
+    dealCreatedFromMarketing++;
+    if (j.stageIsWon) dealWonFromMarketing++;
+  }
+  // Activation-Gesamtzahl für den Server-Default (= alle 3 inkl. Bestandskunde,
+  // weil der Client die Stage-Sichtbarkeit von previewTrial noch nicht kennt).
+  const activationTotal = activationAgent + activationPbx + activationBestand;
+  const previewTrialTotal = previewTrialAgent + previewTrialPbx + previewTrialBestand;
+
   return {
     funnel: [
-      { key: 'marketingTouch', label: 'Marketing-Touch', count: funnelTop.marketingTouch },
-      { key: 'trialSignup', label: 'Trial-Signup', count: funnelTop.trialSignup },
-      { key: 'dealCreated', label: 'Deal angelegt', count: dealsWithTouchCount },
-      { key: 'dealWon', label: 'Deal gewonnen', count: wonDealsWithTouchCount },
+      {
+        key: 'marketingTouch',
+        label: 'Marketing-Touch',
+        count: marketingReach.marketingTouchDevices,
+        // Stacked-Bar-Aufschlüsselung nach Landing-Domain des ersten Marketing-
+        // getaggten Events pro Device. Rest (sipgatetrunking, satellite, etc.)
+        // ergibt sich aus count - sum(subgroups) und wird vom Renderer als
+        // "andere" gezeichnet.
+        subgroups: [
+          {
+            key: 'sipgate_de',
+            label: 'sipgate.de',
+            count: marketingReach.marketingTouchSipgateDe,
+            color: '#a855f7',
+          },
+          {
+            key: 'sipgate_ai',
+            label: 'sipgate.ai',
+            count: marketingReach.marketingTouchSipgateAi,
+            color: '#7c3aed',
+          },
+        ],
+      },
+      {
+        key: 'activation',
+        label: 'Signup',
+        count: activationTotal,
+        // Subgroups mirroren die "Activation"-Spalte im Sankey. Earliest-wins-
+        // Priorität: agent > pbx > bestandskunde. Farben matchen COL1_META
+        // in MarketingSankey.tsx (emerald/teal/slate).
+        subgroups: [
+          {
+            key: 'agent_signup',
+            label: 'Agent Signup',
+            count: activationAgent,
+            color: '#10b981',
+          },
+          {
+            key: 'pbx_signup',
+            label: 'PBX Signup',
+            count: activationPbx,
+            color: '#14b8a6',
+          },
+          {
+            key: 'bestandskunde',
+            label: 'Bestandskunde',
+            count: activationBestand,
+            color: '#94a3b8',
+          },
+        ],
+      },
+      {
+        key: 'previewTrial',
+        label: 'Agent Preview (Trial)',
+        count: previewTrialTotal,
+        subgroups: [
+          { key: 'agent_signup', label: 'Agent Signup', count: previewTrialAgent, color: '#10b981' },
+          { key: 'pbx_signup', label: 'PBX Signup', count: previewTrialPbx, color: '#14b8a6' },
+          { key: 'bestandskunde', label: 'Bestandskunde', count: previewTrialBestand, color: '#94a3b8' },
+        ],
+      },
+      {
+        key: 'dealCreated',
+        label: 'Deal angelegt',
+        count: dealCreatedFromMarketing,
+      },
+      {
+        key: 'dealWon',
+        label: 'Deal gewonnen',
+        count: dealWonFromMarketing,
+      },
     ],
+    bqTotals: {
+      activationAgent: activationTotals.agentSignup,
+      activationOther: activationTotals.otherSignup,
+      activationTotal: activationTotals.total,
+      previewTrialTotal: previewTrialTotals.total,
+      previewTrialAgent: previewTrialTotals.agentSignup,
+      previewTrialOther: previewTrialTotals.otherSignup,
+      previewTrialBestandskunde: previewTrialTotals.bestandskunde,
+    },
     dealsTotal: deals.length,
     dealsWonTotal,
     journeys,

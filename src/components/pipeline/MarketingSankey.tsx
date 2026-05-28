@@ -4,18 +4,20 @@ import { useMemo } from 'react';
 import type { MarketingFunnelJourney } from '@/lib/marketing/funnel-types';
 import type { Touchpoint } from '@/lib/amplitude/journeys';
 
-// 4-column Sankey-flow visualisation der AI-Agents-Marketing-Deals.
-// Klassifiziert jeden Deal nach First-Touch / Quali / Lead / Outcome und
-// rendert die Pfad-Flüsse als kurvige SVG-Bänder. Pure SVG ohne D3 — bei
-// ~75 Deals × 12 Kategorien lohnt sich keine Lib.
+// 5-column Sankey-flow visualisation der AI-Agents-Marketing-Deals.
+// Klassifiziert jeden Deal nach Activation / Preview / Quali / Lead / Outcome
+// und rendert die Pfad-Flüsse als kurvige SVG-Bänder. Pure SVG ohne D3 — bei
+// ~75 Deals × 14 Kategorien lohnt sich keine Lib.
 
 type Col1 = 'agent_signup' | 'pbx_signup' | 'bestandskunde' | 'andere';
+type ColPreview = 'preview_yes' | 'preview_no';
 type Col2 = 'inproduct' | 'onboarding' | 'andere';
 type Col3 = 'lead_gte_2500' | 'lead_lt_2500' | 'lead_unknown_min' | 'no_lead';
 type Col4 = 'deal_gte_450' | 'deal_lt_450' | 'deal_unknown_mrr' | 'no_deal';
 
 interface DealCategory {
   col1: Col1;
+  colPreview: ColPreview;
   col2: Col2;
   col3: Col3;
   col4: Col4;
@@ -37,6 +39,12 @@ function categorize(j: MarketingFunnelJourney): DealCategory {
         : j.customerSince
           ? 'bestandskunde'
           : 'andere';
+
+  const colPreview: ColPreview = tps.some(
+    (t: Touchpoint) => t.anchor === 'preview_trial_started',
+  )
+    ? 'preview_yes'
+    : 'preview_no';
 
   const earliestQuali = tps.find(
     (t: Touchpoint) =>
@@ -64,39 +72,44 @@ function categorize(j: MarketingFunnelJourney): DealCategory {
         ? 'deal_lt_450'
         : 'deal_unknown_mrr';
 
-  return { col1, col2, col3, col4 };
+  return { col1, colPreview, col2, col3, col4 };
 }
 
 const COL1_META: Record<Col1, { label: string; color: string }> = {
   agent_signup: { label: 'Agent Signup', color: '#10b981' },
-  pbx_signup: { label: 'PBX Signup', color: '#14b8a6' },
+  pbx_signup: { label: 'PBX Signup', color: '#6366f1' },
   bestandskunde: { label: 'Bestandskunde', color: '#94a3b8' },
   andere: { label: 'andere', color: '#cbd5e1' },
 };
+const COL_PREVIEW_META: Record<ColPreview, { label: string; color: string }> = {
+  preview_yes: { label: 'Preview gestartet', color: '#06b6d4' },
+  preview_no: { label: 'keine Preview', color: '#cbd5e1' },
+};
 const COL2_META: Record<Col2, { label: string; color: string }> = {
   inproduct: { label: 'In-Product-Quali', color: '#f97316' },
-  onboarding: { label: 'Onboarding-Quali', color: '#f59e0b' },
+  onboarding: { label: 'Onboarding-Quali', color: '#8b5cf6' },
   andere: { label: 'keine Quali', color: '#cbd5e1' },
 };
 const COL3_META: Record<Col3, { label: string; color: string }> = {
-  lead_gte_2500: { label: 'Lead ≥ 2.500 Min', color: '#4338ca' },
+  lead_gte_2500: { label: 'Lead ≥ 2.500 Min', color: '#7c3aed' },
   lead_lt_2500: { label: 'Lead < 2.500 Min', color: '#3b82f6' },
-  lead_unknown_min: { label: 'Lead (Min unbekannt)', color: '#93c5fd' },
+  lead_unknown_min: { label: 'Lead (Min unbekannt)', color: '#f472b6' },
   no_lead: { label: 'kein Lead', color: '#cbd5e1' },
 };
 const COL4_META: Record<Col4, { label: string; color: string }> = {
-  deal_gte_450: { label: 'Deal ≥ 450 € MRR', color: '#0f766e' },
-  deal_lt_450: { label: 'Deal < 450 € MRR', color: '#5eead4' },
-  deal_unknown_mrr: { label: 'Deal (MRR unbekannt)', color: '#a7f3d0' },
+  deal_gte_450: { label: 'Deal ≥ 450 € MRR', color: '#059669' },
+  deal_lt_450: { label: 'Deal < 450 € MRR', color: '#0891b2' },
+  deal_unknown_mrr: { label: 'Deal (MRR unbekannt)', color: '#d97706' },
   no_deal: { label: 'kein Deal', color: '#cbd5e1' },
 };
 
 const COL1_ORDER: Col1[] = ['agent_signup', 'pbx_signup', 'bestandskunde', 'andere'];
+const COL_PREVIEW_ORDER: ColPreview[] = ['preview_yes', 'preview_no'];
 const COL2_ORDER: Col2[] = ['onboarding', 'inproduct', 'andere'];
 const COL3_ORDER: Col3[] = ['lead_gte_2500', 'lead_lt_2500', 'lead_unknown_min', 'no_lead'];
 const COL4_ORDER: Col4[] = ['deal_gte_450', 'deal_lt_450', 'deal_unknown_mrr', 'no_deal'];
 
-export type ColumnKey = 'col1' | 'col2' | 'col3' | 'col4';
+export type ColumnKey = 'col1' | 'colPreview' | 'col2' | 'col3' | 'col4';
 
 // Spalten-Metadaten — wird sowohl von der Sankey-Layout-Funktion als auch
 // vom MarketingView (Toolbar) benutzt, damit die Reihenfolge konsistent bleibt.
@@ -104,7 +117,8 @@ export const COLUMN_REGISTRY: ReadonlyArray<{
   key: ColumnKey;
   label: string;
 }> = [
-  { key: 'col1', label: 'First Touch' },
+  { key: 'col1', label: 'Signup' },
+  { key: 'colPreview', label: 'Agent Preview (Trial)' },
   { key: 'col2', label: 'Qualifizierung' },
   { key: 'col3', label: 'HubSpot Lead' },
   { key: 'col4', label: 'HubSpot Deal' },
@@ -156,6 +170,7 @@ function layout(
   // Full registry → filter by visibility + re-index with consecutive idx.
   const ALL_COLS: ColDef[] = [
     { key: 'col1', order: COL1_ORDER, meta: COL1_META as Record<string, { label: string; color: string }>, getKey: c => c.col1, idx: 0 },
+    { key: 'colPreview', order: COL_PREVIEW_ORDER, meta: COL_PREVIEW_META as Record<string, { label: string; color: string }>, getKey: c => c.colPreview, idx: 0 },
     { key: 'col2', order: COL2_ORDER, meta: COL2_META as Record<string, { label: string; color: string }>, getKey: c => c.col2, idx: 0 },
     { key: 'col3', order: COL3_ORDER, meta: COL3_META as Record<string, { label: string; color: string }>, getKey: c => c.col3, idx: 0 },
     { key: 'col4', order: COL4_ORDER, meta: COL4_META as Record<string, { label: string; color: string }>, getKey: c => c.col4, idx: 0 },
@@ -250,11 +265,18 @@ function layout(
 interface Props {
   journeys: MarketingFunnelJourney[];
   marketingTouchTotal: number; // global Amplitude-pool size (top-of-funnel)
-  trialSignupTotal: number;
+  signupTotal: number;         // Signup-stage des Funnels = Agent + PBX Signup
   visibleColumns: readonly ColumnKey[];
+  onToggleColumn: (key: ColumnKey) => void;
 }
 
-export function MarketingSankey({ journeys, marketingTouchTotal, trialSignupTotal, visibleColumns }: Props) {
+export function MarketingSankey({
+  journeys,
+  marketingTouchTotal,
+  signupTotal,
+  visibleColumns,
+  onToggleColumn,
+}: Props) {
   const cats = useMemo(() => journeys.map(categorize), [journeys]);
   const VIEWBOX_WIDTH = 1000;
   const VIEWBOX_HEIGHT = 380;
@@ -280,9 +302,33 @@ export function MarketingSankey({ journeys, marketingTouchTotal, trialSignupTota
       <div className="flex items-baseline justify-between mb-2">
         <h2 className="text-base font-medium text-gray-900">Marketing-Flow</h2>
         <p className="text-xs text-gray-500">
-          {journeys.length} AI-Agents-Deals · Globaler Pool: {marketingTouchTotal.toLocaleString('de-DE')} Marketing-Touched,
-          {' '}{trialSignupTotal.toLocaleString('de-DE')} Trial-Signups
+          {journeys.length} AI-Agents-Journeys · Globaler Pool: {marketingTouchTotal.toLocaleString('de-DE')} Marketing-Touched,
+          {' '}{signupTotal.toLocaleString('de-DE')} mit Signup
         </p>
+      </div>
+      {/* Spalten-Toggle direkt unter dem Titel — kompakt im Header statt
+          eigene Card oben, damit's klar Teil dieses Charts ist. */}
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-xs text-gray-500">Spalten</span>
+        <div className="flex items-center gap-1 flex-wrap">
+          {COLUMN_REGISTRY.map(c => {
+            const isOn = visibleColumns.includes(c.key);
+            return (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => onToggleColumn(c.key)}
+                className={`px-2 py-0.5 text-xs font-medium rounded transition-colors ${
+                  isOn
+                    ? 'bg-gray-900 text-white'
+                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                }`}
+              >
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
       <svg
         viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}

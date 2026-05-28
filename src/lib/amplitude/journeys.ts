@@ -11,6 +11,9 @@ import { getBigQuery } from './client';
 // products' signups (TEAM_NEOPBX, TRUNKING, …) are excluded.
 
 export type TouchpointAnchor =
+  | 'marketing_acquisition'            // Hartes Marketing-Akquise-Signal via UTM/Click-ID (paid + content marketing)
+  | 'marketing_page_sipgate_ai'        // Anonymer Pre-Signup-Page-View auf sipgate.ai (via device_id-Join)
+  | 'marketing_page_sipgate_de'        // Anonymer Pre-Signup-Page-View auf sipgate.de (via device_id-Join)
   | 'signup_atlantis_frontdesk'        // Self-service Trial-Signup mit Produkt-Wahl AI Agents
   | 'signup_atlantis_other_product'    // Signup Atlantis mit anderem Produkt (TEAM_NEOPBX, TRUNKING …) — Cross-Sell-Kontext, kein AI-Agents-Marketing-Touchpoint
   | 'lead_form_submitted'              // Form Submitted: Contact Form — der echte Lead-Form-Submit (z.B. /rueckruf-anfordern)
@@ -18,6 +21,7 @@ export type TouchpointAnchor =
   | 'agents_qualification_onboarding'  // Quali-Submit innerhalb 60min nach Erstanmeldung (Self-Service-Pfad)
   | 'agents_qualification_inproduct'   // Quali-Submit von Bestandskunde aus dem sipgate-App-Portal (Cross-/Upsell)
   | 'customer_since'                   // Pseudo-Anker für Bestandskunden ohne Signup-Event — sipgate-Account-Anlage-Datum als Journey-Start
+  | 'preview_trial_started'            // AI-Agents Preview/Trial aktiviert (Contract Finalized in exports_raw)
   | 'hubspot_lead_created'             // HubSpot Lifecycle: assoziierter Lead wurde in HubSpot angelegt
   | 'hubspot_deal_created';            // HubSpot Lifecycle: dieser Deal wurde in HubSpot angelegt
 

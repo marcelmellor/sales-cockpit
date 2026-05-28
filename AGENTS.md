@@ -1,5 +1,26 @@
 # Agent Instructions
 
+## sipgate product model — suite with multiple entry points
+
+sipgate is a **product suite**, not a single product. Customers can enter
+through different products (PBX, AI Agents / Frontdesk, etc.) and then
+add more products to their account.
+
+Key distinction for analytics: **Signup ≠ Trial/Preview.**
+
+- **Signup** (`Signup Atlantis` in Amplitude) = creating a sipgate account,
+  with a `product` property indicating the entry point (`FRONTDESK`,
+  `PBX`, etc.).
+- **Trial / Preview** = activating a time-limited test of a specific
+  product (e.g. AI Agents). This is a separate step that can happen
+  *after* any signup type — a PBX customer can start an AI Agent preview
+  just as well as someone who signed up directly for Agents.
+
+This means `Signup Atlantis` with `product='FRONTDESK'` does **not**
+equal "AI Agent Preview started". The preview/trial activation is tracked
+elsewhere (PBX provisioning system), not as an Amplitude event. When
+comparing funnel data, do not conflate the two.
+
 ## Git workflow — NO WORKTREES, EVER
 
 **Absolute rule: all development happens in the main checkout at `/Users/mellor/Development/sales-cockpit` on the `main` branch. Never use a git worktree. Never create a feature branch.**

@@ -5,9 +5,20 @@
 import type { Touchpoint } from '@/lib/amplitude/journeys';
 
 export interface MarketingFunnelStage {
-  key: 'marketingTouch' | 'trialSignup' | 'dealCreated' | 'dealWon';
+  // Funnel-Stages für die Marketing-View. Fünf Stages:
+  //   1. Marketing-Touch — unique Geräte mit UTM/Click-ID (BQ-seitig)
+  //   2. Activation — Agent-Signup ∨ PBX-Signup ∨ Bestandskunde
+  //   3. Preview (Trial) — AI-Agents-Preview aktiviert (Contract Finalized
+  //      in Amplitude exports_raw)
+  //   4. Deal angelegt — HubSpot AI-Agents-Deal mit marketing_acquisition
+  //   5. Deal gewonnen — gewonnene Teilmenge
+  key: 'marketingTouch' | 'activation' | 'previewTrial' | 'dealCreated' | 'dealWon';
   label: string;
   count: number;
+  /** Optional: Aufschlüsselung des Balkens in Sub-Buckets (z.B. Marketing-Touch
+   *  nach Landing-Domain sipgate.de/sipgate.ai/andere). Summe der subgroups-
+   *  counts ≤ count (Rest = "andere" wird vom Renderer dazugerechnet). */
+  subgroups?: Array<{ key: string; label: string; count: number; color?: string }>;
 }
 
 export type MarketingJourneyKind = 'deal' | 'lead';
@@ -51,8 +62,22 @@ export interface MarketingFunnelJourney {
   createdate: string | null;
 }
 
+// BQ-basierte Gesamtzahlen für Funnel-Stages, unabhängig von HubSpot.
+// Werden im Client als Bar-Gesamtbreite benutzt — die Journey-basierten
+// Subgroups sind die farbigen Segmente, der Rest wird als „Andere" gerendert.
+export interface FunnelBqTotals {
+  activationAgent: number;        // Signup Atlantis FRONTDESK
+  activationOther: number;        // Signup Atlantis anderes Produkt
+  activationTotal: number;        // alle Signup Atlantis
+  previewTrialTotal: number;      // Contract Finalized (Preview)
+  previewTrialAgent: number;      // Preview + FRONTDESK Signup (BQ cross-join)
+  previewTrialOther: number;      // Preview + anderes Signup-Produkt (BQ cross-join)
+  previewTrialBestandskunde: number; // Preview + Email gefunden, kein Signup
+}
+
 export interface MarketingFunnelResponse {
   funnel: MarketingFunnelStage[];
+  bqTotals: FunnelBqTotals;
   dealsTotal: number;       // total AI-Agents deals in scope
   dealsWonTotal: number;    // won AI-Agents deals (regardless of Amplitude)
   journeys: MarketingFunnelJourney[];

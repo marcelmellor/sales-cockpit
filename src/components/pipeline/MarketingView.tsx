@@ -2,53 +2,78 @@
 
 import { useMemo, useState } from 'react';
 import { Loader2, ExternalLink } from 'lucide-react';
-import type { MarketingFunnelResponse, MarketingFunnelJourney } from '@/lib/marketing/funnel-types';
+import type {
+  MarketingFunnelResponse,
+  MarketingFunnelJourney,
+  MarketingFunnelStage,
+} from '@/lib/marketing/funnel-types';
 import type { Touchpoint } from '@/lib/amplitude/journeys';
-import { formatAmplitudeEvent } from '@/lib/amplitude/format';
+import { formatTouchpointLabel } from '@/lib/marketing/touchpoint-label';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
 import { MarketingSankey, COLUMN_REGISTRY, type ColumnKey } from './MarketingSankey';
+import { MarketingFunnel } from './MarketingFunnel';
+import {
+  DATE_PRESETS,
+  HARD_FLOOR_DATE_MS as HARD_FLOOR_DATE,
+  type DatePresetKey,
+} from '@/lib/marketing/date-presets';
 
 interface MarketingViewProps {
   data: MarketingFunnelResponse | undefined;
   isLoading: boolean;
+  /** True wenn React Query gerade ein Background-Refetch macht (z.B. nach
+   *  Preset-Wechsel). UI bleibt sichtbar, aber wir zeigen einen kleinen
+   *  „aktualisiere"-Hinweis im Funnel-Header. */
+  isFetching: boolean;
+  /** Datum-Preset wird in page.tsx gehalten, weil die Marketing-Funnel-
+   *  Query (BQ) das Window braucht — bei Toggle dort die Query neu fetchen. */
+  datePresetKey: DatePresetKey;
+  onDatePresetChange: (key: DatePresetKey) => void;
 }
 
-// Date-Preset-Optionen für den Marketing-Filter. `null` = alle Entries seit
-// HARD_FLOOR_DATE, sonst "Lead/Deal innerhalb der letzten N Tage erstellt".
-type DatePresetDays = 30 | 90 | null;
-const DATE_PRESETS: Array<{ key: string; label: string; days: DatePresetDays }> = [
-  { key: '30', label: '30 Tage', days: 30 },
-  { key: '90', label: '90 Tage', days: 90 },
-  { key: 'all', label: 'seit 01.01.2026', days: null },
-];
-
-// Hartes Floor-Datum: davor existierte die AI-Agents-Lead-Pipeline in HubSpot
-// quasi nicht (vereinzelte Test-Entries). Wird auf alle Date-Filter
-// angewendet — auch "Alle" geht nie weiter zurück.
-const HARD_FLOOR_DATE = new Date('2026-01-01T00:00:00.000Z').getTime();
-
-export function MarketingView({ data, isLoading }: MarketingViewProps) {
-  const [datePresetKey, setDatePresetKey] = useState<string>('90');
-  // Sichtbare Sankey-Spalten — in-memory (kein localStorage). Default: alle 4
-  // in der Registry-Reihenfolge.
+export function MarketingView({
+  data,
+  isLoading,
+  isFetching,
+  datePresetKey,
+  onDatePresetChange,
+}: MarketingViewProps) {
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() =>
-    COLUMN_REGISTRY.map(c => c.key),
+    COLUMN_REGISTRY.map(c => c.key).filter(k => k !== 'colPreview'),
   );
+  const EXCLUSIVE_PAIR: ColumnKey[] = ['colPreview', 'col2'];
   const toggleColumn = (key: ColumnKey) => {
-    setVisibleColumns(prev =>
-      prev.includes(key)
-        ? prev.filter(k => k !== key)
-        // Wieder einfügen in der kanonischen Reihenfolge (Registry-Order), damit
-        // die Spalten nicht plötzlich umgestellt werden.
-        : COLUMN_REGISTRY.map(c => c.key).filter(k => prev.includes(k) || k === key),
+    setVisibleColumns(prev => {
+      if (prev.includes(key)) return prev.filter(k => k !== key);
+      const rival = EXCLUSIVE_PAIR.find(k => k !== key && EXCLUSIVE_PAIR.includes(key));
+      const base = rival ? prev.filter(k => k !== rival) : prev;
+      return COLUMN_REGISTRY.map(c => c.key).filter(k => base.includes(k) || k === key);
+    });
+  };
+
+  // Sichtbare Funnel-Stages — analog zum Sankey-Spalten-Toggle. Default:
+  // alles an. State ist in-memory (kein localStorage).
+  type FunnelStageKey = MarketingFunnelStage['key'];
+  const [visibleFunnelStages, setVisibleFunnelStages] = useState<FunnelStageKey[]>(() =>
+    ['marketingTouch', 'activation', 'previewTrial', 'dealCreated', 'dealWon'],
+  );
+  const toggleFunnelStage = (key: FunnelStageKey) => {
+    setVisibleFunnelStages(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key],
     );
   };
+
+  // Gruppierungsmodus: bestimmt die farbigen Subgroups in den Funnel-Balken.
+  // - 'marketingTouch': Marketing-Touch nach Landing-Domain (sipgate.de/ai/andere)
+  // - 'activation': alle Stages nach Activation-Typ (Agent/PBX/Bestandskunde)
+  type FunnelGrouping = 'marketingTouch' | 'activation';
+  const [funnelGrouping, setFunnelGrouping] = useState<FunnelGrouping>('activation');
 
   const filteredJourneys = useMemo(() => {
     if (!data) return [];
     const preset = DATE_PRESETS.find(p => p.key === datePresetKey) ?? DATE_PRESETS[DATE_PRESETS.length - 1];
     const presetCutoff =
-      preset.days === null ? HARD_FLOOR_DATE : Date.now() - preset.days * 24 * 60 * 60 * 1000;
+      preset.days === null ? HARD_FLOOR_DATE : +new Date() - preset.days * 24 * 60 * 60 * 1000;
     // Floor immer angewendet — auch "Alle" geht nicht weiter zurück.
     const cutoff = Math.max(presetCutoff, HARD_FLOOR_DATE);
     return data.journeys.filter(j => {
@@ -72,11 +97,160 @@ export function MarketingView({ data, isLoading }: MarketingViewProps) {
       </div>
     );
   }
-  // Top-of-funnel counts come from the legacy funnel array (Marketing-Touch
-  // und Trial-Signup) und werden vom Sankey-Header genutzt — wir lassen sie
-  // im API-Response unverändert, aber rendern keinen eigenen Funnel-Chart mehr.
+  // Sankey-Header-Kennzahlen — Marketing-Touch kommt jetzt aus dem Funnel
+  // (globale Device-Reach im Default-Window), "mit Signup" rechnen wir
+  // clientseitig aus den Journeys (Agent + PBX Signup).
   const marketingTouch = data.funnel.find(s => s.key === 'marketingTouch')?.count ?? 0;
-  const trialSignup = data.funnel.find(s => s.key === 'trialSignup')?.count ?? 0;
+  const signup = data.journeys.filter(j =>
+    j.touchpoints.some(
+      t =>
+        t.anchor === 'signup_atlantis_frontdesk' ||
+        t.anchor === 'signup_atlantis_other_product',
+    ),
+  ).length;
+
+  // Funnel-Stages dynamisch rechnen. Jede Stage hat zwei Zahlen:
+  //   1. BQ-Total = Gesamtbreite des Balkens (aus Amplitude, unabhängig von HubSpot)
+  //   2. Journey-basierte Subgroups = farbige Segmente im Balken
+  // Der Rest (BQ-Total - Summe Subgroups) wird als „Andere" (grau) gerendert.
+  //
+  // Upstream-Kaskade: wenn eine vorgelagerte Stage sichtbar ist, werden nur
+  // Journeys gezählt, die auch den Upstream-Filter erfüllen. So zeigt z.B.
+  // „Preview" bei sichtbarem „Marketing-Touch" nur preview-Journeys MIT
+  // Marketing-Attribution, ohne Marketing-Touch alle Previews.
+  const STAGE_ORDER: FunnelStageKey[] = ['marketingTouch', 'activation', 'previewTrial', 'dealCreated', 'dealWon'];
+  const stagePredicate = (key: FunnelStageKey) => (j: MarketingFunnelJourney): boolean => {
+    switch (key) {
+      case 'marketingTouch':
+        return j.touchpoints.some(t => t.anchor === 'marketing_acquisition');
+      case 'activation':
+        return j.touchpoints.some(
+          t =>
+            t.anchor === 'signup_atlantis_frontdesk' ||
+            t.anchor === 'signup_atlantis_other_product' ||
+            t.anchor === 'customer_since',
+        );
+      case 'previewTrial':
+        return j.touchpoints.some(t => t.anchor === 'preview_trial_started');
+      case 'dealCreated':
+        return j.kind === 'deal';
+      case 'dealWon':
+        return j.kind === 'deal' && j.stageIsWon;
+    }
+  };
+
+  // Activation-Subgroups aus einer Journey-Liste berechnen (Agent/PBX/Bestandskunde).
+  // Bestandskunde = Account-Erstellung oder Signup liegt >6 Monate vor Deal-/
+  // Lead-Erstellung. So fallen nur wirklich etablierte Kunden in diesen Bucket,
+  // nicht jeder Account mit einem mastersipid.
+  const BESTANDSKUNDE_MS = 180 * 24 * 60 * 60 * 1000; // 6 Monate in ms
+  function computeActivationSubgroups(js: MarketingFunnelJourney[]) {
+    let agent = 0, pbx = 0, bestand = 0;
+    for (const j of js) {
+      const refDate = j.createdate ? new Date(j.createdate).getTime() : null;
+
+      const agentTp = j.touchpoints.find(t => t.anchor === 'signup_atlantis_frontdesk');
+      const pbxTp = j.touchpoints.find(t => t.anchor === 'signup_atlantis_other_product');
+      const bestandTp = j.touchpoints.find(t => t.anchor === 'customer_since');
+
+      // Signup-Zeitpunkt: frühester Signup (Agent oder PBX)
+      const signupTp = agentTp || pbxTp;
+      const signupMs = signupTp ? new Date(signupTp.occurredAt).getTime() : null;
+
+      // Bestandskunde-Prüfung: Signup oder Account-Erstellung >6 Monate vor Entity-Erstellung
+      const isOldSignup = refDate != null && signupMs != null && (refDate - signupMs) > BESTANDSKUNDE_MS;
+      const bestandMs = bestandTp ? new Date(bestandTp.occurredAt).getTime() : null;
+      const isOldAccount = refDate != null && bestandMs != null && (refDate - bestandMs) > BESTANDSKUNDE_MS;
+
+      if (isOldSignup || isOldAccount) {
+        bestand++;
+      } else if (agentTp) {
+        agent++;
+      } else if (pbxTp) {
+        pbx++;
+      } else if (bestandTp && refDate == null) {
+        // Kein createdate → können wir nicht zeitlich einordnen → Bestandskunde
+        bestand++;
+      }
+      // Alles andere (kein Signup, kein customer_since, oder Account zu jung) → „andere"
+    }
+    return [
+      { key: 'agent_signup', label: 'Agent Signup', count: agent, color: '#10b981' },
+      { key: 'pbx_signup', label: 'PBX Signup', count: pbx, color: '#6366f1' },
+      { key: 'bestandskunde', label: 'Bestandskunde', count: bestand, color: '#94a3b8' },
+    ];
+  }
+
+  const bq: import('@/lib/marketing/funnel-types').FunnelBqTotals = data.bqTotals ?? {
+    activationAgent: 0,
+    activationOther: 0,
+    activationTotal: 0,
+    previewTrialTotal: 0,
+    previewTrialAgent: 0,
+    previewTrialOther: 0,
+    previewTrialBestandskunde: 0,
+  };
+
+  const dynamicFunnel: MarketingFunnelStage[] = data.funnel.map(stage => {
+    // Upstream-Filter: nur Journeys zählen, die alle sichtbaren vorgelagerten
+    // Stage-Predicates erfüllen.
+    const stageIdx = STAGE_ORDER.indexOf(stage.key);
+    const upstreamVisible = STAGE_ORDER.slice(0, stageIdx).filter(s =>
+      visibleFunnelStages.includes(s),
+    );
+    const upstreamPredicates = upstreamVisible.map(stagePredicate);
+    const ownPredicate = stagePredicate(stage.key);
+    const matching = filteredJourneys.filter(
+      j => upstreamPredicates.every(p => p(j)) && ownPredicate(j),
+    );
+
+    // ── Marketing-Touch ──────────────────────────────────────────────
+    if (stage.key === 'marketingTouch') {
+      // BQ-Total als Balkenbreite. Subgroups nur bei Marketing-Touch-Gruppierung.
+      if (funnelGrouping === 'marketingTouch') return stage; // Server hat Domain-Subgroups
+      return { ...stage, subgroups: undefined }; // Bei Activation-Gruppierung: ungegruppiert
+    }
+
+    // ── Activation ───────────────────────────────────────────────────
+    if (stage.key === 'activation') {
+      // BQ-Total = alle Signups aus Amplitude (unabhängig von HubSpot).
+      // Subgroups ebenfalls aus BQ — jedes Signup-Event hat ein Produkt,
+      // daher kein „andere"-Rest. Bestandskunde hat kein Signup-Event
+      // und taucht hier nicht auf.
+      const subgroups = funnelGrouping === 'activation'
+        ? [
+            { key: 'agent_signup', label: 'Agent Signup', count: bq.activationAgent, color: '#10b981' },
+            { key: 'pbx_signup', label: 'PBX Signup', count: bq.activationOther, color: '#6366f1' },
+          ]
+        : undefined;
+      return { ...stage, count: bq.activationTotal, subgroups };
+    }
+
+    // ── Preview (Trial) ──────────────────────────────────────────────
+    // BQ-Total UND BQ-Subgroups (Cross-Project-Join exports_raw →
+    // ampli_live_events via account_id). Kein HubSpot-Fallback nötig.
+    if (stage.key === 'previewTrial') {
+      const subgroups = funnelGrouping === 'activation'
+        ? [
+            { key: 'agent_signup', label: 'Agent Signup', count: bq.previewTrialAgent, color: '#10b981' },
+            { key: 'pbx_signup', label: 'PBX Signup', count: bq.previewTrialOther, color: '#6366f1' },
+            { key: 'bestandskunde', label: 'Bestandskunde', count: bq.previewTrialBestandskunde, color: '#94a3b8' },
+          ]
+        : undefined;
+      return { ...stage, count: bq.previewTrialTotal, subgroups };
+    }
+
+    // ── Deal angelegt / gewonnen ─────────────────────────────────────
+    // Alle Deals in der AI-Agents-Pipeline, ohne Marketing-Attribution-
+    // oder Upstream-Cascade-Filter. Date-Filter greift weiterhin (über
+    // filteredJourneys). Subgroups zeigen Activation-Aufschlüsselung,
+    // „andere" = kein Activation-Typ erkennbar.
+    const allDeals = filteredJourneys.filter(j => ownPredicate(j));
+    const subgroups = funnelGrouping === 'activation'
+      ? computeActivationSubgroups(allDeals)
+      : undefined;
+    return { ...stage, count: allDeals.length, subgroups };
+  });
   // Journey-Tabelle: nur Deals mit AI-Agents-Touch zeigen. Lead-only- und
   // Deals-ohne-Amplitude-Spur Entries gehören nur ins Sankey, nicht in die
   // detail-orientierte Tabelle (sonst wird's überfüllt).
@@ -94,16 +268,24 @@ export function MarketingView({ data, isLoading }: MarketingViewProps) {
     <div className="space-y-6">
       <DateFilterBar
         active={datePresetKey}
-        onChange={setDatePresetKey}
+        onChange={onDatePresetChange}
         totalEntries={data.journeys.length}
         filteredEntries={filteredJourneys.length}
       />
-      <ColumnToggleBar visible={visibleColumns} onToggle={toggleColumn} />
+      <MarketingFunnel
+        stages={dynamicFunnel}
+        visibleStages={visibleFunnelStages}
+        onToggleStage={toggleFunnelStage}
+        grouping={funnelGrouping}
+        onGroupingChange={setFunnelGrouping}
+        isFetching={isFetching}
+      />
       <MarketingSankey
         journeys={filteredJourneys}
         marketingTouchTotal={marketingTouch}
-        trialSignupTotal={trialSignup}
+        signupTotal={signup}
         visibleColumns={visibleColumns}
+        onToggleColumn={toggleColumn}
       />
       <JourneyTable journeys={tableJourneys} />
     </div>
@@ -115,8 +297,8 @@ export function MarketingView({ data, isLoading }: MarketingViewProps) {
 // ---------------------------------------------------------------------------
 
 interface DateFilterBarProps {
-  active: string;
-  onChange: (key: string) => void;
+  active: DatePresetKey;
+  onChange: (key: DatePresetKey) => void;
   totalEntries: number;
   filteredEntries: number;
 }
@@ -150,42 +332,8 @@ function DateFilterBar({ active, onChange, totalEntries, filteredEntries }: Date
   );
 }
 
-// ---------------------------------------------------------------------------
-// Sankey-Column-Toggle-Bar
-// ---------------------------------------------------------------------------
-
-function ColumnToggleBar({
-  visible,
-  onToggle,
-}: {
-  visible: ColumnKey[];
-  onToggle: (key: ColumnKey) => void;
-}) {
-  return (
-    <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 flex items-center gap-3 flex-wrap">
-      <span className="text-xs text-gray-500">Sankey-Spalten</span>
-      <div className="flex items-center gap-1">
-        {COLUMN_REGISTRY.map(c => {
-          const isOn = visible.includes(c.key);
-          return (
-            <button
-              key={c.key}
-              type="button"
-              onClick={() => onToggle(c.key)}
-              className={`px-2 py-0.5 text-xs font-medium rounded transition-colors ${
-                isOn
-                  ? 'bg-gray-900 text-white'
-                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-              }`}
-            >
-              {c.label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+// Sankey-Column-Toggle ist jetzt direkt im MarketingSankey-Header integriert
+// (unter dem "Marketing-Flow"-Titel) — siehe MarketingSankey.tsx.
 
 // ---------------------------------------------------------------------------
 // Journey Table
@@ -265,15 +413,6 @@ function StageBadge({ label, isWon, isLost }: { label: string; isWon: boolean; i
   );
 }
 
-// Lead-Form-Submit-Chip: einheitlich "Contact Form (<domain>)" — die genaue
-// Form-Bezeichnung (z.B. "Jetzt Beratung vereinbaren...") wird absichtlich
-// nicht im Chip gezeigt, weil sie zu lang und zu uneinheitlich ist. Volle
-// Info bleibt im Tooltip via touchpoint.eventType.
-function formatFormName(_raw: string, pageDomain: string | null): string {
-  const shortDomain = pageDomain ? pageDomain.replace(/^www\./, '') : null;
-  return shortDomain ? `Contact Form (${shortDomain})` : 'Contact Form';
-}
-
 function TouchpointChip({ touchpoint }: { touchpoint: Touchpoint }) {
   const date = new Date(touchpoint.occurredAt);
   const dateStr = date.toLocaleDateString('de-DE', {
@@ -282,6 +421,9 @@ function TouchpointChip({ touchpoint }: { touchpoint: Touchpoint }) {
     year: '2-digit',
   });
   const anchorClass: Record<Touchpoint['anchor'], string> = {
+    marketing_acquisition: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200',
+    marketing_page_sipgate_ai: 'bg-violet-50 text-violet-700 border-violet-200',
+    marketing_page_sipgate_de: 'bg-purple-50 text-purple-700 border-purple-200',
     signup_atlantis_frontdesk: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     // PBX-Signup bleibt in der Signup-Familie (grün), aber als Teal-Variante
     // optisch unterscheidbar vom AI-Agents-spezifischen Emerald.
@@ -293,6 +435,9 @@ function TouchpointChip({ touchpoint }: { touchpoint: Touchpoint }) {
     // Bestandskunde: dezent slate, kein Marketing-Touch sondern Journey-
     // Startpunkt für Customer ohne Signup-Event.
     customer_since: 'bg-slate-50 text-slate-600 border-slate-200',
+    // Preview/Trial: eigenes Cyan — zwischen Signup (emerald/teal) und Deal
+    // (grau), signalisiert den Aktivierungsschritt.
+    preview_trial_started: 'bg-cyan-50 text-cyan-700 border-cyan-200',
     // HubSpot-Lifecycle bewusst dezent (grau, dashed border) — keine Marketing-
     // Touchpoints, nur Zeitanker damit man die Lücken zwischen Marketing-Event
     // und HubSpot-Schritt lesen kann.
@@ -303,6 +448,9 @@ function TouchpointChip({ touchpoint }: { touchpoint: Touchpoint }) {
   // Kurz-Namen, weil der Tooltip die einzige Stelle ist, an der die Sub-Variante
   // sichtbar wird (im Chip steht nur "Quali-Submit").
   const anchorLabel: Record<Touchpoint['anchor'], string> = {
+    marketing_acquisition: 'Marketing-Akquise (UTM/Click-ID, via device_id)',
+    marketing_page_sipgate_ai: 'Marketing-Site sipgate.ai (Pre-Signup, via device_id)',
+    marketing_page_sipgate_de: 'Marketing-Site sipgate.de (Pre-Signup, via device_id)',
     signup_atlantis_frontdesk: 'Signup Atlantis (AI Agents)',
     signup_atlantis_other_product: 'Signup Atlantis (anderes Produkt)',
     lead_form_submitted: 'Lead-Formular abgeschickt',
@@ -310,25 +458,11 @@ function TouchpointChip({ touchpoint }: { touchpoint: Touchpoint }) {
     agents_qualification_onboarding: 'Quali (Onboarding)',
     agents_qualification_inproduct: 'Quali (In-Product)',
     customer_since: 'sipgate-Account angelegt',
+    preview_trial_started: 'AI-Agents Preview/Trial aktiviert (Contract Finalized)',
     hubspot_lead_created: 'HubSpot Lifecycle',
     hubspot_deal_created: 'HubSpot Lifecycle',
   };
-  // Chip-Label: Anchor-spezifische Beschriftungen für Fälle, in denen das
-  // generische Event-Label zu ungenau wäre (z.B. zwei Quali-Anchors aus dem
-  // selben Roh-Event-Type). Lifecycle-Pseudo-Events nutzen ihren eventType
-  // direkt, der Rest fällt auf das generische Mapping zurück.
-  const chipLabel =
-    touchpoint.anchor === 'signup_atlantis_frontdesk'
-      ? 'Agent Signup'
-      : touchpoint.anchor === 'signup_atlantis_other_product'
-        ? 'PBX Signup'
-        : touchpoint.anchor === 'lead_form_submitted'
-          ? formatFormName(touchpoint.eventType, touchpoint.pageDomain)
-          : touchpoint.anchor === 'agents_qualification_onboarding'
-            ? 'Onboarding-Quali'
-            : touchpoint.anchor === 'agents_qualification_inproduct'
-              ? 'In-Product-Quali'
-              : formatAmplitudeEvent(touchpoint.eventType);
+  const chipLabel = formatTouchpointLabel(touchpoint);
   const extras = [
     touchpoint.leadSourceDetails ? `Source: ${touchpoint.leadSourceDetails}` : null,
     touchpoint.inboundValue ? `Inbound: ${touchpoint.inboundValue}` : null,

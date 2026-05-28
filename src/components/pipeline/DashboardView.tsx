@@ -79,6 +79,12 @@ interface DashboardViewProps {
   // wird (nur bei AI Agents sinnvoll, dort entspricht 450 € einem Agents-Paket).
   produkt?: string | null;
   leads?: LeadOverviewItem[];
+  // dealId → Label des chronologisch ersten Marketing-Touchpoints (aus dem
+  // Marketing-Funnel-Endpoint, identisch zum ersten Chip in der Deal-Journey-
+  // Tabelle). Treibt die Prospects-Chart-Gruppierung — wenn ein Eintrag
+  // vorliegt, gewinnt er gegen das Lead-Source-Feld. Bei Nicht-AI-Agents-
+  // Produkten leer.
+  dealFirstTouchpointLabel?: Map<string, string>;
 }
 
 // System-Badge-IDs — fest codiert, damit localStorage-Einträge stabil bleiben.
@@ -103,6 +109,7 @@ function formatEUR(value: number): string {
 
 const MS_PER_DAY = 86_400_000;
 const MS_PER_WEEK = 7 * MS_PER_DAY;
+const CHART_MAX_AGE_MS = 26 * MS_PER_WEEK; // ~6 Monate
 
 function isLostStage(label: string): boolean {
   const l = label.toLowerCase();
@@ -134,7 +141,7 @@ function isWonStage(label: string): boolean {
 const LEAD_SOURCE_COLORS = ['#2F0D5B', '#E8AC68', '#2E9E8E', '#C44569', '#B8BCC2'];
 
 export function DashboardView({
-  stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId, produkt = null, leads = [],
+  stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId, produkt = null, leads = [], dealFirstTouchpointLabel,
 }: DashboardViewProps) {
   // ── Filter state ──
   const [filter, setFilter] = useState<FilterState<DealFieldType>>(() => getDefaultFilterState<DealFieldType>());
@@ -380,7 +387,9 @@ export function DashboardView({
       const dt = new Date(d.createdate);
       return !earliest || dt < earliest ? dt : earliest;
     }, null);
-    const start = filterFrom ?? earliestDeal ?? new Date(now.getTime() - 11 * MS_PER_WEEK);
+    const floor = new Date(now.getTime() - CHART_MAX_AGE_MS);
+    const raw = filterFrom ?? earliestDeal ?? new Date(now.getTime() - 11 * MS_PER_WEEK);
+    const start = raw < floor ? floor : raw;
 
     const firstWeekStart = startOfIsoWeek(start);
     const currentWeekStart = startOfIsoWeek(now);
@@ -430,15 +439,28 @@ export function DashboardView({
     return map;
   }, [leads]);
 
+  // Gruppier-Schlüssel für die Prospects-Chart-Stacks. Priorität:
+  //   1. Erster Marketing-Touchpoint laut Amplitude (Marketing-Tab-Logik) —
+  //      stabiler, plattformweit konsistenter Label (z.B. "Agent Signup",
+  //      "Contact Form (sipgate.ai)"). Wird ohne Lowercase übernommen, weil
+  //      die Labels schon kanonisch sind.
+  //   2. Fallback: Lead-Source-Feld (Freitext oder enum). Case-insensitive
+  //      konsolidiert, da HubSpot da gerne unterschiedliche Schreibweisen
+  //      desselben Werts speichert.
+  //   3. Sonst: "Unbekannt".
   const dealSourceKey = useCallback((d: DealOverviewItem): string => {
+    const touchpointLabel = dealFirstTouchpointLabel?.get(d.id);
+    if (touchpointLabel) return touchpointLabel;
     const info = leadSourceByDealId.get(d.id);
     const raw = ((info?.leadSource || info?.source) || '').trim();
     return raw ? raw.toLowerCase() : 'unbekannt';
-  }, [leadSourceByDealId]);
+  }, [leadSourceByDealId, dealFirstTouchpointLabel]);
   const dealSourceLabel = useCallback((d: DealOverviewItem): string => {
+    const touchpointLabel = dealFirstTouchpointLabel?.get(d.id);
+    if (touchpointLabel) return touchpointLabel;
     const info = leadSourceByDealId.get(d.id);
     return ((info?.leadSource || info?.source) || '').trim() || 'Unbekannt';
-  }, [leadSourceByDealId]);
+  }, [leadSourceByDealId, dealFirstTouchpointLabel]);
 
   // Pro Woche: alle Deals, die in dieser Woche erstellt wurden.
   const prospectsPerWeekDeals = useMemo(() => weeks.map((weekEnd, i) => {
@@ -489,6 +511,7 @@ export function DashboardView({
       labelByKey.set(key, best ? best[0] : key);
     }
     const top = Array.from(totals.entries())
+      .filter(([key]) => key !== 'unbekannt')
       .sort((a, b) => b[1] - a[1])
       .slice(0, 4)
       .map(([key]) => key);
@@ -781,13 +804,39 @@ export function DashboardView({
   }, [filteredDeals, stageHistory, referenceNow]);
 
   // ── Leads pro Woche (Bar-Chart, gestapelt nach Minutensegment) ──
+  // Eigener Zeitraum für das Leads-Chart, damit Deal-Filter (z.B. "Nur DE")
+  // die Leads-Buckets nicht verschieben.
+  const leadsWeeks = useMemo(() => {
+    const now = new Date();
+    const earliestLead = leads.reduce<Date | null>((earliest, l) => {
+      if (!l.createdate) return earliest;
+      const dt = new Date(l.createdate);
+      return !earliest || dt < earliest ? dt : earliest;
+    }, null);
+    const floor = new Date(now.getTime() - CHART_MAX_AGE_MS);
+    const raw = earliestLead ?? new Date(now.getTime() - 11 * MS_PER_WEEK);
+    const start = raw < floor ? floor : raw;
+    const firstWeekStart = startOfIsoWeek(start);
+    const currentWeekStart = startOfIsoWeek(now);
+    const result: Date[] = [];
+    const cursor = new Date(firstWeekStart);
+    while (cursor < currentWeekStart) {
+      result.push(endOfIsoWeek(cursor));
+      cursor.setDate(cursor.getDate() + 7);
+    }
+    result.push(now);
+    while (result.length < 4) {
+      const first = result[0];
+      result.unshift(endOfIsoWeek(new Date(first.getTime() - MS_PER_WEEK)));
+    }
+    return result;
+  }, [leads]);
   // Bucket-Logik pro Lead:
   //   minutes = agentsMinuten ?? Untergrenze(inboundVolumen) ?? null
   //   minutes >= 2000   → "large"   (Enterprise-Potenzial)
   //   minutes >= 1000   → "mid"
   //   minutes <  1000   → "small"
   //   minutes == null   → "unknown" (weder agents_minuten noch parsebares Range)
-  // Zeitraum folgt dem gleichen `weeks`-Array wie die Deal-Trends.
   const leadsMinutesBucket = useCallback((l: LeadOverviewItem): 'small' | 'mid' | 'large' | 'unknown' => {
     let mins: number | null = null;
     if (l.agentsMinuten != null) {
@@ -802,9 +851,9 @@ export function DashboardView({
     return 'small';
   }, []);
 
-  const leadsPerWeekData = useMemo(() => weeks.map((weekEnd, i) => {
+  const leadsPerWeekData = useMemo(() => leadsWeeks.map((weekEnd, i) => {
     const endMs = weekEnd.getTime();
-    const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - MS_PER_WEEK;
+    const startMs = i > 0 ? leadsWeeks[i - 1].getTime() : endMs - MS_PER_WEEK;
     const inRange = leads.filter(l => {
       const ts = l.createdate ? new Date(l.createdate).getTime() : null;
       return ts != null && ts > startMs && ts <= endMs;
@@ -818,7 +867,7 @@ export function DashboardView({
       else unknown++;
     }
     return { count: inRange.length, leads: inRange, small, mid, large, unknown };
-  }), [leads, weeks, leadsMinutesBucket]);
+  }), [leads, leadsWeeks, leadsMinutesBucket]);
 
   const leadsPerWeekTrend = useMemo(() => leadsPerWeekData.map(d => d.count), [leadsPerWeekData]);
   const leadsPerWeekUnknown = useMemo(() => leadsPerWeekData.map(d => d.unknown), [leadsPerWeekData]);
@@ -1039,7 +1088,7 @@ export function DashboardView({
             <Sparkline
               data={leadsPerWeekTrend}
               color="#2F0D5B"
-              weeks={weeks}
+              weeks={leadsWeeks}
               tooltipOverride={leadsPerWeekTooltip}
               tooltipLines={leadsPerWeekTooltipLines}
               targetValue={leadsPerWeekAvg}
@@ -1056,7 +1105,7 @@ export function DashboardView({
                   ]
               }
             />
-            <WeekLabels weeks={weeks} />
+            <WeekLabels weeks={leadsWeeks} />
             {leadsChartGrouping === 'source' ? (
               <div className="flex items-center gap-3 mt-2 text-[10px] flex-wrap">
                 {leadsPerWeekSourceStacks.map(s => (

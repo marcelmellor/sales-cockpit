@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { UserMenu } from '@/components/UserMenu';
 import { DealStageGroup } from '@/components/pipeline/DealStageGroup';
 import { DealListView } from '@/components/pipeline/DealListView';
@@ -43,13 +43,21 @@ import {
   applyLeadFilters,
 } from '@/components/pipeline/filters/leadFilters';
 import type { LeadFieldType } from '@/components/pipeline/filters/leadFilters';
-import { Loader2, LayoutGrid, RefreshCw, BarChart3, Table2, Users, Calendar, Megaphone } from 'lucide-react';
+import { Loader2, LayoutGrid, RefreshCw, BarChart3, Table2, Users, Calendar, Megaphone, Network } from 'lucide-react';
 import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from '@/app/api/deals/overview/route';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import type { LeadsOverviewResponse, LeadOverviewItem } from '@/app/api/leads/overview/route';
 import type { ProjectsOverviewResponse } from '@/app/api/projects/overview/route';
 import type { MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
+import {
+  getActivationLabel,
+} from '@/lib/marketing/touchpoint-label';
 import { MarketingView } from '@/components/pipeline/MarketingView';
+import { KpiTreeView } from '@/components/pipeline/KpiTreeView';
+import {
+  type DatePresetKey as MarketingDatePresetKey,
+  getDaysForPreset as getMarketingDaysForPreset,
+} from '@/lib/marketing/date-presets';
 import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
 
 // localStorage-Prefixe für die pro-Tab gespeicherten Filter-Sets und die
@@ -93,7 +101,7 @@ function isPortfolioValue(value: string | null): value is PortfolioValue {
 
 export type SortField = 'revenue' | 'agentsMinuten' | 'dealAge' | 'daysInStage' | 'nextAppointment' | 'closedDate';
 export type SortDirection = 'asc' | 'desc';
-export type ViewMode = 'deals' | 'dashboard' | 'leads' | 'projects' | 'marketing';
+export type ViewMode = 'deals' | 'dashboard' | 'leads' | 'projects' | 'marketing' | 'kpi-tree';
 // Sub-Modus innerhalb Deals- und Leads-Tab: Sales-Sicht (Kachel-/Listenansicht
 // mit Story) oder Sheet (tabellarisch, mit CSV-Export). Wird pro Tab separat
 // gehalten, damit ein Wechsel zwischen Deals und Leads die gewählte Sicht nicht
@@ -157,7 +165,7 @@ function PipelineOverviewContent() {
   // springt zwischen Tabs.
   const viewMode = useMemo<ViewMode>(() => {
     const v = searchParams.get('view');
-    if (v === 'deals' || v === 'leads' || v === 'projects' || v === 'dashboard' || v === 'marketing') return v;
+    if (v === 'deals' || v === 'leads' || v === 'projects' || v === 'dashboard' || v === 'marketing' || v === 'kpi-tree') return v;
     return 'dashboard';
   }, [searchParams]);
 
@@ -193,7 +201,7 @@ function PipelineOverviewContent() {
   // fallen wir effektiv auf das Dashboard zurück. Wir leiten den effektiven
   // View-Mode aus URL + Produkt ab — die Tabs werden gleichzeitig ausgeblendet.
   const effectiveViewMode: ViewMode =
-    (viewMode === 'projects' || viewMode === 'marketing') && selectedProdukt !== 'frontdesk'
+    (viewMode === 'projects' || viewMode === 'marketing' || viewMode === 'kpi-tree') && selectedProdukt !== 'frontdesk'
       ? 'dashboard'
       : viewMode;
 
@@ -288,26 +296,72 @@ function PipelineOverviewContent() {
       projectsCacheKey ? getCachedData<ProjectsOverviewResponse>(projectsCacheKey) ?? undefined : undefined,
   });
 
+  // Date-Preset für die Marketing-Tab (Sankey/Funnel/Tabelle). State liegt
+  // hier oben, weil die Marketing-Funnel-Query (BQ-Roundtrip) das Window
+  // braucht — sonst müssten wir bei jedem Preset-Wechsel doppelt fetchen.
+  const [marketingDatePresetKey, setMarketingDatePresetKey] =
+    useState<MarketingDatePresetKey>('90');
+  const marketingDays = getMarketingDaysForPreset(marketingDatePresetKey);
   // Marketing-Funnel: AI-Agents-only, lazy — wir lassen die Query nur laufen
   // wenn der Marketing-Tab aktiv ist UND das Produkt frontdesk ist. Spart den
   // teuren BQ-Roundtrip auf jedem Pageload.
   const marketingCacheKey =
-    selectedProdukt === 'frontdesk' ? `marketing-funnel-frontdesk-v18` : null;
-  const { data: marketingData, isLoading: marketingLoading } = useQuery({
-    queryKey: ['marketing-funnel', selectedProdukt],
+    selectedProdukt === 'frontdesk'
+      ? `marketing-funnel-frontdesk-v30-${marketingDays}d`
+      : null;
+  const { data: marketingData, isLoading: marketingLoading, isFetching: marketingFetching } = useQuery({
+    queryKey: ['marketing-funnel', selectedProdukt, marketingDays],
     queryFn: async () => {
-      const response = await fetch(`/api/marketing/funnel?produkt=${selectedProdukt}${takeRefreshFlag('marketing')}`);
+      const response = await fetch(
+        `/api/marketing/funnel?produkt=${selectedProdukt}&days=${marketingDays}${takeRefreshFlag('marketing')}`,
+      );
       if (!response.ok) throw new Error('Failed to fetch marketing funnel');
       const data = await response.json();
       const result = data.data as MarketingFunnelResponse;
       if (marketingCacheKey) setCachedData(marketingCacheKey, result);
       return result;
     },
-    enabled: isAuthenticated && selectedProdukt === 'frontdesk' && effectiveViewMode === 'marketing',
+    // Dashboard nutzt die Journey-Daten zur Gruppierung des Prospects-Charts
+    // nach erstem Marketing-Touchpoint — daher auch im Dashboard-Tab laden.
+    // KPI-Tree braucht bqTotals + Journeys für Signup-/Trial-/Lead-Metriken.
+    enabled:
+      isAuthenticated &&
+      selectedProdukt === 'frontdesk' &&
+      (effectiveViewMode === 'marketing' || effectiveViewMode === 'dashboard' || effectiveViewMode === 'kpi-tree'),
     staleTime: 30 * 60 * 1000,
+    // Beim Date-Preset-Wechsel die vorherigen Daten im UI lassen statt
+    // Loading-Spinner zu zeigen. Marketing-Touch zeigt kurz die alten Zahlen,
+    // dann liest sich das Diagramm sauber zur neuen Auflösung um.
+    placeholderData: keepPreviousData,
     initialData: () =>
       marketingCacheKey ? getCachedData<MarketingFunnelResponse>(marketingCacheKey) ?? undefined : undefined,
   });
+
+  // Background-Prefetch der anderen Date-Preset-Windows, damit ein
+  // Preset-Wechsel danach instant ist (Server-Cache lebt 30 min).
+  // Läuft nur wenn die aktuelle Marketing-Query schon fertig ist und
+  // wir im Marketing-/Dashboard-Tab sind.
+  useEffect(() => {
+    if (!marketingData || selectedProdukt !== 'frontdesk') return;
+    if (effectiveViewMode !== 'marketing' && effectiveViewMode !== 'dashboard' && effectiveViewMode !== 'kpi-tree') return;
+    const allKeys: MarketingDatePresetKey[] = ['30', '90', 'all'];
+    for (const key of allKeys) {
+      if (key === marketingDatePresetKey) continue;
+      const days = getMarketingDaysForPreset(key);
+      queryClient.prefetchQuery({
+        queryKey: ['marketing-funnel', selectedProdukt, days],
+        queryFn: async () => {
+          const response = await fetch(
+            `/api/marketing/funnel?produkt=${selectedProdukt}&days=${days}`,
+          );
+          if (!response.ok) throw new Error('Prefetch failed');
+          const data = await response.json();
+          return data.data as MarketingFunnelResponse;
+        },
+        staleTime: 30 * 60 * 1000,
+      });
+    }
+  }, [marketingData, marketingDatePresetKey, selectedProdukt, effectiveViewMode, queryClient]);
 
   // Extract deal IDs for meetings query
   const dealIds = useMemo(() => overviewDeals?.map(d => d.id) || [], [overviewDeals]);
@@ -384,6 +438,21 @@ function PipelineOverviewContent() {
       stageEnteredAt: stageHistoryData?.[deal.id]?.stageEnteredAt ?? null,
     }));
   }, [overviewDeals, meetingsData, stageHistoryData]);
+
+  // dealId → Activation-Label laut Marketing-Flow (Agent Signup / PBX Signup /
+  // Bestandskunde). Treibt die Prospects-Chart-Gruppierung im Dashboard.
+  // Deals ohne Activation-Signal bekommen keinen Eintrag — dort greift der
+  // Lead-Source-Fallback in DashboardView.
+  const dealFirstTouchpointLabel = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!marketingData) return map;
+    for (const j of marketingData.journeys) {
+      if (j.kind !== 'deal') continue;
+      const label = getActivationLabel(j.touchpoints);
+      if (label) map.set(j.entityId, label);
+    }
+    return map;
+  }, [marketingData]);
 
   // Refresh all data
   const handleRefresh = () => {
@@ -1082,6 +1151,11 @@ function PipelineOverviewContent() {
                     Marketing
                   </Tab>
                 )}
+                {selectedProdukt === 'frontdesk' && (
+                  <Tab id="kpi-tree" icon={Network}>
+                    KPI-Tree
+                  </Tab>
+                )}
               </TabBar>
             </div>
 
@@ -1098,13 +1172,28 @@ function PipelineOverviewContent() {
                 pipelineId={selectedPipelineId}
                 produkt={selectedProdukt}
                 leads={leadsData?.leads ?? []}
+                dealFirstTouchpointLabel={dealFirstTouchpointLabel}
               />
             ) : effectiveViewMode === 'projects' ? (
               /* Projekte: Wochenansicht laufender AI-Agent-Projekte */
               <ProjectsView data={projectsData} isLoading={projectsLoading} />
+            ) : effectiveViewMode === 'kpi-tree' ? (
+              /* KPI-Tree: AI Agents Metrik-Baum */
+              <KpiTreeView
+                deals={dealsWithMeetings}
+                marketingData={marketingData}
+                datePresetKey={marketingDatePresetKey}
+                onDatePresetChange={setMarketingDatePresetKey}
+              />
             ) : effectiveViewMode === 'marketing' ? (
               /* Marketing: Amplitude-Funnel + Deal-Journeys (AI Agents) */
-              <MarketingView data={marketingData} isLoading={marketingLoading} />
+              <MarketingView
+                data={marketingData}
+                isLoading={marketingLoading}
+                isFetching={marketingFetching}
+                datePresetKey={marketingDatePresetKey}
+                onDatePresetChange={setMarketingDatePresetKey}
+              />
             ) : effectiveViewMode === 'leads' ? (
               /* Leads-Tab: Sales- oder Sheet-Sicht */
               <>
