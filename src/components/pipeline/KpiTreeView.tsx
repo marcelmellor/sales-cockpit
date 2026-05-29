@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isWonStageLabel } from '@/lib/hubspot/mrr';
+import { isWonStageLabel, isLostStageLabel } from '@/lib/hubspot/mrr';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import type { MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
 import type { PlaybookStats } from '@/lib/amplitude/playbook-stats';
@@ -158,6 +158,10 @@ function computeLiveValues(
   const recentWon = deals.filter(
     d => isWonStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff,
   );
+  const recentLost = deals.filter(
+    d => isLostStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff,
+  );
+  const recentClosed = recentWon.length + recentLost.length;
 
   // Deals / Woche
   if (recentCreated.length > 0) {
@@ -169,6 +173,13 @@ function computeLiveValues(
   if (recentWon.length > 0) {
     values.set('sales', fmtNum(recentWon.length / weeks));
     tooltips.set('sales', `${recentWon.length} Won-Deals in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+  }
+
+  // Conversion = Won / (Won + Lost) — nur abgeschlossene Deals
+  if (recentClosed > 0) {
+    const conv = recentWon.length / recentClosed;
+    values.set('conversion', fmtNum(conv * 100) + ' %');
+    tooltips.set('conversion', `${recentWon.length} Won / ${recentClosed} abgeschlossen (${recentWon.length} Won + ${recentLost.length} Lost) in ${days} Tagen — nach Abschlussdatum, nicht Erstelldatum`);
   }
 
   // ICP-Kunden / Woche (won deals with ICP tier)
@@ -275,6 +286,7 @@ function MetricCard({ node, values, targets, dynamicTooltips, onEditValue, onEdi
   const target = targets.get(node.id) ?? node.target;
   const canEditValue = !node.computed && !node.dynamic;
   const tooltip = dynamicTooltips.get(node.id) ?? node.tooltip;
+  const [showTip, setShowTip] = useState(false);
 
   return (
     <div
@@ -283,7 +295,14 @@ function MetricCard({ node, values, targets, dynamicTooltips, onEditValue, onEdi
       style={node.team ? { borderLeftColor: TEAM_COLORS[node.team], borderLeftWidth: 3 } : undefined}
     >
       {tooltip && (
-        <div className="kpi-info" title={tooltip}>i</div>
+        <div
+          className="kpi-info"
+          onMouseEnter={() => setShowTip(true)}
+          onMouseLeave={() => setShowTip(false)}
+        >
+          i
+          {showTip && <div className="kpi-tooltip">{tooltip}</div>}
+        </div>
       )}
       <div className="kpi-label">{node.label}</div>
       <div
@@ -488,11 +507,10 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
     const leadsSum = [demo, agentLeads, pbxLeads].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
     if (leadsSum > 0) vals.set('leads', fmtNum(leadsSum));
 
-    // Conversion = sales / deals
+    // Conversion is computed in computeLiveValues (Won / (Won + Lost))
     const sales = v('sales');
     const dealsVal = v('deals');
-    const conv = (!isNaN(sales) && !isNaN(dealsVal) && dealsVal > 0) ? sales / dealsVal : NaN;
-    vals.set('conversion', !isNaN(conv) ? fmtNum(conv * 100) + ' %' : '?');
+    const conv = parseNum(vals.get('conversion') ?? '?') / 100;
 
     // MRR = (sales + pql) × ARPA
     const arpa = v('arpa');
@@ -826,6 +844,23 @@ const TREE_STYLES = `
   justify-content: center;
   cursor: default;
   background: #f9fafb;
+}
+
+/* JS Tooltip (matches Sparkline style) */
+.kpi-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #2C3333;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  pointer-events: none;
+  z-index: 10;
 }
 
 /* Date-Preset Buttons */
