@@ -49,6 +49,7 @@ import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history
 import type { LeadsOverviewResponse, LeadOverviewItem } from '@/app/api/leads/overview/route';
 import type { ProjectsOverviewResponse } from '@/app/api/projects/overview/route';
 import type { MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
+import type { PlaybookStats } from '@/lib/amplitude/playbook-stats';
 import {
   getActivationLabel,
 } from '@/lib/marketing/touchpoint-label';
@@ -362,6 +363,18 @@ function PipelineOverviewContent() {
       });
     }
   }, [marketingData, marketingDatePresetKey, selectedProdukt, effectiveViewMode, queryClient]);
+
+  // Playbook-Stats (Amplitude BQ) — für KPI-Tree Node "3+ Playbooks".
+  const { data: playbookStats } = useQuery({
+    queryKey: ['playbook-stats', marketingDays],
+    queryFn: async () => {
+      const response = await fetch(`/api/amplitude/playbook-stats?days=${marketingDays}`);
+      if (!response.ok) throw new Error('Failed to fetch playbook stats');
+      return response.json() as Promise<PlaybookStats>;
+    },
+    enabled: isAuthenticated && effectiveViewMode === 'kpi-tree',
+    staleTime: 30 * 60 * 1000,
+  });
 
   // Extract deal IDs for meetings query
   const dealIds = useMemo(() => overviewDeals?.map(d => d.id) || [], [overviewDeals]);
@@ -1182,6 +1195,7 @@ function PipelineOverviewContent() {
               <KpiTreeView
                 deals={dealsWithMeetings}
                 marketingData={marketingData}
+                playbookStats={playbookStats}
                 datePresetKey={marketingDatePresetKey}
                 onDatePresetChange={setMarketingDatePresetKey}
               />

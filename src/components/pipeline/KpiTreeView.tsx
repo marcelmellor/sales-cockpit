@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isWonStageLabel } from '@/lib/hubspot/mrr';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import type { MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
+import type { PlaybookStats } from '@/lib/amplitude/playbook-stats';
 import {
   DATE_PRESETS,
   getDaysForPreset,
@@ -47,18 +48,18 @@ const METRICS: MetricNode[] = [
   { id: 'deals', label: 'Deals / Woche', fallback: '?', target: '?', parentIds: ['conversion'], team: 'sales', dynamic: true },
   // Left column: Leads
   { id: 'leads', label: 'Leads / Woche', fallback: '?', target: '?', parentIds: ['deals'], computed: true },
-  { id: 'demo', label: 'Demo-Buchungen / Woche', fallback: '?', target: '?', parentIds: ['leads'], dynamic: true },
+  { id: 'demo', label: 'Demo-Buchungen (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, tooltip: 'Paid Ads ab Juni 2026' },
   { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.500 Min/Monat' },
-  { id: 'pbx-leads', label: 'Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.500 Min/Monat' },
+  { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.500 Min/Monat' },
   // Right column: PQL path
-  { id: 'pql', label: 'Product-Qualified Leads / Woche', fallback: '?', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', tooltip: 'Enterprise-Nutzung ohne Jahresvertrag' },
-  { id: 'int', label: 'Neue Kunden mit 1+ Integration', fallback: '?', target: '?', parentIds: ['pql'], team: 'onboarding' },
-  { id: 'pb', label: 'Neue Kunden mit 3+ Playbooks', fallback: '?', target: '?', parentIds: ['pql'], team: 'onboarding' },
-  { id: 'aha', label: 'Aha-Moment', fallback: '?', target: '?', parentIds: ['int', 'pb'], team: 'onboarding' },
-  { id: 'trials', label: 'Agent Previews / Woche', fallback: '?', target: '?', parentIds: ['aha'], team: 'growth', dynamic: true },
-  { id: 'signup', label: 'Agent Signups / Woche', fallback: '?', target: '?', parentIds: ['trials'], team: 'growth', dynamic: true },
-  { id: 'preview-pbx', label: 'Agent Previews von PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden, die eine Agent-Preview starten' },
-  { id: 'preview-bestand', label: 'Agent Previews von Bestandskunden / Woche', fallback: '?', target: '?', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'Bestehende sipgate-Kunden ohne neuen Signup' },
+  { id: 'pql', label: 'Product-Qualified Leads (ICP) / Woche', fallback: '[TODO]', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', tooltip: 'Nach ICP-Filter: ≥ 2.500 Min/Monat' },
+  { id: 'int', label: 'Neue Kunden mit 1+ Integration / Woche', fallback: '[TODO]', target: '20', parentIds: ['pql'], team: 'onboarding' },
+  { id: 'pb', label: 'Neue Kunden mit 3+ Playbooks / Woche', fallback: '?', target: '20', parentIds: ['pql'], team: 'onboarding', dynamic: true, tooltip: 'Preview-Accounts, die danach ≥ 3 Playbooks erstellt haben' },
+  { id: 'aha', label: 'Aha-Moment / Woche', fallback: '[TODO]', target: '30', parentIds: ['int', 'pb'], team: 'onboarding' },
+  { id: 'trials', label: 'Agent Previews / Woche', fallback: '?', target: '80', parentIds: ['aha'], team: 'growth', dynamic: true },
+  { id: 'signup', label: 'Agent Signups / Woche', fallback: '?', target: '30', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'Paid Ads ab Juni 2026' },
+  { id: 'preview-pbx', label: 'PBX Signup → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden, die eine Agent-Preview starten' },
+  { id: 'preview-bestand', label: 'Bestandskunde → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'Bestehende sipgate-Kunden ohne neuen Signup' },
 ];
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -66,6 +67,7 @@ const METRICS: MetricNode[] = [
 interface KpiTreeViewProps {
   deals: DealOverviewItem[];
   marketingData: MarketingFunnelResponse | undefined;
+  playbookStats: PlaybookStats | undefined;
   /** Active date preset — drives the Marketing BQ query in page.tsx AND the
    *  deal rolling-window here. Both use the same range so numbers are
    *  comparable. */
@@ -102,6 +104,13 @@ function fmtNum(n: number): string {
   return rounded.toLocaleString('de-DE', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
+function fmtTarget(n: number): string {
+  if (isNaN(n)) return '?';
+  const abs = Math.abs(n);
+  const rounded = abs < 5 ? Math.round(n) : Math.round(n / 5) * 5;
+  return rounded.toLocaleString('de-DE', { maximumFractionDigits: 0 });
+}
+
 function fmtEur(n: number): string {
   if (isNaN(n)) return '?';
   const rounded = smartRound(n);
@@ -132,6 +141,7 @@ interface LiveData {
 function computeLiveValues(
   deals: DealOverviewItem[],
   marketingData: MarketingFunnelResponse | undefined,
+  playbookStats: PlaybookStats | undefined,
   days: number,
 ): LiveData {
   const values = new Map<string, string>();
@@ -232,6 +242,17 @@ function computeLiveValues(
       values.set('demo', fmtNum(demoIcpLeads / weeks));
       tooltips.set('demo', `${demoIcpLeads} sonstige ICP-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
     }
+  }
+
+  // ── Playbook-Stats (Preview → 3+ Playbooks) ────────────────────────────────
+
+  if (playbookStats && playbookStats.accountsWith3PlusPlaybooks != null) {
+    const n3plus = playbookStats.accountsWith3PlusPlaybooks;
+    const nTotal = playbookStats.previewAccountsTotal;
+    values.set('pb', fmtNum(n3plus / weeks));
+    tooltips.set('pb', nTotal != null
+      ? `${n3plus} von ${nTotal} Preview-Accounts mit ≥ 3 Playbooks in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`
+      : `${n3plus} Accounts mit ≥ 3 Playbooks in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
   }
 
   return { values, tooltips };
@@ -422,7 +443,7 @@ function drawConnectors(treeEl: HTMLDivElement, svgEl: SVGSVGElement) {
 
 // ── Main component ──────────────────────────────────────────────────────────
 
-export function KpiTreeView({ deals, marketingData, datePresetKey, onDatePresetChange }: KpiTreeViewProps) {
+export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey, onDatePresetChange }: KpiTreeViewProps) {
   const treeRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -432,8 +453,8 @@ export function KpiTreeView({ deals, marketingData, datePresetKey, onDatePresetC
 
   // Live values from props (deal stats + marketing BQ totals + journey classification).
   const liveData = useMemo(
-    () => computeLiveValues(deals, marketingData, getDaysForPreset(datePresetKey)),
-    [deals, marketingData, datePresetKey],
+    () => computeLiveValues(deals, marketingData, playbookStats, getDaysForPreset(datePresetKey)),
+    [deals, marketingData, playbookStats, datePresetKey],
   );
 
   // Merge: live values < user overrides (for manual nodes) < computed formulas.
@@ -484,20 +505,25 @@ export function KpiTreeView({ deals, marketingData, datePresetKey, onDatePresetC
     const mrrTarget = t('mrr');
     const arpaTarget = t('arpa');
     const icpTarget = (!isNaN(mrrTarget) && !isNaN(arpaTarget) && arpaTarget > 0) ? mrrTarget / arpaTarget : NaN;
-    if (!isNaN(icpTarget) && !tgts.has('icp')) tgts.set('icp', fmtNum(icpTarget) + '*');
+    if (!isNaN(icpTarget) && !tgts.has('icp')) tgts.set('icp', fmtTarget(icpTarget) + '*');
 
-    const salesTarget = !isNaN(icpTarget) ? icpTarget - (isNaN(pql) ? 0 : pql) : NaN;
-    if (!isNaN(salesTarget) && !tgts.has('sales')) tgts.set('sales', fmtNum(salesTarget) + '*');
+    // 30% Product-Led (PQL) / 70% Sales-Led
+    const PLG_RATIO = 0.3;
+    const pqlTarget = !isNaN(icpTarget) ? icpTarget * PLG_RATIO : NaN;
+    if (!isNaN(pqlTarget) && !tgts.has('pql')) tgts.set('pql', fmtTarget(pqlTarget) + '*');
+
+    const salesTarget = !isNaN(icpTarget) ? icpTarget * (1 - PLG_RATIO) : NaN;
+    if (!isNaN(salesTarget) && !tgts.has('sales')) tgts.set('sales', fmtTarget(salesTarget) + '*');
 
     const convTarget = t('conversion');
     const convRate = !isNaN(convTarget) ? convTarget / 100 : conv;
     if (!isNaN(salesTarget) && !isNaN(convRate) && convRate > 0 && !tgts.has('deals')) {
-      tgts.set('deals', fmtNum(salesTarget / convRate) + '*');
+      tgts.set('deals', fmtTarget(salesTarget / convRate) + '*');
     }
 
     const dealsTarget = t('deals');
     if (!isNaN(dealsTarget) && !isNaN(dealsVal) && dealsVal > 0 && leadsSum > 0 && !tgts.has('leads')) {
-      tgts.set('leads', fmtNum(dealsTarget * (leadsSum / dealsVal)) + '*');
+      tgts.set('leads', fmtTarget(dealsTarget * (leadsSum / dealsVal)) + '*');
     }
 
     return { values: vals, targets: tgts, tooltips: liveData.tooltips };

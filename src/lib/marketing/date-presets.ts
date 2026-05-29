@@ -14,13 +14,13 @@ export interface DatePresetOption {
 export const DATE_PRESETS: ReadonlyArray<DatePresetOption> = [
   { key: '30', label: '30 Tage', days: 30 },
   { key: '90', label: '90 Tage', days: 90 },
-  { key: 'all', label: 'seit 01.01.2026', days: null },
+  { key: 'all', label: 'seit 01.02.2026', days: null },
 ];
 
-// Hartes Floor-Datum: davor existierte die AI-Agents-Lead-Pipeline in HubSpot
-// quasi nicht (vereinzelte Test-Entries). Wird auf alle Date-Filter
-// angewendet — auch "Alle" geht nie weiter zurück.
-export const HARD_FLOOR_DATE_STRING = '2026-01-01T00:00:00.000Z';
+// Hartes Floor-Datum: vor Mitte Februar 2026 wurde das Preview-Event
+// (Contract Finalized) in Amplitude nicht getrackt — Daten davor sind
+// unvollständig.
+export const HARD_FLOOR_DATE_STRING = '2026-02-01T00:00:00.000Z';
 export const HARD_FLOOR_DATE_MS = new Date(HARD_FLOOR_DATE_STRING).getTime();
 
 /**
