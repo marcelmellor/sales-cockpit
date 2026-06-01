@@ -51,6 +51,8 @@ const METRICS: MetricNode[] = [
   { id: 'demo', label: 'Demo-Buchungen (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, tooltip: 'Paid Ads ab Juni 2026' },
   { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.500 Min/Monat' },
   { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.500 Min/Monat' },
+  // Middle column: Direct deals (no lead)
+  { id: 'direct', label: 'Direktdeals / Woche', fallback: '?', target: '?', parentIds: ['deals'], team: 'sales', computed: true, tooltip: 'Deals ohne vorherigen Lead (Outbound, Upsell, Empfehlung)' },
   // Right column: PQL path
   { id: 'pql', label: 'Product-Qualified Leads (ICP) / Woche', fallback: '[TODO]', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', tooltip: 'Nach ICP-Filter: ≥ 2.500 Min/Monat' },
   { id: 'int', label: 'Neue Kunden mit 1+ Integration / Woche', fallback: '[TODO]', target: '20', parentIds: ['pql'], team: 'onboarding' },
@@ -481,6 +483,7 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
   const resolved = useMemo(() => {
     // Start with live values, then layer user overrides for manual nodes on top.
     const vals = new Map(liveData.values);
+    const tips = new Map(liveData.tooltips);
     for (const [id, txt] of valueOverrides) {
       const node = METRICS.find(m => m.id === id);
       // Only apply overrides to non-dynamic, non-computed nodes
@@ -506,6 +509,14 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
     const pbxLeads = v('pbx-leads');
     const leadsSum = [demo, agentLeads, pbxLeads].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
     if (leadsSum > 0) vals.set('leads', fmtNum(leadsSum));
+
+    // Direktdeals = Deals - Leads (remainder without lead source)
+    const dealsRaw = v('deals');
+    if (!isNaN(dealsRaw) && leadsSum > 0) {
+      const direct = Math.max(0, dealsRaw - leadsSum);
+      vals.set('direct', fmtNum(direct));
+      tips.set('direct', `${fmtNum(dealsRaw)} Deals/Woche − ${fmtNum(leadsSum)} Leads/Woche = ${fmtNum(direct)} ohne Lead-Quelle`);
+    }
 
     // Conversion is computed in computeLiveValues (Won / (Won + Lost))
     const sales = v('sales');
@@ -544,7 +555,7 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
       tgts.set('leads', fmtTarget(dealsTarget * (leadsSum / dealsVal)) + '*');
     }
 
-    return { values: vals, targets: tgts, tooltips: liveData.tooltips };
+    return { values: vals, targets: tgts, tooltips: tips };
   }, [liveData, valueOverrides, targetOverrides]);
 
   const handleEditValue = useCallback((id: string) => {
@@ -657,7 +668,7 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
           {card('deals')}
         </div>
 
-        {/* Split: Leads path (left) + PQL path (right) */}
+        {/* Split: Leads path (left) + Direct (center) + PQL path (right) */}
         <div className="kpi-split">
           {/* Left: Leads */}
           <div className="kpi-col">
@@ -667,6 +678,11 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
               {card('signup-leads')}
               {card('pbx-leads')}
             </div>
+          </div>
+
+          {/* Center: Direct deals */}
+          <div className="kpi-col">
+            {card('direct')}
           </div>
 
           {/* Right: PQL path */}

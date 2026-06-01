@@ -452,16 +452,16 @@ function PipelineOverviewContent() {
     }));
   }, [overviewDeals, meetingsData, stageHistoryData]);
 
-  // dealId → Activation-Label laut Marketing-Flow (Agent Signup / PBX Signup /
-  // Bestandskunde). Treibt die Prospects-Chart-Gruppierung im Dashboard.
-  // Deals ohne Activation-Signal bekommen keinen Eintrag — dort greift der
-  // Lead-Source-Fallback in DashboardView.
+  // dealId → Einstiegs-Label laut Marketing-Flow (Agent Signup / PBX Signup /
+  // Bestandskunde / Contact Form). Treibt die Prospects-Chart-Gruppierung im
+  // Dashboard. Deals ohne Einstiegssignal bekommen keinen Eintrag — dort
+  // greift der Lead-Source-Fallback in DashboardView.
   const dealFirstTouchpointLabel = useMemo(() => {
     const map = new Map<string, string>();
     if (!marketingData) return map;
     for (const j of marketingData.journeys) {
       if (j.kind !== 'deal') continue;
-      const label = getActivationLabel(j.touchpoints);
+      const label = getActivationLabel(j.touchpoints, j.customerSince);
       if (label) map.set(j.entityId, label);
     }
     return map;

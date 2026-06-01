@@ -415,52 +415,15 @@ export function DashboardView({
   const referenceNow = weeks[weeks.length - 1]?.getTime() ?? 0;
 
   // ── Trends ──
-  // Deals pro Woche, gruppiert nach der Source des verknüpften Leads.
-  // Hintergrund: HubSpot kennt keine `deals → leads`-Association — die
-  // Verknüpfung läuft umgekehrt (`leads → deals`, oft als "Primary"). Wir
-  // bauen daher aus den Leads (die `associatedDealIds` mitbringen) einen
-  // Lookup deal-id → lead-source. Source-Resolution analog zur Leads-
-  // Overview: bevorzugt das Freitext-Feld `lead_source`, sonst das enum
-  // `source`. Fehlt beides (oder gibt es keinen verknüpften Lead), landet
-  // der Deal im "Unbekannt"-Bucket.
-  const leadSourceByDealId = useMemo(() => {
-    const map = new Map<string, { leadSource: string | null; source: string | null }>();
-    for (const l of leads) {
-      const hasSignal = !!(l.leadSource || l.source);
-      for (const dealId of l.associatedDealIds) {
-        // Bevorzuge einen Lead mit Source-Signal, falls ein Deal an
-        // mehreren Leads hängt.
-        const existing = map.get(dealId);
-        if (!existing || (!existing.leadSource && !existing.source && hasSignal)) {
-          map.set(dealId, { leadSource: l.leadSource, source: l.source });
-        }
-      }
-    }
-    return map;
-  }, [leads]);
-
-  // Gruppier-Schlüssel für die Prospects-Chart-Stacks. Priorität:
-  //   1. Erster Marketing-Touchpoint laut Amplitude (Marketing-Tab-Logik) —
-  //      stabiler, plattformweit konsistenter Label (z.B. "Agent Signup",
-  //      "Contact Form (sipgate.ai)"). Wird ohne Lowercase übernommen, weil
-  //      die Labels schon kanonisch sind.
-  //   2. Fallback: Lead-Source-Feld (Freitext oder enum). Case-insensitive
-  //      konsolidiert, da HubSpot da gerne unterschiedliche Schreibweisen
-  //      desselben Werts speichert.
-  //   3. Sonst: "Unbekannt".
+  // Gruppier-Schlüssel für die Prospects-Chart-Stacks. Nutzt das Einstiegs-
+  // Label aus dem Marketing-Flow (Agent Signup / PBX Signup / Bestandskunde /
+  // Contact Form). Deals ohne Marketing-Journey landen in "Unbekannt".
   const dealSourceKey = useCallback((d: DealOverviewItem): string => {
-    const touchpointLabel = dealFirstTouchpointLabel?.get(d.id);
-    if (touchpointLabel) return touchpointLabel;
-    const info = leadSourceByDealId.get(d.id);
-    const raw = ((info?.leadSource || info?.source) || '').trim();
-    return raw ? raw.toLowerCase() : 'unbekannt';
-  }, [leadSourceByDealId, dealFirstTouchpointLabel]);
+    return dealFirstTouchpointLabel?.get(d.id)?.toLowerCase() ?? 'unbekannt';
+  }, [dealFirstTouchpointLabel]);
   const dealSourceLabel = useCallback((d: DealOverviewItem): string => {
-    const touchpointLabel = dealFirstTouchpointLabel?.get(d.id);
-    if (touchpointLabel) return touchpointLabel;
-    const info = leadSourceByDealId.get(d.id);
-    return ((info?.leadSource || info?.source) || '').trim() || 'Unbekannt';
-  }, [leadSourceByDealId, dealFirstTouchpointLabel]);
+    return dealFirstTouchpointLabel?.get(d.id) ?? 'Unbekannt';
+  }, [dealFirstTouchpointLabel]);
 
   // Pro Woche: alle Deals, die in dieser Woche erstellt wurden.
   const prospectsPerWeekDeals = useMemo(() => weeks.map((weekEnd, i) => {
@@ -546,18 +509,39 @@ export function DashboardView({
   );
 
   const prospectTooltipLines = useMemo(() => {
+    const topSet = new Set(topProspectSources);
+    const sourceKeys = prospectsBySource.keys;
     return prospectsPerWeekDeals.map(ds => {
       if (ds.length === 0) return ['Keine neuen Deals'];
-      const sorted = [...ds].sort((a, b) => {
-        const aTs = a.createdate ? new Date(a.createdate).getTime() : 0;
-        const bTs = b.createdate ? new Date(b.createdate).getTime() : 0;
-        return aTs - bTs;
-      });
-      const visible = sorted.slice(0, 6).map(d => d.companyName);
-      if (sorted.length > 6) visible.push(`+${sorted.length - 6} weitere`);
-      return visible;
+      const groups = new Map<string, string[]>();
+      for (const k of sourceKeys) groups.set(k, []);
+      for (const d of ds) {
+        const key = dealSourceKey(d);
+        const bucket = topSet.has(key) ? (prospectSourceLabelByKey.get(key) || key) : 'Andere';
+        groups.get(bucket)?.push(d.companyName);
+      }
+      const lines: string[] = [];
+      let shown = 0;
+      const MAX_DEALS = 20;
+      for (const [source, names] of groups) {
+        if (names.length === 0) continue;
+        const remaining = MAX_DEALS - shown;
+        if (remaining <= 0) break;
+        if (lines.length > 0) lines.push('');
+        lines.push(`${source} (${names.length})`);
+        const visible = names.slice(0, remaining);
+        for (const n of visible) lines.push(`· ${n}`);
+        shown += visible.length;
+        if (names.length > visible.length) {
+          lines.push(`  +${names.length - visible.length} weitere`);
+        }
+      }
+      if (shown < ds.length && !lines.some(l => l.startsWith('  +'))) {
+        lines.push(`+${ds.length - shown} weitere`);
+      }
+      return lines;
     });
-  }, [prospectsPerWeekDeals]);
+  }, [prospectsPerWeekDeals, topProspectSources, prospectsBySource.keys, prospectSourceLabelByKey, dealSourceKey]);
 
   const wonDealsTrend = useMemo(() => weeks.map(weekEnd => {
     const endMs = weekEnd.getTime();
@@ -633,12 +617,18 @@ export function DashboardView({
     const won = cohort.filter(d => isWonStage(d.dealStage)).length;
     const closed = cohort.filter(d => isWonStage(d.dealStage) || isLostStage(d.dealStage)).length;
     const open = cohort.length - closed;
-    const rate = cohort.length > 0 ? Math.round((won / cohort.length) * 100) : 0;
+    const realRate = cohort.length > 0 ? Math.round((won / cohort.length) * 100) : 0;
+    // Show a minimal bar for 0%-cohorts that actually have deals, so they're
+    // visually distinguishable from empty weeks (which show no bar at all).
+    const rate = cohort.length > 0 && realRate === 0 ? 1 : realRate;
     const completion = cohort.length > 0 ? closed / cohort.length : 1;
     return { rate, won, total: cohort.length, completion };
   }), [filteredDeals, weeks]);
 
   const winRateTrend = useMemo(() => winRateData.map(d => d.rate), [winRateData]);
+  const winRateTooltip = useMemo(() => winRateData.map(d =>
+    d.total > 0 && d.won === 0 ? '0 %' : `${d.rate} %`
+  ), [winRateData]);
   const winRateExtra = useMemo(() => winRateData.map(d => `${d.won} / ${d.total}`), [winRateData]);
   const winRateCompletion = useMemo(() => winRateData.map(d => d.completion >= 1 ? 1 : 0), [winRateData]);
   const winRateAvg = useMemo(() => {
@@ -1025,7 +1015,7 @@ export function DashboardView({
           Trends ({weeks.length} Wochen)
         </div>
         <div className="grid grid-cols-2 gap-5">
-          <ChartCard title="Prospects / Woche" current={`${currentProspects}`}>
+          <ChartCard title="Deals / Woche" current={`${currentProspects}`}>
             <Sparkline
               data={prospectsTrend}
               color="#E8AC68"
@@ -1064,7 +1054,7 @@ export function DashboardView({
             <WeekLabels weeks={weeks} />
           </ChartCard>
           <ChartCard title="Win Rate (Wochenkohorte)">
-            <Sparkline data={winRateTrend} color="#E8AC68" unit="%" weeks={weeks} tooltipExtra={winRateExtra} targetValue={winRateAvg} targetLabel={`Ø ${winRateAvg} %`} targetColor="#2C3333" bars completionRate={winRateCompletion} />
+            <Sparkline data={winRateTrend} color="#E8AC68" unit="%" weeks={weeks} tooltipOverride={winRateTooltip} tooltipExtra={winRateExtra} targetValue={winRateAvg} targetLabel={`Ø ${winRateAvg} %`} targetColor="#2C3333" bars completionRate={winRateCompletion} />
             <WeekLabels weeks={weeks} />
           </ChartCard>
           <ChartCard title="Ø Sales Cycle (Wochenkohorte)">

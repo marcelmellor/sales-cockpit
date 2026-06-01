@@ -1,23 +1,25 @@
 import { formatAmplitudeEvent } from '@/lib/amplitude/format';
 import type { Touchpoint, TouchpointAnchor } from '@/lib/amplitude/journeys';
 
-// Activation-Label einer Journey bestimmen — identisch zur Funnel-Route-Logik
-// (activation-Stage mit Priorität agent > pbx > bestandskunde). Gibt null
-// zurück wenn die Journey kein Activation-Signal hat.
+// Einstiegs-Label einer Journey bestimmen — wie ist die Person in den Funnel
+// gekommen? Priorität: Signup (Agent > PBX) > Bestandskunde > Contact Form.
+// Gibt null zurück wenn kein Einstiegssignal erkannt wurde.
 export function getActivationLabel(
   touchpoints: readonly Touchpoint[],
+  customerSince?: string | null,
 ): string | null {
   let hasAgent = false;
   let hasPbx = false;
-  let hasBestandskunde = false;
+  let hasContactForm = false;
   for (const t of touchpoints) {
     if (t.anchor === 'signup_atlantis_frontdesk') hasAgent = true;
     else if (t.anchor === 'signup_atlantis_other_product') hasPbx = true;
-    else if (t.anchor === 'customer_since') hasBestandskunde = true;
+    else if (t.anchor === 'lead_form_submitted') hasContactForm = true;
   }
   if (hasAgent) return 'Agent Signup';
   if (hasPbx) return 'PBX Signup';
-  if (hasBestandskunde) return 'Bestandskunde';
+  if (customerSince) return 'Bestandskunde';
+  if (hasContactForm) return 'Contact Form';
   return null;
 }
 
