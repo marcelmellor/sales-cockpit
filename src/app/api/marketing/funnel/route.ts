@@ -496,7 +496,26 @@ async function buildMarketingFunnel(days: number): Promise<MarketingFunnelRespon
         pageDomain: null,
       });
     }
-    merged.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
+    const ANCHOR_ORDER: Record<string, number> = {
+      customer_since: 0,
+      marketing_acquisition: 1,
+      marketing_page_sipgate_ai: 2,
+      marketing_page_sipgate_de: 2,
+      sipgate_ai_domain: 3,
+      lead_form_submitted: 4,
+      signup_atlantis_frontdesk: 5,
+      signup_atlantis_other_product: 5,
+      agents_qualification_onboarding: 6,
+      agents_qualification_inproduct: 6,
+      preview_trial_started: 7,
+      hubspot_lead_created: 8,
+      hubspot_deal_created: 9,
+    };
+    merged.sort((a, b) => {
+      const timeDiff = a.occurredAt.localeCompare(b.occurredAt);
+      if (timeDiff !== 0) return timeDiff;
+      return (ANCHOR_ORDER[a.anchor] ?? 99) - (ANCHOR_ORDER[b.anchor] ?? 99);
+    });
     return { touchpoints: merged, customerSince };
   }
 

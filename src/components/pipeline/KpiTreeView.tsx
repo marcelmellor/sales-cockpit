@@ -30,6 +30,8 @@ interface MetricNode {
   parentIds?: string[];
   /** Visual connector to parent is dashed */
   dashed?: boolean;
+  /** Muted context node — grayed out, not part of the core tree */
+  muted?: boolean;
 }
 
 // ── Static tree structure ────────────────────────────────────────────────────
@@ -48,9 +50,12 @@ const METRICS: MetricNode[] = [
   { id: 'deals', label: 'Deals / Woche', fallback: '?', target: '?', parentIds: ['conversion'], team: 'sales', dynamic: true },
   // Left column: Leads
   { id: 'leads', label: 'Leads / Woche', fallback: '?', target: '?', parentIds: ['deals'], computed: true },
-  { id: 'demo', label: 'Demo-Buchungen (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, tooltip: 'Paid Ads ab Juni 2026' },
+  { id: 'contact-form', label: 'Contact Form (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, computed: true, tooltip: 'ICP-Leads via Contact Form (sipgate.de + sipgate.ai)' },
+  { id: 'cf-de', label: 'sipgate.de', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true },
+  { id: 'cf-ai', label: 'sipgate.ai', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true },
   { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.500 Min/Monat' },
   { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.500 Min/Monat' },
+  { id: 'pbx-signups', label: 'PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['pbx-leads'], dynamic: true, dashed: true, muted: true, tooltip: 'Alle PBX-Signups (Grundgesamtheit für Onboarding-Quali)' },
   // Middle column: Direct deals (no lead)
   { id: 'direct', label: 'Direktdeals / Woche', fallback: '?', target: '?', parentIds: ['deals'], team: 'sales', computed: true, tooltip: 'Deals ohne vorherigen Lead (Outbound, Upsell, Empfehlung)' },
   // Right column: PQL path
@@ -60,7 +65,7 @@ const METRICS: MetricNode[] = [
   { id: 'aha', label: 'Aha-Moment / Woche', fallback: '[TODO]', target: '30', parentIds: ['int', 'pb'], team: 'onboarding' },
   { id: 'trials', label: 'Agent Previews / Woche', fallback: '?', target: '80', parentIds: ['aha'], team: 'growth', dynamic: true },
   { id: 'signup', label: 'Agent Signups / Woche', fallback: '?', target: '30', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'Paid Ads ab Juni 2026' },
-  { id: 'preview-pbx', label: 'PBX Signup → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden, die eine Agent-Preview starten' },
+  { id: 'preview-pbx', label: 'PBX Signup → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials', 'pbx-signups'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden, die eine Agent-Preview starten' },
   { id: 'preview-bestand', label: 'Bestandskunde → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'Bestehende sipgate-Kunden ohne neuen Signup' },
 ];
 
@@ -207,6 +212,10 @@ function computeLiveValues(
     values.set('signup', fmtNum(bq.activationAgent / weeks));
     tooltips.set('signup', `${bq.activationAgent} Agent-Signups in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
 
+    // PBX Signups / Woche (alle Nicht-Frontdesk-Signups)
+    values.set('pbx-signups', fmtNum(bq.activationOther / weeks));
+    tooltips.set('pbx-signups', `${bq.activationOther} PBX-Signups in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+
     // Previews / Woche — Gesamt + Aufschlüsselung nach Herkunft
     values.set('trials', fmtNum(bq.previewTrialTotal / weeks));
     tooltips.set('trials', `${bq.previewTrialTotal} Previews in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
@@ -222,7 +231,7 @@ function computeLiveValues(
     //
     //   • signup-leads — In-Product-Quali + ICP
     //   • pbx-leads    — Onboarding-Quali + ICP
-    //   • demo         — ICP catch-all (neither quali type matched)
+    //   • cf-de / cf-ai — Contact Form by domain + ICP
 
     const leadJourneys = marketingData.journeys.filter(
       j => j.kind === 'lead' && j.createdate && new Date(j.createdate).getTime() >= cutoff,
@@ -230,30 +239,35 @@ function computeLiveValues(
     if (leadJourneys.length > 0) {
       let inProductIcpLeads = 0;
       let onboardingIcpLeads = 0;
-      let demoIcpLeads = 0;
+      let cfDeLeads = 0;
+      let cfAiLeads = 0;
 
       for (const j of leadJourneys) {
         const isIcp = j.minuteBucket === 'gte_threshold';
-        if (!isIcp) continue; // nur ICP-Leads zählen
+        if (!isIcp) continue;
 
-        const hasInProductQuali = j.touchpoints.some(
-          t => t.anchor === 'agents_qualification_inproduct',
-        );
-        const hasOnboardingQuali = j.touchpoints.some(
-          t => t.anchor === 'agents_qualification_onboarding',
-        );
-
-        if (hasInProductQuali) inProductIcpLeads++;
-        else if (hasOnboardingQuali) onboardingIcpLeads++;
-        else demoIcpLeads++;
+        const cfTouchpoint = j.touchpoints.find(t => t.anchor === 'lead_form_submitted');
+        if (cfTouchpoint) {
+          const domain = cfTouchpoint.pageDomain?.replace(/^www\./, '') ?? '';
+          if (domain.endsWith('sipgate.ai')) cfAiLeads++;
+          else cfDeLeads++;
+        } else if (j.touchpoints.some(t => t.anchor === 'agents_qualification_onboarding')) {
+          onboardingIcpLeads++;
+        } else if (j.touchpoints.some(t => t.anchor === 'agents_qualification_inproduct')) {
+          inProductIcpLeads++;
+        } else {
+          cfDeLeads++;
+        }
       }
 
       values.set('signup-leads', fmtNum(inProductIcpLeads / weeks));
       tooltips.set('signup-leads', `${inProductIcpLeads} In-Product-Quali-Leads (≥ 2.500 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
       values.set('pbx-leads', fmtNum(onboardingIcpLeads / weeks));
       tooltips.set('pbx-leads', `${onboardingIcpLeads} Onboarding-Quali-Leads (≥ 2.500 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('demo', fmtNum(demoIcpLeads / weeks));
-      tooltips.set('demo', `${demoIcpLeads} sonstige ICP-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('cf-de', fmtNum(cfDeLeads / weeks));
+      tooltips.set('cf-de', `${cfDeLeads} Contact-Form-Leads sipgate.de (≥ 2.500 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('cf-ai', fmtNum(cfAiLeads / weeks));
+      tooltips.set('cf-ai', `${cfAiLeads} Contact-Form-Leads sipgate.ai (≥ 2.500 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
     }
   }
 
@@ -292,9 +306,9 @@ function MetricCard({ node, values, targets, dynamicTooltips, onEditValue, onEdi
 
   return (
     <div
-      className="kpi-metric"
+      className={`kpi-metric${node.muted ? ' kpi-muted' : ''}`}
       data-id={node.id}
-      style={node.team ? { borderLeftColor: TEAM_COLORS[node.team], borderLeftWidth: 3 } : undefined}
+      style={node.team && !node.muted ? { borderLeftColor: TEAM_COLORS[node.team], borderLeftWidth: 3 } : undefined}
     >
       {tooltip && (
         <div
@@ -503,11 +517,16 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
 
     // ── Computed values ──────────────────────────────────────────────────────
 
-    // Leads = demo + signup-leads + pbx-leads
-    const demo = v('demo');
+    // Contact Form = cf-de + cf-ai
+    const cfDe = v('cf-de');
+    const cfAi = v('cf-ai');
+    const cfSum = [cfDe, cfAi].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
+    if (cfSum > 0) vals.set('contact-form', fmtNum(cfSum));
+
+    // Leads = contact-form + signup-leads + pbx-leads
     const agentLeads = v('signup-leads');
     const pbxLeads = v('pbx-leads');
-    const leadsSum = [demo, agentLeads, pbxLeads].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
+    const leadsSum = [cfSum, agentLeads, pbxLeads].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
     if (leadsSum > 0) vals.set('leads', fmtNum(leadsSum));
 
     // Direktdeals = Deals - Leads (remainder without lead source)
@@ -671,12 +690,21 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
         {/* Split: Leads path (left) + Direct (center) + PQL path (right) */}
         <div className="kpi-split">
           {/* Left: Leads */}
-          <div className="kpi-col">
+          <div className="kpi-col" style={{ alignSelf: 'stretch' }}>
             {card('leads')}
-            <div className="kpi-row">
-              {card('demo')}
+            <div className="kpi-row" style={{ flex: 1, alignItems: 'flex-start' }}>
+              <div className="kpi-col" style={{ gap: 16 }}>
+                {card('contact-form')}
+                <div className="kpi-row">
+                  {card('cf-de')}
+                  {card('cf-ai')}
+                </div>
+              </div>
+              <div className="kpi-col" style={{ gap: 16, alignSelf: 'stretch' }}>
+                {card('pbx-leads')}
+                <div style={{ marginTop: 'auto' }}>{card('pbx-signups')}</div>
+              </div>
               {card('signup-leads')}
-              {card('pbx-leads')}
             </div>
           </div>
 
@@ -695,8 +723,8 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
             {card('aha')}
             {card('trials')}
             <div className="kpi-row">
-              {card('signup')}
               {card('preview-pbx')}
+              {card('signup')}
               {card('preview-bestand')}
             </div>
           </div>
@@ -777,7 +805,7 @@ const TREE_STYLES = `
 .kpi-split {
   display: flex;
   gap: 80px;
-  justify-content: center;
+  justify-content: flex-start;
   margin-top: 28px;
   position: relative;
   z-index: 1;
@@ -792,6 +820,7 @@ const TREE_STYLES = `
   display: flex;
   gap: 16px;
   justify-content: center;
+  align-items: flex-start;
 }
 
 /* Metric card */
@@ -800,8 +829,8 @@ const TREE_STYLES = `
   border: 1px solid var(--kpi-border);
   border-radius: 8px;
   padding: 14px 24px;
-  min-width: 160px;
-  max-width: 260px;
+  min-width: 200px;
+  max-width: 320px;
   text-align: center;
   position: relative;
   z-index: 1;
@@ -809,6 +838,10 @@ const TREE_STYLES = `
 }
 .kpi-metric:hover {
   box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+.kpi-muted {
+  opacity: 0.45;
+  border-style: dashed;
 }
 
 .kpi-label {
@@ -818,6 +851,10 @@ const TREE_STYLES = `
   letter-spacing: 0.05em;
   color: var(--kpi-text-2);
   margin-bottom: 4px;
+  min-height: 2.6em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .kpi-val {
   font-size: 24px;

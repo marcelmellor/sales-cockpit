@@ -1,4 +1,7 @@
 {
+  "env": {
+    "GOOGLE_APPLICATION_CREDENTIALS": "/Users/mellor/.config/sales-cockpit/ff-amplitude-dwh-pipelines.json"
+  },
   "hooks": {
     "SessionStart": [
       {

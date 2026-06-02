@@ -12,10 +12,19 @@ import type { Touchpoint } from './journeys';
 // User definitiv über einen Google-Ad-Klick. Internes (appweb, inapp,
 // website_main_menu, etc.) wird explizit NICHT als Marketing-Touch gezählt.
 //
-// Wie schon bei pre-signup-pageviews greift hier device_id-Attribution:
-// die meisten UTM-Tags sind auf anonymen Events (vor dem Signup), wir
-// joinen also über alle device_ids, die je mit dem User-Email gesehen
-// wurden.
+// Attribution läuft über zwei Pfade, um Cross-Device-Lücken zu schließen:
+//
+// 1. device_id-Join: Email → alle device_ids dieses Users → Marketing-Events
+//    auf diesen Devices. Deckt den Hauptfall ab (anonymer Ad-Klick vor Signup
+//    auf demselben Gerät).
+//
+// 2. amplitude_id-Join: Email → alle amplitude_ids dieses Users → Marketing-
+//    Events auf allen Devices unter diesen amplitude_ids. Schließt den Cross-
+//    Device-Gap (Ad-Klick auf Handy, Signup auf Laptop), sofern Amplitude die
+//    Geräte über Identity Resolution verknüpft hat.
+//
+// Beide Pfade werden per UNION ALL zusammengeführt und auf den frühesten
+// Marketing-Touch pro Email reduziert.
 
 const EVENTS_TABLE = 'ff-amplitude.ampli_live_events.EVENTS_100008946';
 
@@ -23,6 +32,7 @@ const QUERY = `
 WITH target_emails AS (
   SELECT email FROM UNNEST(@emails) AS email
 ),
+-- Path 1: device_id bridge
 device_to_email AS (
   SELECT DISTINCT
     LOWER(e.user_id) AS email,
@@ -32,7 +42,7 @@ device_to_email AS (
   WHERE e.device_id IS NOT NULL
     AND e.event_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 365 DAY)
 ),
-attributed_events AS (
+events_via_device AS (
   SELECT
     d2e.email,
     e.event_time,
@@ -45,6 +55,35 @@ attributed_events AS (
   JOIN \`${EVENTS_TABLE}\` e
     ON e.device_id = d2e.device_id
    AND e.event_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 365 DAY)
+),
+-- Path 2: amplitude_id bridge (cross-device)
+ampid_to_email AS (
+  SELECT DISTINCT
+    LOWER(e.user_id) AS email,
+    e.amplitude_id
+  FROM \`${EVENTS_TABLE}\` e
+  JOIN target_emails t ON LOWER(e.user_id) = t.email
+  WHERE e.amplitude_id IS NOT NULL
+    AND e.event_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 365 DAY)
+),
+events_via_ampid AS (
+  SELECT
+    a2e.email,
+    e.event_time,
+    LOWER(JSON_VALUE(e.event_properties, '$.utm_source')) AS src,
+    LOWER(JSON_VALUE(e.event_properties, '$.utm_medium')) AS med,
+    LOWER(JSON_VALUE(e.event_properties, '$.utm_campaign')) AS campaign,
+    JSON_VALUE(e.event_properties, '$.gclid') AS gclid,
+    JSON_VALUE(e.event_properties, '$.fbclid') AS fbclid
+  FROM ampid_to_email a2e
+  JOIN \`${EVENTS_TABLE}\` e
+    ON e.amplitude_id = a2e.amplitude_id
+   AND e.event_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 365 DAY)
+),
+attributed_events AS (
+  SELECT * FROM events_via_device
+  UNION ALL
+  SELECT * FROM events_via_ampid
 ),
 classified AS (
   SELECT
