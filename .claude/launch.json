@@ -5,7 +5,9 @@
       "name": "sales-cockpit",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["next", "dev", "--turbopack", "-p", "3020"],
-      "port": 3020
+      "port": 3020,
+      "autoPort": false,
+      "reusePort": true
     }
   ]
 }
