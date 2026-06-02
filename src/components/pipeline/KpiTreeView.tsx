@@ -57,8 +57,6 @@ const METRICS: MetricNode[] = [
   { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.500 Min/Monat' },
   { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.500 Min/Monat' },
   { id: 'pbx-signups', label: 'PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['pbx-leads'], dynamic: true, dashed: true, muted: true, tooltip: 'Alle PBX-Signups (Grundgesamtheit für Onboarding-Quali)' },
-  // Middle column: Direct deals (no lead)
-  { id: 'direct', label: 'Direktdeals / Woche', fallback: '?', target: '?', parentIds: ['deals'], team: 'sales', computed: true, tooltip: 'Deals ohne vorherigen Lead (Outbound, Upsell, Empfehlung)' },
   // Right column: PQL path
   { id: 'pql', label: 'Product-Qualified Leads (ICP) / Woche', fallback: '[TODO]', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', tooltip: 'Nach ICP-Filter: ≥ 2.500 Min/Monat' },
   { id: 'int', label: 'Neue Kunden mit 1+ Integration / Woche', fallback: '[TODO]', target: '20', parentIds: ['pql'], team: 'onboarding' },
@@ -572,14 +570,6 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
     const leadsSum = [cfSum, agentLeads, pbxLeads].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
     if (leadsSum > 0) vals.set('leads', fmtNum(leadsSum));
 
-    // Direktdeals = Deals - Leads (remainder without lead source)
-    const dealsRaw = v('deals');
-    if (!isNaN(dealsRaw) && leadsSum > 0) {
-      const direct = Math.max(0, dealsRaw - leadsSum);
-      vals.set('direct', fmtNum(direct));
-      tips.set('direct', `${fmtNum(dealsRaw)} Deals/Woche − ${fmtNum(leadsSum)} Leads/Woche = ${fmtNum(direct)} ohne Lead-Quelle`);
-    }
-
     // Conversion is computed in computeLiveValues (Won / (Won + Lost))
     const sales = v('sales');
     const dealsVal = v('deals');
@@ -782,11 +772,6 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
               {card('pbx-leads')}
               {card('signup-leads')}
             </div>
-          </div>
-
-          {/* Center: Direct deals */}
-          <div className="kpi-col">
-            {card('direct')}
           </div>
 
           {/* Right: PQL path */}
