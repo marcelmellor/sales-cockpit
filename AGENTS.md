@@ -249,6 +249,7 @@ client. The browser still keeps its own `localStorage` cache (see
 | `GET /api/projects/overview` | `projects-overview:<produkt>` | 5 min |
 | `GET /api/deals/overview/meetings` | `deal-meetings:<sha1(dealIds)>` | 5 min |
 | `GET /api/deals/overview/stage-history` | `deal-stage-history:<sha1(dealIds)>` | 5 min |
+| `GET /api/amplitude/playbook-stats` | `playbook-stats:<days>d` | 30 min |
 
 Each response now includes a `cache: { hit, cachedAt, ageMs, ttlSeconds }`
 field next to `data` so the client can tell stale-from-cache apart from

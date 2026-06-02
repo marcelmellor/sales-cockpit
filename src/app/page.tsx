@@ -368,9 +368,10 @@ function PipelineOverviewContent() {
   const { data: playbookStats } = useQuery({
     queryKey: ['playbook-stats', marketingDays],
     queryFn: async () => {
-      const response = await fetch(`/api/amplitude/playbook-stats?days=${marketingDays}`);
+      const response = await fetch(`/api/amplitude/playbook-stats?days=${marketingDays}${takeRefreshFlag('playbookStats')}`);
       if (!response.ok) throw new Error('Failed to fetch playbook stats');
-      return response.json() as Promise<PlaybookStats>;
+      const json = await response.json();
+      return json.data as PlaybookStats;
     },
     enabled: isAuthenticated && effectiveViewMode === 'kpi-tree',
     staleTime: 30 * 60 * 1000,
@@ -481,6 +482,7 @@ function PipelineOverviewContent() {
       marketing: true,
       meetings: true,
       stageHistory: true,
+      playbookStats: true,
     };
     queryClient.invalidateQueries({ queryKey: ['pipeline-overview', selectedPipelineId, selectedProdukt] });
     queryClient.invalidateQueries({ queryKey: ['pipeline-meetings', selectedPipelineId, selectedProdukt] });
@@ -488,6 +490,7 @@ function PipelineOverviewContent() {
     queryClient.invalidateQueries({ queryKey: ['pipeline-leads', selectedProdukt] });
     queryClient.invalidateQueries({ queryKey: ['projects-overview', selectedProdukt] });
     queryClient.invalidateQueries({ queryKey: ['marketing-funnel', selectedProdukt] });
+    queryClient.invalidateQueries({ queryKey: ['playbook-stats'] });
   };
 
   // Combined loading state for secondary data
