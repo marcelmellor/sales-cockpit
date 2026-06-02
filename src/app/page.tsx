@@ -48,7 +48,7 @@ import type { PipelineOverviewResponse, DealOverviewItem, DealMeetingsMap } from
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import type { LeadsOverviewResponse, LeadOverviewItem } from '@/app/api/leads/overview/route';
 import type { ProjectsOverviewResponse } from '@/app/api/projects/overview/route';
-import type { MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
+import { MRR_BUCKET_THRESHOLD, type MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
 import type { PlaybookStats } from '@/lib/amplitude/playbook-stats';
 import {
   getActivationLabel,
@@ -691,7 +691,7 @@ function PipelineOverviewContent() {
             type: 'mrr',
             operator: 'after',
             dateFrom: '',
-            numberFrom: 449,
+            numberFrom: MRR_BUCKET_THRESHOLD - 1,
           }],
         },
       });

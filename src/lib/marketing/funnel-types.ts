@@ -34,6 +34,10 @@ export type MinuteBucket = 'lt_threshold' | 'gte_threshold' | 'unknown';
 export const MRR_BUCKET_THRESHOLD = 450;
 export type MrrBucket = 'lt_threshold' | 'gte_threshold' | 'unknown';
 
+export function isIcpRevenue(revenue: number): boolean {
+  return Math.round(revenue) >= MRR_BUCKET_THRESHOLD;
+}
+
 export interface MarketingFunnelJourney {
   kind: MarketingJourneyKind;
   entityId: string;                 // dealId (kind='deal') or leadId (kind='lead')

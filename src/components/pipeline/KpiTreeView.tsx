@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isWonStageLabel, isLostStageLabel } from '@/lib/hubspot/mrr';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
-import type { MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
+import { isIcpRevenue, type MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
 import type { PlaybookStats } from '@/lib/amplitude/playbook-stats';
 import {
   DATE_PRESETS,
@@ -158,15 +158,17 @@ function computeLiveValues(
   const now = Date.now();
   const cutoff = now - days * 24 * 60 * 60 * 1000;
 
-  // ── Deal-based metrics (rolling window) ──────────────────────────────────
+  // ── Deal-based metrics (rolling window, ICP only: MRR ≥ threshold) ───────
 
-  const recentCreated = deals.filter(
+  const icpDeals = deals.filter(d => isIcpRevenue(d.revenue));
+
+  const recentCreated = icpDeals.filter(
     d => d.createdate && new Date(d.createdate).getTime() >= cutoff,
   );
-  const recentWon = deals.filter(
+  const recentWon = icpDeals.filter(
     d => isWonStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff,
   );
-  const recentLost = deals.filter(
+  const recentLost = icpDeals.filter(
     d => isLostStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff,
   );
   const recentClosed = recentWon.length + recentLost.length;

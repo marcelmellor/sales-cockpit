@@ -4,6 +4,7 @@ import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { Eye } from 'lucide-react';
 import { useDevStore } from '@/stores/dev-store';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
+import { MRR_BUCKET_THRESHOLD } from '@/lib/marketing/funnel-types';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
@@ -188,7 +189,7 @@ export function DashboardView({
             type: 'mrr',
             operator: 'after',
             dateFrom: '',
-            numberFrom: 449,
+            numberFrom: MRR_BUCKET_THRESHOLD - 1,
           }],
         },
       });
