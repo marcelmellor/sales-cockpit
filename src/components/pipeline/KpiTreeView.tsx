@@ -309,9 +309,14 @@ interface MetricCardProps {
   dynamicTooltips: Map<string, string>;
   onEditValue: (id: string) => void;
   onEditTarget: (id: string) => void;
+  /** Whether this node is collapsible (has toggleable children) */
+  isCollapsible?: boolean;
+  /** Whether this node's children are currently collapsed */
+  isCollapsed?: boolean;
+  onToggleCollapse?: (id: string) => void;
 }
 
-function MetricCard({ node, values, targets, dynamicTooltips, onEditValue, onEditTarget }: MetricCardProps) {
+function MetricCard({ node, values, targets, dynamicTooltips, onEditValue, onEditTarget, isCollapsible, isCollapsed, onToggleCollapse }: MetricCardProps) {
   const val = values.get(node.id) ?? node.fallback;
   const target = targets.get(node.id) ?? node.target;
   const canEditValue = !node.computed && !node.dynamic;
@@ -320,7 +325,7 @@ function MetricCard({ node, values, targets, dynamicTooltips, onEditValue, onEdi
 
   return (
     <div
-      className={`kpi-metric${node.muted ? ' kpi-muted' : ''}`}
+      className={`kpi-metric${node.muted ? ' kpi-muted' : ''}${isCollapsible ? ' kpi-collapsible' : ''}`}
       data-id={node.id}
       style={node.team && !node.muted ? { borderLeftColor: TEAM_COLORS[node.team], borderLeftWidth: 3 } : undefined}
     >
@@ -347,6 +352,15 @@ function MetricCard({ node, values, targets, dynamicTooltips, onEditValue, onEdi
       >
         Ziel: <span className="kpi-target-val">{target}</span>
       </div>
+      {isCollapsible && (
+        <button
+          className="kpi-collapse-toggle"
+          onClick={() => onToggleCollapse?.(node.id)}
+          title={isCollapsed ? 'Aufklappen' : 'Einklappen'}
+        >
+          {isCollapsed ? '+' : '−'}
+        </button>
+      )}
     </div>
   );
 }
@@ -502,6 +516,18 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
   // User-editable overrides for manual nodes and all targets.
   const [valueOverrides, setValueOverrides] = useState<Map<string, string>>(new Map());
   const [targetOverrides, setTargetOverrides] = useState<Map<string, string>>(new Map());
+
+  // Collapsible sections — keyed by parent node ID whose children are hidden.
+  const DEFAULT_COLLAPSED = useMemo(() => new Set(['contact-form', 'trials']), []);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(DEFAULT_COLLAPSED));
+  const toggleCollapse = useCallback((id: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   // Live values from props (deal stats + marketing BQ totals + journey classification).
   const liveData = useMemo(
@@ -662,9 +688,9 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
       window.removeEventListener('resize', draw);
       ro.disconnect();
     };
-  }, [resolved.values]);
+  }, [resolved.values, collapsed]);
 
-  const card = (id: string) => {
+  const card = (id: string, collapsible?: boolean) => {
     const node = METRICS.find(m => m.id === id)!;
     return (
       <MetricCard
@@ -675,6 +701,9 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
         dynamicTooltips={resolved.tooltips}
         onEditValue={handleEditValue}
         onEditTarget={handleEditTarget}
+        isCollapsible={collapsible}
+        isCollapsed={collapsible ? collapsed.has(id) : undefined}
+        onToggleCollapse={collapsible ? toggleCollapse : undefined}
       />
     );
   };
@@ -731,20 +760,24 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
         {/* Split: Leads path (left) + Direct (center) + PQL path (right) */}
         <div className="kpi-split" style={{ position: 'relative' }}>
           {/* Absolutely positioned — JS aligns it with preview-pbx row */}
-          <div data-pbx-signups-anchor style={{ position: 'absolute', top: 0, left: 0 }}>
-            {card('pbx-signups')}
-          </div>
+          {!collapsed.has('trials') && (
+            <div data-pbx-signups-anchor style={{ position: 'absolute', top: 0, left: 0 }}>
+              {card('pbx-signups')}
+            </div>
+          )}
 
           {/* Left: Leads */}
           <div className="kpi-col">
             {card('leads')}
             <div className="kpi-row">
               <div className="kpi-col" style={{ gap: 16 }}>
-                {card('contact-form')}
-                <div className="kpi-row">
-                  {card('cf-de')}
-                  {card('cf-ai')}
-                </div>
+                {card('contact-form', true)}
+                {!collapsed.has('contact-form') && (
+                  <div className="kpi-row">
+                    {card('cf-de')}
+                    {card('cf-ai')}
+                  </div>
+                )}
               </div>
               {card('pbx-leads')}
               {card('signup-leads')}
@@ -764,12 +797,14 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
               {card('pb')}
             </div>
             {card('aha')}
-            {card('trials')}
-            <div className="kpi-row">
-              {card('preview-pbx')}
-              {card('signup')}
-              {card('preview-bestand')}
-            </div>
+            {card('trials', true)}
+            {!collapsed.has('trials') && (
+              <div className="kpi-row">
+                {card('preview-pbx')}
+                {card('signup')}
+                {card('preview-bestand')}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -957,6 +992,36 @@ const TREE_STYLES = `
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   pointer-events: none;
   z-index: 10;
+}
+
+/* Collapse toggle */
+.kpi-collapsible {
+  cursor: default;
+}
+.kpi-collapse-toggle {
+  position: absolute;
+  bottom: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--kpi-border);
+  background: var(--kpi-surface);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--kpi-text-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 2;
+  transition: background 0.1s, color 0.1s;
+}
+.kpi-collapse-toggle:hover {
+  background: #f3f4f6;
+  color: var(--kpi-text-2);
 }
 
 /* Date-Preset Buttons */
