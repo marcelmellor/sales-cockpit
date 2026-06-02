@@ -1,5 +1,6 @@
 import { getBigQuery } from './client';
 import type { Touchpoint } from './journeys';
+import { getLostPreviewOverride } from './lost-preview-overrides';
 
 // AI-Agents Preview/Trial activations from the in-product Amplitude project
 // (`exports_raw`). The event is `Contract Finalized` with
@@ -90,5 +91,25 @@ export async function getPreviewTrialsByMastersipid(
       },
     ]);
   }
+
+  // Merge static overrides for previews lost due to a tracking hickup.
+  // Only added if BQ didn't already return a result for that account.
+  for (const msid of normalized) {
+    if (result.has(msid)) continue;
+    const override = getLostPreviewOverride(msid);
+    if (!override) continue;
+    result.set(msid, [
+      {
+        eventType: 'Preview gestartet',
+        occurredAt: override.createdAt,
+        anchor: 'preview_trial_started',
+        leadSourceDetails: null,
+        inboundValue: null,
+        signupProduct: null,
+        pageDomain: null,
+      },
+    ]);
+  }
+
   return result;
 }

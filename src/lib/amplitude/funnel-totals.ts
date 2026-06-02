@@ -1,4 +1,5 @@
 import { getBigQuery } from './client';
+import { getLostPreviewOverridesInWindow } from './lost-preview-overrides';
 
 // Globale BQ-Counts für Funnel-Stages, unabhängig von HubSpot. Jede Stage
 // bekommt ihren Gesamtwert direkt aus Amplitude — die HubSpot-Journey-
@@ -68,8 +69,54 @@ export async function getActivationTotals(days: number): Promise<ActivationTotal
 
 const BESTANDSKUNDE_DAYS = 90; // Signup älter als 3 Monate → Bestandskunde
 
-const PREVIEW_QUERY = `
-WITH preview_unique AS (
+// Built dynamically by buildPreviewQuery() to inject static overrides.
+// The override accounts get their email resolved from any in-product event
+// so the signup-type classification cross-join works identically.
+function buildPreviewQuery(overrides: { accountId: string; createdAt: string }[]): string {
+  const overrideCte = overrides.length > 0
+    ? `,
+override_emails AS (
+  SELECT
+    COALESCE(
+      CAST(JSON_VALUE(user_properties, '$.account_id') AS STRING),
+      REGEXP_EXTRACT(JSON_VALUE(user_properties, '$.webuser_id'), r'^(\\d+)')
+    ) AS master_sip_id,
+    LOWER(JSON_VALUE(user_properties, '$.webuser_email')) AS email
+  FROM \`${INPRODUCT_TABLE}\`
+  WHERE COALESCE(
+      CAST(JSON_VALUE(user_properties, '$.account_id') AS STRING),
+      REGEXP_EXTRACT(JSON_VALUE(user_properties, '$.webuser_id'), r'^(\\d+)')
+    ) IN (${overrides.map(o => `'${o.accountId}'`).join(',')})
+    AND JSON_VALUE(user_properties, '$.webuser_email') IS NOT NULL
+    AND LOWER(JSON_VALUE(user_properties, '$.webuser_email')) NOT LIKE '%@sipgate.de'
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY COALESCE(
+      CAST(JSON_VALUE(user_properties, '$.account_id') AS STRING),
+      REGEXP_EXTRACT(JSON_VALUE(user_properties, '$.webuser_id'), r'^(\\d+)')
+    )
+    ORDER BY event_time DESC
+  ) = 1
+),
+override_previews AS (
+  SELECT
+    o.master_sip_id,
+    COALESCE(oe.email, '') AS email,
+    o.preview_time
+  FROM UNNEST([${overrides.map(o => `STRUCT('${o.accountId}' AS master_sip_id, TIMESTAMP '${o.createdAt}' AS preview_time)`).join(',')}]) o
+  LEFT JOIN override_emails oe ON o.master_sip_id = oe.master_sip_id
+)`
+    : '';
+
+  const unionClause = overrides.length > 0
+    ? `
+  UNION ALL
+  SELECT master_sip_id, email, preview_time
+  FROM override_previews
+  WHERE master_sip_id NOT IN (SELECT master_sip_id FROM tracked_previews)`
+    : '';
+
+  return `
+WITH tracked_previews AS (
   SELECT
     COALESCE(
       CAST(JSON_VALUE(user_properties, '$.account_id') AS STRING),
@@ -90,6 +137,9 @@ WITH preview_unique AS (
     )
     ORDER BY event_time ASC
   ) = 1
+)${overrideCte},
+preview_unique AS (
+  SELECT * FROM tracked_previews${unionClause}
 ),
 signup_product AS (
   SELECT
@@ -127,6 +177,7 @@ SELECT
 FROM preview_classified
 WHERE master_sip_id IS NOT NULL
 `;
+}
 
 export interface PreviewTrialTotals {
   total: number;
@@ -136,9 +187,11 @@ export interface PreviewTrialTotals {
 }
 
 export async function getPreviewTrialTotals(days: number): Promise<PreviewTrialTotals> {
+  const overrides = getLostPreviewOverridesInWindow(days);
+  const query = buildPreviewQuery(overrides);
   const bq = getBigQuery();
   const [rows] = await bq.query({
-    query: PREVIEW_QUERY,
+    query,
     params: { days },
     types: { days: 'INT64' },
   });
