@@ -46,6 +46,7 @@ const METRICS: MetricNode[] = [
   { id: 'icp', label: 'Neue ICP-Kunden / Woche', fallback: '?', target: '?', parentIds: ['mrr'], dynamic: true, tooltip: '> 2.500 € / Monat' },
   { id: 'sales', label: 'Sales / Woche', fallback: '?', target: '?', parentIds: ['icp'], team: 'sales', dynamic: true },
   { id: 'conversion', label: 'Conversion', fallback: '?', target: '25 %', parentIds: ['sales'], team: 'sales', computed: true },
+  { id: 'cycle', label: 'Sales Cycle', fallback: '?', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, dynamic: true, tooltip: 'Ø Tage von Deal-Erstellung bis Abschluss (Won)' },
   { id: 'onboarding', label: 'Onboarding-Zeit', fallback: '30h', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, tooltip: 'Solution Consulting' },
   { id: 'deals', label: 'Deals / Woche', fallback: '?', target: '?', parentIds: ['conversion'], team: 'sales', dynamic: true },
   // Left column: Leads
@@ -187,6 +188,17 @@ function computeLiveValues(
     const conv = recentWon.length / recentClosed;
     values.set('conversion', fmtNum(conv * 100) + ' %');
     tooltips.set('conversion', `${recentWon.length} Won / ${recentClosed} abgeschlossen (${recentWon.length} Won + ${recentLost.length} Lost) in ${days} Tagen — nach Abschlussdatum, nicht Erstelldatum`);
+  }
+
+  // Sales Cycle = Ø Tage von Erstellung bis Abschluss (Won + Lost)
+  const closedWithDates = [...recentWon, ...recentLost].filter(d => d.createdate && d.closedate);
+  if (closedWithDates.length > 0) {
+    const avgDays = closedWithDates.reduce((sum, d) => {
+      return sum + (new Date(d.closedate!).getTime() - new Date(d.createdate!).getTime()) / (24 * 60 * 60 * 1000);
+    }, 0) / closedWithDates.length;
+    const rounded = Math.round(avgDays);
+    values.set('cycle', `${rounded} Tage`);
+    tooltips.set('cycle', `Ø ${rounded} Tage aus ${closedWithDates.length} abgeschlossenen Deals (${recentWon.length} Won + ${recentLost.length} Lost) in ${days} Tagen`);
   }
 
   // ICP-Kunden / Woche (won deals with ICP tier)
@@ -390,13 +402,13 @@ function drawConnectors(treeEl: HTMLDivElement, svgEl: SVGSVGElement) {
       const overlapY = Math.min(pRect.bottom, cRect.bottom) - Math.max(pRect.top, cRect.top);
       const gapX = Math.max(0, Math.max(pRect.left, cRect.left) - Math.min(pRect.right, cRect.right));
 
-      if (overlapY > 0 && gapX < 80) {
+      if (overlapY > 0) {
+        // Horizontally separated, vertically overlapping — draw a horizontal line
         const midY = pRect.top - treeRect.top + pRect.height / 2;
         const leftRect = pRect.left < cRect.left ? pRect : cRect;
         const rightRect = pRect.left < cRect.left ? cRect : pRect;
         const path = document.createElementNS(ns, 'path');
         strokeAttr(path);
-        if (isDashed) path.setAttribute('stroke-dasharray', '6 4');
         path.setAttribute('d', `M${leftRect.right - treeRect.left},${midY} L${rightRect.left - treeRect.left},${midY}`);
         svgEl.appendChild(path);
       } else {
@@ -463,6 +475,9 @@ function drawConnectors(treeEl: HTMLDivElement, svgEl: SVGSVGElement) {
         const toX = cRect.left - treeRect.left + cRect.width / 2;
         const toY = cRect.bottom - treeRect.top;
         path.setAttribute('d', `M${fromX},${fromY} L${toX},${fromY} L${toX},${toY}`);
+      } else if (dist > 300 && Math.abs(p.px - cx) < 20) {
+        // Vertically aligned, large gap — straight line
+        path.setAttribute('d', `M${p.px},${p.py} L${cx},${cy}`);
       } else if (dist > 300) {
         const pMidY = pRect.top - treeRect.top + pRect.height / 2;
         const pRight = pRect.right - treeRect.left;
@@ -611,18 +626,41 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
     const svg = svgRef.current;
     if (!tree || !svg) return;
 
-    const draw = () => drawConnectors(tree, svg);
-    const raf = requestAnimationFrame(draw);
+    const draw = () => {
+      try {
+        // 1) Position pbx-signups BEFORE drawing connectors so measurements are correct
+        const previewPbx = tree.querySelector<HTMLElement>('[data-id="preview-pbx"]');
+        const pbxLeads = tree.querySelector<HTMLElement>('[data-id="pbx-leads"]');
+        const anchor = tree.querySelector<HTMLElement>('[data-pbx-signups-anchor]');
+        const splitEl = anchor?.parentElement;
+        if (anchor && splitEl && previewPbx && pbxLeads) {
+          const splitRect = splitEl.getBoundingClientRect();
+          const previewRect = previewPbx.getBoundingClientRect();
+          const leadsRect = pbxLeads.getBoundingClientRect();
+          anchor.style.left = `${leadsRect.left - splitRect.left}px`;
+          anchor.style.top = `${previewRect.top - splitRect.top}px`;
+          anchor.style.width = `${leadsRect.width}px`;
+          // Force reflow so drawConnectors reads the updated position
+          anchor.getBoundingClientRect();
+        }
+        // 2) Now draw connectors with correct positions
+        drawConnectors(tree, svg);
+      } catch (e) {
+        console.error('[KpiTree] draw failed:', e);
+      }
+    };
+    // Initial draw + redraw on data changes (setTimeout ensures RAF isn't cancelled by re-render)
+    const t = setTimeout(draw, 50);
     window.addEventListener('resize', draw);
     const ro = new ResizeObserver(draw);
     ro.observe(tree);
 
     return () => {
-      cancelAnimationFrame(raf);
+      clearTimeout(t);
       window.removeEventListener('resize', draw);
       ro.disconnect();
     };
-  }, []);
+  }, [resolved.values]);
 
   const card = (id: string) => {
     const node = METRICS.find(m => m.id === id)!;
@@ -680,6 +718,7 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
           {card('sales')}
 
           <div className="kpi-conv-wrap">
+            <div className="kpi-aside-left">{card('cycle')}</div>
             {card('conversion')}
             <div className="kpi-aside-right">{card('onboarding')}</div>
           </div>
@@ -688,11 +727,16 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
         </div>
 
         {/* Split: Leads path (left) + Direct (center) + PQL path (right) */}
-        <div className="kpi-split">
+        <div className="kpi-split" style={{ position: 'relative' }}>
+          {/* Absolutely positioned — JS aligns it with preview-pbx row */}
+          <div data-pbx-signups-anchor style={{ position: 'absolute', top: 0, left: 0 }}>
+            {card('pbx-signups')}
+          </div>
+
           {/* Left: Leads */}
-          <div className="kpi-col" style={{ alignSelf: 'stretch' }}>
+          <div className="kpi-col">
             {card('leads')}
-            <div className="kpi-row" style={{ flex: 1, alignItems: 'flex-start' }}>
+            <div className="kpi-row">
               <div className="kpi-col" style={{ gap: 16 }}>
                 {card('contact-form')}
                 <div className="kpi-row">
@@ -700,10 +744,7 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
                   {card('cf-ai')}
                 </div>
               </div>
-              <div className="kpi-col" style={{ gap: 16, alignSelf: 'stretch' }}>
-                {card('pbx-leads')}
-                <div style={{ marginTop: 'auto' }}>{card('pbx-signups')}</div>
-              </div>
+              {card('pbx-leads')}
               {card('signup-leads')}
             </div>
           </div>
