@@ -23,7 +23,13 @@ fi
 # Rewrite all three forms (ssh://, scp-style, plain https) to token-embedded
 # https. The x-access-token:<pat> form is GitHub's documented basic-auth path
 # for PATs and Fine-Grained tokens.
+#
+# Netlify's own build image may already set url.*.insteadOf entries in the
+# global git config. A plain `git config --global` refuses to overwrite when
+# multiple values exist ("cannot overwrite multiple values with a single
+# value"). Wipe any pre-existing entries for our key first, then set ours.
 TARGET="https://x-access-token:${TOKEN}@github.com/"
+git config --global --unset-all "url.${TARGET}.insteadOf" 2>/dev/null || true
 git config --global "url.${TARGET}.insteadOf" "ssh://git@github.com/"
 git config --global --add "url.${TARGET}.insteadOf" "git@github.com:"
 git config --global --add "url.${TARGET}.insteadOf" "https://github.com/"
