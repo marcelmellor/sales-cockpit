@@ -193,12 +193,13 @@ function computeLiveValues(
   // Sales Cycle = Ø Tage von Erstellung bis Abschluss (Won + Lost)
   const closedWithDates = [...recentWon, ...recentLost].filter(d => d.createdate && d.closedate);
   if (closedWithDates.length > 0) {
+    const openCount = recentCreated.length - recentClosed;
     const avgDays = closedWithDates.reduce((sum, d) => {
       return sum + (new Date(d.closedate!).getTime() - new Date(d.createdate!).getTime()) / (24 * 60 * 60 * 1000);
     }, 0) / closedWithDates.length;
     const rounded = Math.round(avgDays);
     values.set('cycle', `${rounded} Tage`);
-    tooltips.set('cycle', `Ø ${rounded} Tage aus ${closedWithDates.length} abgeschlossenen Deals (${recentWon.length} Won + ${recentLost.length} Lost) in ${days} Tagen`);
+    tooltips.set('cycle', `Ø ${rounded} Tage aus ${closedWithDates.length} abgeschlossenen Deals (${recentWon.length} Won + ${recentLost.length} Lost) — ${openCount} weitere Deals noch offen`);
   }
 
   // ICP-Kunden / Woche (won deals with ICP tier)
