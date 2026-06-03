@@ -373,7 +373,7 @@ export function ProjectsView({ data, isLoading }: Props) {
                   className="text-sm font-medium text-gray-900 hover:text-gray-600 truncate"
                   title={project.dealName}
                 >
-                  {project.companyName}
+                  {project.companyName || project.dealName}
                 </Link>
                 <ChildTaskDots
                   open={project.childTasks.open}

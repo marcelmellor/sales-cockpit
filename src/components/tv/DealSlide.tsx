@@ -86,7 +86,7 @@ export function DealSlide({ deal, index, total }: DealSlideProps) {
         className="text-7xl md:text-8xl text-white text-center leading-tight mb-12 max-w-[90vw]"
         style={{ fontFamily: 'var(--font-headline)' }}
       >
-        {deal.companyName}
+        {deal.companyName || deal.dealName}
       </motion.h1>
 
       {/* Metric Cards */}

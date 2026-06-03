@@ -106,9 +106,9 @@ const COLUMNS: ColumnDef[] = [
     key: 'companyName',
     label: 'Firma',
     sortable: true,
-    getSortValue: (d) => d.companyName.toLowerCase(),
-    render: (d) => <span className="font-medium text-gray-900">{d.companyName}</span>,
-    getCsvValue: (d) => d.companyName,
+    getSortValue: (d) => (d.companyName || d.dealName).toLowerCase(),
+    render: (d) => <span className="font-medium text-gray-900">{d.companyName || d.dealName}</span>,
+    getCsvValue: (d) => d.companyName || d.dealName,
   },
   {
     key: 'dealStage',
@@ -438,7 +438,7 @@ export function SpreadsheetView({ deals }: SpreadsheetViewProps) {
       ? deals
       : deals.filter((d) => {
           const haystack = [
-            d.companyName,
+            d.companyName || d.dealName,
             d.dealStage,
             d.productManager,
             d.angeboteneProdukte,

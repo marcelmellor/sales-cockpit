@@ -368,7 +368,7 @@ async function buildPipelineOverview(
 
       return {
         id: deal.id,
-        companyName: sipgateAccountCompany || company?.name || deal.properties.dealname || 'Unknown',
+        companyName: sipgateAccountCompany || company?.name || '',
         dealName: deal.properties.dealname || '',
         revenue,
         revenueSource,

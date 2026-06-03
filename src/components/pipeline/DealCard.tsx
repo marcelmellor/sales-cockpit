@@ -164,7 +164,7 @@ export function DealCard({ deal, pipelineId, meetingsLoading, stageHistoryLoadin
         {/* Company Name */}
         <div className="flex-1 min-w-0 flex items-center gap-2">
           <h4 className="font-medium text-gray-900 truncate group-hover:text-blue-600 transition-colors">
-            {deal.companyName}
+            {deal.companyName || deal.dealName}
           </h4>
           {deal.amplitudeSource && (
             <span

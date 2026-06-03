@@ -519,7 +519,7 @@ export function DashboardView({
       for (const d of ds) {
         const key = dealSourceKey(d);
         const bucket = topSet.has(key) ? (prospectSourceLabelByKey.get(key) || key) : 'Andere';
-        groups.get(bucket)?.push(d.companyName);
+        groups.get(bucket)?.push(d.companyName || d.dealName);
       }
       const lines: string[] = [];
       let shown = 0;
@@ -578,7 +578,7 @@ export function DashboardView({
 
       if (dealsInRange.length === 0) return ['Keine neuen Won Deals'];
 
-      const visibleDeals = dealsInRange.slice(0, 6).map(d => d.companyName);
+      const visibleDeals = dealsInRange.slice(0, 6).map(d => d.companyName || d.dealName);
       if (dealsInRange.length > 6) {
         visibleDeals.push(`+${dealsInRange.length - 6} weitere`);
       }
@@ -1240,7 +1240,7 @@ function MetricCard({ label, value, unit, sub, subPositive, subNeutral, deals }:
                     rel="noopener noreferrer"
                     className="truncate text-amber-700 hover:text-amber-900 hover:underline"
                   >
-                    {d.companyName}
+                    {d.companyName || d.dealName}
                   </a>
                   <span className="text-gray-400 shrink-0">{formatEUR(d.revenue)}</span>
                 </div>
