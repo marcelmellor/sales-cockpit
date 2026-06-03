@@ -8,8 +8,10 @@ import type { PlaybookStats } from '@/lib/amplitude/playbook-stats';
 import {
   DATE_PRESETS,
   getDaysForPreset,
+  canShowComparison,
   type DatePresetKey,
 } from '@/lib/marketing/date-presets';
+import { dealTitleHasCountryFlag } from './filters/dealFilters';
 
 // ── Data types ───────────────────────────────────────────────────────────────
 
@@ -32,7 +34,66 @@ interface MetricNode {
   dashed?: boolean;
   /** Muted context node — grayed out, not part of the core tree */
   muted?: boolean;
+  /** Lower values are better (e.g. Sales Cycle, Onboarding-Zeit) */
+  lowerIsBetter?: boolean;
 }
+
+// ── Goal sets ───────────────────────────────────────────────────────────────
+// Each goal set maps metric IDs to their target strings. The active set
+// overrides the static `target` on MetricNode. User-editable target overrides
+// still layer on top.
+
+type GoalSetKey = 'q2-2026' | 'q3-2026';
+
+interface GoalSet {
+  key: GoalSetKey;
+  label: string;
+  targets: Record<string, string>;
+  coreMetrics: string[];
+}
+
+const GOAL_SETS: GoalSet[] = [
+  {
+    key: 'q2-2026',
+    label: 'Q2 2026',
+    coreMetrics: ['mrr', 'leads', 'cycle'],
+    targets: {
+      mrr: '4.000 €',
+      arpa: '500 €',
+      conversion: '20 %',
+      cycle: 'verringern',
+      onboarding: 'verringern',
+      pql: '0',
+      int: '4',
+      pb: '4',
+      aha: '6',
+      trials: '15',
+      signup: '6',
+      'preview-pbx': '5',
+      'preview-bestand': '5',
+    },
+  },
+  {
+    key: 'q3-2026',
+    label: 'Q3 2026',
+    coreMetrics: [],
+    targets: {
+      mrr: '20.000 €',
+      arpa: '1.000 €',
+      conversion: '25 %',
+      cycle: 'verringern',
+      onboarding: 'verringern',
+      'contact-form': '10',
+      int: '20',
+      pb: '20',
+      aha: '30',
+      trials: '80',
+      signup: '30',
+      'preview-pbx': '25',
+      'preview-bestand': '25',
+    },
+  },
+];
 
 // ── Static tree structure ────────────────────────────────────────────────────
 // `fallback` is only used when live data is unavailable (loading, missing
@@ -45,9 +106,9 @@ const METRICS: MetricNode[] = [
   { id: 'arpa', label: 'ARPA', fallback: '?', target: '1.000 €', parentIds: ['mrr'], dashed: true, dynamic: true },
   { id: 'icp', label: 'Neue ICP-Kunden / Woche', fallback: '?', target: '?', parentIds: ['mrr'], dynamic: true, tooltip: '> 2.500 € / Monat' },
   { id: 'sales', label: 'Sales / Woche', fallback: '?', target: '?', parentIds: ['icp'], team: 'sales', dynamic: true },
-  { id: 'conversion', label: 'Conversion', fallback: '?', target: '25 %', parentIds: ['sales'], team: 'sales', computed: true },
-  { id: 'cycle', label: 'Sales Cycle', fallback: '?', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, dynamic: true, tooltip: 'Ø Tage von Deal-Erstellung bis Abschluss (Won)' },
-  { id: 'onboarding', label: 'Onboarding-Zeit', fallback: '30h', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, tooltip: 'Solution Consulting' },
+  { id: 'conversion', label: 'Win Rate', fallback: '?', target: '25 %', parentIds: ['sales'], team: 'sales', computed: true },
+  { id: 'cycle', label: 'Sales Cycle', fallback: '?', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, dynamic: true, lowerIsBetter: true, tooltip: 'Ø Tage von Deal-Erstellung bis Abschluss (Won)' },
+  { id: 'onboarding', label: 'Onboarding-Zeit', fallback: '30h', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, lowerIsBetter: true, tooltip: 'Solution Consulting' },
   { id: 'deals', label: 'Deals / Woche', fallback: '?', target: '?', parentIds: ['conversion'], team: 'sales', dynamic: true },
   // Left column: Leads
   { id: 'leads', label: 'Leads / Woche', fallback: '?', target: '?', parentIds: ['deals'], computed: true },
@@ -74,6 +135,10 @@ interface KpiTreeViewProps {
   deals: DealOverviewItem[];
   marketingData: MarketingFunnelResponse | undefined;
   playbookStats: PlaybookStats | undefined;
+  /** Marketing data for 2× the current window (for comparison period subtraction) */
+  doubledMarketingData: MarketingFunnelResponse | undefined;
+  /** Playbook stats for 2× the current window (for comparison period subtraction) */
+  doubledPlaybookStats: PlaybookStats | undefined;
   /** Active date preset — drives the Marketing BQ query in page.tsx AND the
    *  deal rolling-window here. Both use the same range so numbers are
    *  comparable. */
@@ -149,25 +214,25 @@ function computeLiveValues(
   marketingData: MarketingFunnelResponse | undefined,
   playbookStats: PlaybookStats | undefined,
   days: number,
+  cutoffEnd: number = Date.now(),
 ): LiveData {
   const values = new Map<string, string>();
   const tooltips = new Map<string, string>();
   const weeks = Math.max(days / 7, 1);
-  const now = Date.now();
-  const cutoff = now - days * 24 * 60 * 60 * 1000;
+  const cutoff = cutoffEnd - days * 24 * 60 * 60 * 1000;
 
   // ── Deal-based metrics (rolling window, ICP only: MRR ≥ threshold) ───────
 
   const icpDeals = deals.filter(d => isIcpRevenue(d.revenue));
 
   const recentCreated = icpDeals.filter(
-    d => d.createdate && new Date(d.createdate).getTime() >= cutoff,
+    d => d.createdate && new Date(d.createdate).getTime() >= cutoff && new Date(d.createdate).getTime() < cutoffEnd,
   );
   const recentWon = icpDeals.filter(
-    d => isWonStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff,
+    d => isWonStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff && new Date(d.closedate).getTime() < cutoffEnd,
   );
   const recentLost = icpDeals.filter(
-    d => isLostStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff,
+    d => isLostStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff && new Date(d.closedate).getTime() < cutoffEnd,
   );
   const recentClosed = recentWon.length + recentLost.length;
 
@@ -247,7 +312,7 @@ function computeLiveValues(
     //   • cf-de / cf-ai — Contact Form by domain + ICP
 
     const leadJourneys = marketingData.journeys.filter(
-      j => j.kind === 'lead' && j.createdate && new Date(j.createdate).getTime() >= cutoff,
+      j => j.kind === 'lead' && j.createdate && new Date(j.createdate).getTime() >= cutoff && new Date(j.createdate).getTime() < cutoffEnd,
     );
     if (leadJourneys.length > 0) {
       let inProductIcpLeads = 0;
@@ -306,6 +371,10 @@ interface MetricCardProps {
   targets: Map<string, string>;
   /** Dynamic tooltips from computeLiveValues — override static node.tooltip */
   dynamicTooltips: Map<string, string>;
+  /** Values from the previous comparison period */
+  comparisonValues?: Map<string, string>;
+  /** Tooltips from the previous comparison period */
+  comparisonTooltips?: Map<string, string>;
   onEditValue: (id: string) => void;
   onEditTarget: (id: string) => void;
   /** Whether this node is collapsible (has toggleable children) */
@@ -313,44 +382,95 @@ interface MetricCardProps {
   /** Whether this node's children are currently collapsed */
   isCollapsed?: boolean;
   onToggleCollapse?: (id: string) => void;
+  isCore?: boolean;
 }
 
-function MetricCard({ node, values, targets, dynamicTooltips, onEditValue, onEditTarget, isCollapsible, isCollapsed, onToggleCollapse }: MetricCardProps) {
+function computeDeltaPill(
+  currentStr: string,
+  comparisonStr: string,
+  lowerIsBetter: boolean,
+): { label: string; className: string; tooltip: string } | null {
+  const cur = parseNum(currentStr);
+  const prev = parseNum(comparisonStr);
+  if (isNaN(cur) || isNaN(prev)) return null;
+  const diff = cur - prev;
+  if (Math.abs(diff) < 0.005) return null;
+  const isUp = diff > 0;
+  const isGood = lowerIsBetter ? !isUp : isUp;
+  const arrow = isUp ? '↑' : '↓';
+  const isPercent = currentStr.includes('%');
+  const unit = currentStr.includes('€') ? ' €' : '';
+  if (isPercent) {
+    return {
+      label: `vs ${comparisonStr}`,
+      className: `kpi-delta ${isGood ? 'kpi-delta-good' : 'kpi-delta-bad'}`,
+      tooltip: `Vorperiode: ${comparisonStr}`,
+    };
+  }
+  return {
+    label: `${arrow} ${fmtNum(Math.abs(diff))}${unit}`,
+    className: `kpi-delta ${isGood ? 'kpi-delta-good' : 'kpi-delta-bad'}`,
+    tooltip: `Vorperiode: ${comparisonStr}`,
+  };
+}
+
+function MetricCard({ node, values, targets, dynamicTooltips, comparisonValues, comparisonTooltips, onEditValue, onEditTarget, isCollapsible, isCollapsed, onToggleCollapse, isCore }: MetricCardProps) {
   const val = values.get(node.id) ?? node.fallback;
-  const target = targets.get(node.id) ?? node.target;
+  const target = targets.get(node.id) ?? '?';
   const canEditValue = !node.computed && !node.dynamic;
   const tooltip = dynamicTooltips.get(node.id) ?? node.tooltip;
+  const compTooltip = comparisonTooltips?.get(node.id);
   const [showTip, setShowTip] = useState(false);
+  const compVal = comparisonValues?.get(node.id);
+  const delta = compVal ? computeDeltaPill(val, compVal, !!node.lowerIsBetter) : null;
 
   return (
     <div
-      className={`kpi-metric${node.muted ? ' kpi-muted' : ''}${isCollapsible ? ' kpi-collapsible' : ''}`}
+      className={`kpi-metric${node.muted ? ' kpi-muted' : ''}${isCollapsible ? ' kpi-collapsible' : ''}${isCore ? ' kpi-core' : ''}`}
       data-id={node.id}
-      style={node.team && !node.muted ? { borderLeftColor: TEAM_COLORS[node.team], borderLeftWidth: 3 } : undefined}
     >
-      {tooltip && (
+      {(tooltip || compTooltip) && (
         <div
           className="kpi-info"
           onMouseEnter={() => setShowTip(true)}
           onMouseLeave={() => setShowTip(false)}
         >
           i
-          {showTip && <div className="kpi-tooltip">{tooltip}</div>}
+          {showTip && (
+            <div className="kpi-tooltip">
+              {tooltip}
+              {tooltip && compTooltip && <hr className="kpi-tooltip-sep" />}
+              {compTooltip && <span className="kpi-tooltip-comp">Vorperiode: {compTooltip}</span>}
+            </div>
+          )}
         </div>
       )}
       <div className="kpi-label">{node.label}</div>
-      <div
-        className={`kpi-val ${canEditValue ? 'kpi-editable' : ''}`}
-        onClick={canEditValue ? () => onEditValue(node.id) : undefined}
-      >
-        {val}
+      <div className={`kpi-val-row${delta ? ' has-delta' : ''}`}>
+        <div className="kpi-val-spacer" />
+        <div
+          className={`kpi-val ${canEditValue ? 'kpi-editable' : ''}`}
+          onClick={canEditValue ? () => onEditValue(node.id) : undefined}
+        >
+          {val}
+        </div>
+        <div className="kpi-delta-slot">
+          {delta && <span className={delta.className} title={delta.tooltip}>{delta.label}</span>}
+        </div>
       </div>
-      <div
-        className="kpi-target kpi-editable"
-        onClick={() => onEditTarget(node.id)}
-      >
-        Ziel: <span className="kpi-target-val">{target}</span>
-      </div>
+      {target && target !== '?' ? (
+        <div
+          className="kpi-target kpi-editable"
+          onClick={() => onEditTarget(node.id)}
+        >
+          Ziel: <span className="kpi-target-val">{target}</span>
+        </div>
+      ) : (
+        <div
+          className="kpi-target kpi-editable kpi-target-empty"
+          onClick={() => onEditTarget(node.id)}
+        />
+      )}
       {isCollapsible && (
         <button
           className="kpi-collapse-toggle"
@@ -508,13 +628,61 @@ function drawConnectors(treeEl: HTMLDivElement, svgEl: SVGSVGElement) {
 
 // ── Main component ──────────────────────────────────────────────────────────
 
-export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey, onDatePresetChange }: KpiTreeViewProps) {
+function subtractBqTotals(
+  doubled: MarketingFunnelResponse,
+  current: MarketingFunnelResponse,
+): MarketingFunnelResponse {
+  const bq = doubled.bqTotals;
+  const cur = current.bqTotals;
+  return {
+    ...doubled,
+    bqTotals: {
+      activationAgent: bq.activationAgent - cur.activationAgent,
+      activationOther: bq.activationOther - cur.activationOther,
+      activationTotal: bq.activationTotal - cur.activationTotal,
+      previewTrialTotal: bq.previewTrialTotal - cur.previewTrialTotal,
+      previewTrialAgent: bq.previewTrialAgent - cur.previewTrialAgent,
+      previewTrialOther: bq.previewTrialOther - cur.previewTrialOther,
+      previewTrialBestandskunde: bq.previewTrialBestandskunde - cur.previewTrialBestandskunde,
+    },
+  };
+}
+
+function subtractPlaybookStats(
+  doubled: PlaybookStats,
+  current: PlaybookStats,
+): PlaybookStats {
+  return {
+    accountsWith3PlusPlaybooks: doubled.accountsWith3PlusPlaybooks - current.accountsWith3PlusPlaybooks,
+    previewAccountsTotal: doubled.previewAccountsTotal - current.previewAccountsTotal,
+  };
+}
+
+export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarketingData, doubledPlaybookStats, datePresetKey, onDatePresetChange }: KpiTreeViewProps) {
   const treeRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
+  // "Nur DE" filter — mirrors Dashboard badge, persisted in localStorage.
+  const KPI_TREE_DE_ONLY_KEY = 'kpi-tree:de-only';
+  const [deOnly, setDeOnly] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const stored = localStorage.getItem(KPI_TREE_DE_ONLY_KEY);
+    return stored == null ? true : stored === '1';
+  });
+  const filteredDeals = useMemo(
+    () => deOnly ? deals.filter(d => !dealTitleHasCountryFlag(d.dealName)) : deals,
+    [deals, deOnly],
+  );
+
+  // Goal set selection — targets come from the active set.
+  const [goalSetKey, setGoalSetKey] = useState<GoalSetKey>('q2-2026');
+  const activeGoalSet = useMemo(() => GOAL_SETS.find(g => g.key === goalSetKey)!, [goalSetKey]);
+
   // User-editable overrides for manual nodes and all targets.
+  // Target overrides are per-goal-set so switching sets resets manual edits.
   const [valueOverrides, setValueOverrides] = useState<Map<string, string>>(new Map());
-  const [targetOverrides, setTargetOverrides] = useState<Map<string, string>>(new Map());
+  const [targetOverridesBySet, setTargetOverridesBySet] = useState<Map<GoalSetKey, Map<string, string>>>(new Map());
+  const targetOverrides = useMemo(() => targetOverridesBySet.get(goalSetKey) ?? new Map<string, string>(), [targetOverridesBySet, goalSetKey]);
 
   // Collapsible sections — keyed by parent node ID whose children are hidden.
   const DEFAULT_COLLAPSED = useMemo(() => new Set(['contact-form', 'trials']), []);
@@ -529,10 +697,25 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
   }, []);
 
   // Live values from props (deal stats + marketing BQ totals + journey classification).
+  const days = getDaysForPreset(datePresetKey);
   const liveData = useMemo(
-    () => computeLiveValues(deals, marketingData, playbookStats, getDaysForPreset(datePresetKey)),
-    [deals, marketingData, playbookStats, datePresetKey],
+    () => computeLiveValues(filteredDeals, marketingData, playbookStats, days),
+    [filteredDeals, marketingData, playbookStats, days],
   );
+
+  const showComparison = canShowComparison(datePresetKey);
+  const comparisonData = useMemo(() => {
+    if (!showComparison) return null;
+    const now = Date.now();
+    const prevEnd = now - days * 24 * 60 * 60 * 1000;
+    const compMkt = (doubledMarketingData && marketingData)
+      ? subtractBqTotals(doubledMarketingData, marketingData)
+      : undefined;
+    const compPb = (doubledPlaybookStats && playbookStats)
+      ? subtractPlaybookStats(doubledPlaybookStats, playbookStats)
+      : undefined;
+    return computeLiveValues(filteredDeals, compMkt, compPb, days, prevEnd);
+  }, [showComparison, days, filteredDeals, marketingData, doubledMarketingData, playbookStats, doubledPlaybookStats]);
 
   // Merge: live values < user overrides (for manual nodes) < computed formulas.
   // Targets: static defaults < derived formulas < user overrides.
@@ -545,7 +728,9 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
       // Only apply overrides to non-dynamic, non-computed nodes
       if (node && !node.dynamic && !node.computed) vals.set(id, txt);
     }
-    const tgts = new Map(targetOverrides);
+    const tgts = new Map<string, string>();
+    for (const [id, val] of Object.entries(activeGoalSet.targets)) tgts.set(id, val);
+    for (const [id, val] of targetOverrides) tgts.set(id, val);
 
     // Helper: read a resolved value as number
     const v = (id: string): number => {
@@ -589,18 +774,21 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
     const icpTarget = (!isNaN(mrrTarget) && !isNaN(arpaTarget) && arpaTarget > 0) ? mrrTarget / arpaTarget : NaN;
     if (!isNaN(icpTarget) && !tgts.has('icp')) tgts.set('icp', fmtTarget(icpTarget) + '*');
 
-    // 30% Product-Led (PQL) / 70% Sales-Led
+    // PQL / Sales split — if PQL target is set explicitly, Sales = ICP − PQL
     const PLG_RATIO = 0.3;
-    const pqlTarget = !isNaN(icpTarget) ? icpTarget * PLG_RATIO : NaN;
-    if (!isNaN(pqlTarget) && !tgts.has('pql')) tgts.set('pql', fmtTarget(pqlTarget) + '*');
-
-    const salesTarget = !isNaN(icpTarget) ? icpTarget * (1 - PLG_RATIO) : NaN;
+    const explicitPqlTarget = t('pql');
+    if (isNaN(explicitPqlTarget) && !isNaN(icpTarget) && !tgts.has('pql')) {
+      tgts.set('pql', fmtTarget(icpTarget * PLG_RATIO) + '*');
+    }
+    const pqlTargetNum = t('pql');
+    const salesTarget = !isNaN(icpTarget) ? icpTarget - (isNaN(pqlTargetNum) ? 0 : pqlTargetNum) : NaN;
     if (!isNaN(salesTarget) && !tgts.has('sales')) tgts.set('sales', fmtTarget(salesTarget) + '*');
 
     const convTarget = t('conversion');
     const convRate = !isNaN(convTarget) ? convTarget / 100 : conv;
-    if (!isNaN(salesTarget) && !isNaN(convRate) && convRate > 0 && !tgts.has('deals')) {
-      tgts.set('deals', fmtTarget(salesTarget / convRate) + '*');
+    const roundedSalesTarget = t('sales');
+    if (!isNaN(roundedSalesTarget) && !isNaN(convRate) && convRate > 0 && !tgts.has('deals')) {
+      tgts.set('deals', fmtTarget(roundedSalesTarget / convRate) + '*');
     }
 
     const dealsTarget = t('deals');
@@ -608,8 +796,32 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
       tgts.set('leads', fmtTarget(dealsTarget * (leadsSum / dealsVal)) + '*');
     }
 
-    return { values: vals, targets: tgts, tooltips: tips };
-  }, [liveData, valueOverrides, targetOverrides]);
+    // Compute comparison resolved values (same derived formulas, no overrides/targets)
+    let compVals: Map<string, string> | undefined;
+    if (comparisonData) {
+      const cv = new Map(comparisonData.values);
+      const cvNum = (id: string): number => {
+        const txt = cv.get(id) ?? METRICS.find(m => m.id === id)?.fallback ?? '?';
+        return parseNum(txt);
+      };
+      const cvCfDe = cvNum('cf-de');
+      const cvCfAi = cvNum('cf-ai');
+      const cvCfSum = [cvCfDe, cvCfAi].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
+      if (cvCfSum > 0) cv.set('contact-form', fmtNum(cvCfSum));
+      const cvAgentLeads = cvNum('signup-leads');
+      const cvPbxLeads = cvNum('pbx-leads');
+      const cvLeadsSum = [cvCfSum, cvAgentLeads, cvPbxLeads].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
+      if (cvLeadsSum > 0) cv.set('leads', fmtNum(cvLeadsSum));
+      const cvArpa = cvNum('arpa');
+      const cvSales = cvNum('sales');
+      const cvPql = cvNum('pql');
+      const cvIcpSum = [cvSales, cvPql].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
+      cv.set('mrr', !isNaN(cvArpa) && cvIcpSum > 0 ? fmtEur(cvIcpSum * cvArpa) : '?');
+      compVals = cv;
+    }
+
+    return { values: vals, targets: tgts, tooltips: tips, comparisonValues: compVals, comparisonTooltips: comparisonData?.tooltips };
+  }, [liveData, valueOverrides, targetOverrides, activeGoalSet, comparisonData]);
 
   const handleEditValue = useCallback((id: string) => {
     const node = METRICS.find(m => m.id === id);
@@ -631,13 +843,15 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
     const cur = resolved.targets.get(id) ?? node.target;
     const v = prompt(`Ziel für "${node.label}"`, cur === '?' ? '' : cur);
     if (v !== null) {
-      setTargetOverrides(prev => {
+      setTargetOverridesBySet(prev => {
         const next = new Map(prev);
-        next.set(id, v || '?');
+        const setOverrides = new Map(next.get(goalSetKey) ?? new Map());
+        setOverrides.set(id, v || '?');
+        next.set(goalSetKey, setOverrides);
         return next;
       });
     }
-  }, [resolved.targets]);
+  }, [resolved.targets, goalSetKey]);
 
   // Draw connectors on mount + resize
   useEffect(() => {
@@ -690,11 +904,14 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
         values={resolved.values}
         targets={resolved.targets}
         dynamicTooltips={resolved.tooltips}
+        comparisonValues={resolved.comparisonValues}
+        comparisonTooltips={resolved.comparisonTooltips}
         onEditValue={handleEditValue}
         onEditTarget={handleEditTarget}
         isCollapsible={collapsible}
         isCollapsed={collapsible ? collapsed.has(id) : undefined}
         onToggleCollapse={collapsible ? toggleCollapse : undefined}
+        isCore={activeGoalSet.coreMetrics.includes(id)}
       />
     );
   };
@@ -703,14 +920,32 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
     <div className="kpi-tree-view">
       <style>{TREE_STYLES}</style>
 
-      {/* Legend */}
+      {/* Controls bar */}
       <div className="kpi-legend">
-        {(Object.entries(TEAM_LABELS) as [Team, string][]).map(([team, label]) => (
-          <div key={team} className="kpi-legend-item">
-            <div className="kpi-legend-dot" style={{ background: TEAM_COLORS[team] }} />
-            {label}
-          </div>
-        ))}
+        <div className="kpi-legend-item">
+          <span style={{ color: '#9ca3af', marginRight: 4 }}>Ziele</span>
+          {GOAL_SETS.map(g => (
+            <button
+              key={g.key}
+              onClick={() => setGoalSetKey(g.key)}
+              className={`kpi-preset-btn ${g.key === goalSetKey ? 'kpi-preset-active' : ''}`}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+        <div className="kpi-legend-item">
+          <button
+            onClick={() => {
+              const next = !deOnly;
+              setDeOnly(next);
+              localStorage.setItem(KPI_TREE_DE_ONLY_KEY, next ? '1' : '0');
+            }}
+            className={`kpi-preset-btn ${deOnly ? 'kpi-preset-active' : ''}`}
+          >
+            Nur DE
+          </button>
+        </div>
         <div className="kpi-legend-item" style={{ marginLeft: 'auto' }}>
           <span style={{ color: '#9ca3af', marginRight: 4 }}>Zeitraum</span>
           {DATE_PRESETS.map(p => (
@@ -794,6 +1029,7 @@ export function KpiTreeView({ deals, marketingData, playbookStats, datePresetKey
           </div>
         </div>
       </div>
+
     </div>
   );
 }
@@ -813,6 +1049,12 @@ const TREE_STYLES = `
   display: flex;
   gap: 24px;
   margin-bottom: 16px;
+}
+.kpi-team-legend {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  margin-top: 24px;
 }
 .kpi-legend-item {
   display: flex;
@@ -903,6 +1145,15 @@ const TREE_STYLES = `
 .kpi-metric:hover {
   box-shadow: 0 2px 12px rgba(0,0,0,0.06);
 }
+.kpi-core {
+  border-width: 2px;
+  border-color: #111827;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.kpi-core .kpi-target-val {
+  font-weight: 700;
+  color: #111827;
+}
 .kpi-muted {
   opacity: 0.45;
   border-style: dashed;
@@ -919,6 +1170,27 @@ const TREE_STYLES = `
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.kpi-val-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+}
+.kpi-val-row.has-delta {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  justify-items: center;
+}
+.kpi-val-spacer {
+  display: none;
+}
+.has-delta .kpi-val-spacer {
+  display: block;
+}
+.kpi-delta-slot {
+  justify-self: start;
+  align-self: center;
+  padding-left: 6px;
 }
 .kpi-val {
   font-size: 24px;
@@ -942,6 +1214,23 @@ const TREE_STYLES = `
 .kpi-target-val {
   color: var(--kpi-text-2);
   font-weight: 400;
+}
+.kpi-delta {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+  line-height: 1.3;
+  cursor: default;
+}
+.kpi-delta-good {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+}
+.kpi-delta-bad {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.08);
 }
 
 /* Info icon */
@@ -978,6 +1267,14 @@ const TREE_STYLES = `
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   pointer-events: none;
   z-index: 10;
+}
+.kpi-tooltip-sep {
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.2);
+  margin: 3px 0;
+}
+.kpi-tooltip-comp {
+  color: rgba(255,255,255,0.7);
 }
 
 /* Collapse toggle */

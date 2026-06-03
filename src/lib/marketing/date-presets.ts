@@ -34,3 +34,10 @@ export function getDaysForPreset(key: DatePresetKey): number {
   const diffMs = Date.now() - HARD_FLOOR_DATE_MS;
   return Math.max(1, Math.ceil(diffMs / (24 * 60 * 60 * 1000)));
 }
+
+export function canShowComparison(key: DatePresetKey): boolean {
+  if (key === 'all') return false;
+  const days = getDaysForPreset(key);
+  const comparisonStartMs = Date.now() - days * 2 * 24 * 60 * 60 * 1000;
+  return comparisonStartMs >= HARD_FLOOR_DATE_MS;
+}

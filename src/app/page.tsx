@@ -58,6 +58,7 @@ import { KpiTreeView } from '@/components/pipeline/KpiTreeView';
 import {
   type DatePresetKey as MarketingDatePresetKey,
   getDaysForPreset as getMarketingDaysForPreset,
+  canShowComparison,
 } from '@/lib/marketing/date-presets';
 import { getCachedData, setCachedData, clearPipelineCache } from '@/lib/pipeline-cache';
 
@@ -374,6 +375,37 @@ function PipelineOverviewContent() {
       return json.data as PlaybookStats;
     },
     enabled: isAuthenticated && effectiveViewMode === 'kpi-tree',
+    staleTime: 30 * 60 * 1000,
+  });
+
+  // Comparison period: fetch 2× the current window so the KPI tree can
+  // subtract current from doubled to get the previous period's values.
+  const showKpiComparison = canShowComparison(marketingDatePresetKey);
+  const comparisonDays = marketingDays * 2;
+
+  const { data: doubledMarketingData } = useQuery({
+    queryKey: ['marketing-funnel', selectedProdukt, comparisonDays],
+    queryFn: async () => {
+      const response = await fetch(
+        `/api/marketing/funnel?produkt=${selectedProdukt}&days=${comparisonDays}`,
+      );
+      if (!response.ok) throw new Error('Failed to fetch comparison marketing');
+      const data = await response.json();
+      return data.data as MarketingFunnelResponse;
+    },
+    enabled: isAuthenticated && selectedProdukt === 'frontdesk' && effectiveViewMode === 'kpi-tree' && showKpiComparison,
+    staleTime: 30 * 60 * 1000,
+  });
+
+  const { data: doubledPlaybookStats } = useQuery({
+    queryKey: ['playbook-stats', comparisonDays],
+    queryFn: async () => {
+      const response = await fetch(`/api/amplitude/playbook-stats?days=${comparisonDays}`);
+      if (!response.ok) throw new Error('Failed to fetch comparison playbook stats');
+      const json = await response.json();
+      return json.data as PlaybookStats;
+    },
+    enabled: isAuthenticated && effectiveViewMode === 'kpi-tree' && showKpiComparison,
     staleTime: 30 * 60 * 1000,
   });
 
@@ -1199,6 +1231,8 @@ function PipelineOverviewContent() {
                 deals={dealsWithMeetings}
                 marketingData={marketingData}
                 playbookStats={playbookStats}
+                doubledMarketingData={doubledMarketingData}
+                doubledPlaybookStats={doubledPlaybookStats}
                 datePresetKey={marketingDatePresetKey}
                 onDatePresetChange={setMarketingDatePresetKey}
               />
