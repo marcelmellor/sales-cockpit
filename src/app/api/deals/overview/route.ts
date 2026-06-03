@@ -288,14 +288,24 @@ async function buildPipelineOverview(
       // `mastersipid` gilt als verknüpfter sipgate-Account. Dessen `company`-Feld
       // hat Vorrang vor der assoziierten Company — sipgate-Accounts sind in der
       // Praxis näher an der tatsächlich kaufenden Firma als die HubSpot-Company.
-      const sipgateAccountCompany = (() => {
+      // Zweiter Fallback: `company`-Feld eines beliebigen verknüpften Kontakts
+      // (ohne mastersipid-Anforderung), damit Deals ohne assoziierte Company
+      // trotzdem einen Firmennamen bekommen statt auf den Dealnamen zu fallen.
+      const { sipgateAccountCompany, contactCompanyFallback } = (() => {
+        let sipgate = '';
+        let anyContact = '';
         for (const contactAssoc of deal.associations?.contacts?.results ?? []) {
           const contact = contactsMap.get(contactAssoc.id);
-          if (contact?.mastersipid && contact.company) {
-            return contact.company;
+          if (!contact?.company) continue;
+          if (contact.mastersipid && !sipgate) {
+            sipgate = contact.company;
           }
+          if (!anyContact) {
+            anyContact = contact.company;
+          }
+          if (sipgate) break; // sipgate hat Vorrang, sobald gefunden aufhören
         }
-        return '';
+        return { sipgateAccountCompany: sipgate, contactCompanyFallback: anyContact };
       })();
 
       // Prefer qualified minutes, fall back to old field
@@ -368,7 +378,7 @@ async function buildPipelineOverview(
 
       return {
         id: deal.id,
-        companyName: sipgateAccountCompany || company?.name || '',
+        companyName: sipgateAccountCompany || company?.name || contactCompanyFallback || '',
         dealName: deal.properties.dealname || '',
         revenue,
         revenueSource,

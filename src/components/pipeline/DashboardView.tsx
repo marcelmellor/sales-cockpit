@@ -519,7 +519,7 @@ export function DashboardView({
       for (const d of ds) {
         const key = dealSourceKey(d);
         const bucket = topSet.has(key) ? (prospectSourceLabelByKey.get(key) || key) : 'Andere';
-        groups.get(bucket)?.push(d.companyName || d.dealName);
+        groups.get(bucket)?.push(d.companyName || 'Unbekannt');
       }
       const lines: string[] = [];
       let shown = 0;
@@ -578,7 +578,7 @@ export function DashboardView({
 
       if (dealsInRange.length === 0) return ['Keine neuen Won Deals'];
 
-      const visibleDeals = dealsInRange.slice(0, 6).map(d => d.companyName || d.dealName);
+      const visibleDeals = dealsInRange.slice(0, 6).map(d => d.companyName || 'Unbekannt');
       if (dealsInRange.length > 6) {
         visibleDeals.push(`+${dealsInRange.length - 6} weitere`);
       }
