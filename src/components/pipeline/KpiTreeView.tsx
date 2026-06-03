@@ -43,6 +43,8 @@ interface MetricNode {
    *  - 'vs'    — previous period's value (vs 33 %, vs 1,9)
    *  Default: 'delta' */
   deltaFormat?: 'delta' | 'vs';
+  /** Suppress the comparison delta pill entirely */
+  hideComparison?: boolean;
 }
 
 // ── Goal sets ───────────────────────────────────────────────────────────────
@@ -123,10 +125,12 @@ const METRICS: MetricNode[] = [
   { id: 'deals', label: 'Deals / Woche', fallback: '?', target: '?', parentIds: ['conversion'], team: 'sales', dynamic: true, deltaFormat: 'delta' },
   // Left column: Leads
   { id: 'leads', label: 'Leads / Woche', fallback: '?', target: '?', parentIds: ['deals'], dynamic: true, deltaFormat: 'delta', tooltip: 'HubSpot-Leads mit ≥ 2.000 Min/Monat' },
-  { id: 'contact-form', label: 'Contact Form (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, deltaFormat: 'delta', tooltip: 'ICP-Leads via Contact Form' },
+  { id: 'contact-form', label: 'Contact Form (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, deltaFormat: 'delta', tooltip: 'ICP-Leads via Contact Form (sipgate.de + sipgate.ai)' },
+  { id: 'cf-de', label: 'sipgate.de', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true, deltaFormat: 'vs' },
+  { id: 'cf-ai', label: 'sipgate.ai', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true, deltaFormat: 'vs' },
   { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.000 Min/Monat' },
   { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.000 Min/Monat' },
-  { id: 'sonstige-leads', label: 'Sonstige / Woche', fallback: '?', target: '?', parentIds: ['leads'], dynamic: true, deltaFormat: 'vs', tooltip: 'Leads ≥ 2.000 Min ohne BQ-Journey-Zuordnung' },
+  { id: 'sonstige-leads', label: 'Sonstige / Woche', fallback: '?', target: '?', parentIds: ['leads'], dynamic: true, hideComparison: true, tooltip: 'Leads ≥ 2.000 Min ohne BQ-Journey-Zuordnung' },
   { id: 'pbx-signups', label: 'PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['pbx-leads'], dynamic: true, dashed: true, muted: true, deltaFormat: 'vs', tooltip: 'Alle PBX-Signups (Grundgesamtheit für Onboarding-Quali)' },
   // Right column: PQL path
   { id: 'pql', label: 'Product-Qualified Leads (ICP) / Woche', fallback: '[TODO]', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', deltaFormat: 'vs', tooltip: 'Nach ICP-Filter: ≥ 2.500 Min/Monat' },
@@ -333,13 +337,27 @@ function computeLiveValues(
 
     if (recentLeads.length > 0) {
       const counts = { 'contact-form': 0, 'pbx-onboarding': 0, 'in-product': 0, 'sonstige': 0 };
+      let cfDe = 0;
+      let cfAi = 0;
 
       for (const l of recentLeads) {
-        counts[classifyLead(l, journeyByLeadId)]++;
+        const bucket = classifyLead(l, journeyByLeadId);
+        counts[bucket]++;
+        if (bucket === 'contact-form') {
+          const j = journeyByLeadId.get(l.id);
+          const cfTp = j?.touchpoints.find(t => t.anchor === 'lead_form_submitted');
+          const domain = cfTp?.pageDomain?.replace(/^www\./, '') ?? '';
+          if (domain.endsWith('sipgate.ai')) cfAi++;
+          else cfDe++;
+        }
       }
 
       values.set('contact-form', fmtNum(counts['contact-form'] / weeks));
       tooltips.set('contact-form', `${counts['contact-form']} Contact-Form-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('cf-de', fmtNum(cfDe / weeks));
+      tooltips.set('cf-de', `${cfDe} Contact-Form-Leads sipgate.de in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('cf-ai', fmtNum(cfAi / weeks));
+      tooltips.set('cf-ai', `${cfAi} Contact-Form-Leads sipgate.ai in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
       values.set('pbx-leads', fmtNum(counts['pbx-onboarding'] / weeks));
       tooltips.set('pbx-leads', `${counts['pbx-onboarding']} Onboarding-Quali-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
       values.set('signup-leads', fmtNum(counts['in-product'] / weeks));
@@ -422,7 +440,7 @@ function MetricCard({ node, values, targets, dynamicTooltips, comparisonValues, 
   const compTooltip = comparisonTooltips?.get(node.id);
   const [showTip, setShowTip] = useState(false);
   const compVal = comparisonValues?.get(node.id);
-  const delta = compVal ? computeDeltaPill(val, compVal, node) : null;
+  const delta = compVal && !node.hideComparison ? computeDeltaPill(val, compVal, node) : null;
   const muted = isMuted || node.muted;
 
   return (
@@ -686,7 +704,7 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
   const targetOverrides = useMemo(() => targetOverridesBySet.get(goalSetKey) ?? new Map<string, string>(), [targetOverridesBySet, goalSetKey]);
 
   // Collapsible sections — keyed by parent node ID whose children are hidden.
-  const DEFAULT_COLLAPSED = useMemo(() => new Set(['trials']), []);
+  const DEFAULT_COLLAPSED = useMemo(() => new Set(['contact-form', 'trials']), []);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(DEFAULT_COLLAPSED));
   const toggleCollapse = useCallback((id: string) => {
     setCollapsed(prev => {
@@ -994,7 +1012,15 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
           <div className="kpi-col">
             {card('leads')}
             <div className="kpi-row">
-              {card('contact-form')}
+              <div className="kpi-col" style={{ gap: 16 }}>
+                {card('contact-form', true)}
+                {!collapsed.has('contact-form') && (
+                  <div className="kpi-row">
+                    {card('cf-de')}
+                    {card('cf-ai')}
+                  </div>
+                )}
+              </div>
               {card('pbx-leads')}
               {card('signup-leads')}
               {card('sonstige-leads')}
