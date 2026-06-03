@@ -4,7 +4,15 @@ import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { Eye } from 'lucide-react';
 import { useDevStore } from '@/stores/dev-store';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
-import { MRR_BUCKET_THRESHOLD } from '@/lib/marketing/funnel-types';
+import { MRR_BUCKET_THRESHOLD, type MarketingFunnelJourney } from '@/lib/marketing/funnel-types';
+import {
+  classifyLead,
+  leadMinutes,
+  LEAD_SOURCE_LABELS,
+  LEAD_SOURCE_COLORS as LEADQUELLE_COLORS,
+  LEAD_SOURCE_ORDER,
+  type LeadSourceBucket,
+} from '@/lib/leads/classify';
 import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history/route';
 import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
@@ -86,6 +94,7 @@ interface DashboardViewProps {
   // vorliegt, gewinnt er gegen das Lead-Source-Feld. Bei Nicht-AI-Agents-
   // Produkten leer.
   dealFirstTouchpointLabel?: Map<string, string>;
+  leadJourneyMap?: Map<string, MarketingFunnelJourney>;
 }
 
 // System-Badge-IDs — fest codiert, damit localStorage-Einträge stabil bleiben.
@@ -142,7 +151,7 @@ function isWonStage(label: string): boolean {
 const LEAD_SOURCE_COLORS = ['#2F0D5B', '#E8AC68', '#2E9E8E', '#C44569', '#B8BCC2'];
 
 export function DashboardView({
-  stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId, produkt = null, leads = [], dealFirstTouchpointLabel,
+  stages, deals, isClosedStage, stageHistory, stageHistoryLoading = false, pipelineId, produkt = null, leads = [], dealFirstTouchpointLabel, leadJourneyMap,
 }: DashboardViewProps) {
   // ── Filter state ──
   const [filter, setFilter] = useState<FilterState<DealFieldType>>(() => getDefaultFilterState<DealFieldType>());
@@ -259,7 +268,7 @@ export function DashboardView({
   }, [produkt]);
   // Gruppierung für das "Leads / Woche"-Chart: entweder nach Minuten-Bucket
   // (Default — zeigt Qualifizierungs-Stärke) oder nach Source (zeigt Kanal-Mix).
-  const [leadsChartGrouping, setLeadsChartGrouping] = useState<'minutes' | 'source'>('minutes');
+  const [leadsChartGrouping, setLeadsChartGrouping] = useState<'minutes' | 'source' | 'leadquelle'>('minutes');
 
   const hasStageReached = hasStageReachedInDealTree(filter.children);
 
@@ -933,6 +942,33 @@ export function DashboardView({
     [leadsPerWeekBySource],
   );
 
+  // Leadquelle-Gruppierung (Amplitude → HubSpot fallback, shared with KPI tree)
+  const emptyJourneyMap = useMemo(() => new Map<string, MarketingFunnelJourney>(), []);
+  const effectiveJourneyMap = leadJourneyMap ?? emptyJourneyMap;
+  const leadsPerWeekByLeadquelle = useMemo(() => {
+    const perWeek: Record<LeadSourceBucket, number[]> = {
+      'contact-form': [], 'pbx-onboarding': [], 'in-product': [], 'sonstige': [],
+    };
+    for (const k of LEAD_SOURCE_ORDER) perWeek[k] = new Array(leadsPerWeekData.length).fill(0);
+    leadsPerWeekData.forEach((d, wi) => {
+      for (const l of d.leads) {
+        const bucket = classifyLead(l, effectiveJourneyMap);
+        perWeek[bucket][wi]++;
+      }
+    });
+    return perWeek;
+  }, [leadsPerWeekData, effectiveJourneyMap]);
+
+  const leadsPerWeekLeadquelleStacks = useMemo(
+    () => LEAD_SOURCE_ORDER.map(k => ({
+      key: k,
+      label: LEAD_SOURCE_LABELS[k],
+      color: LEADQUELLE_COLORS[k],
+      values: leadsPerWeekByLeadquelle[k],
+    })),
+    [leadsPerWeekByLeadquelle],
+  );
+
   const leadsPerWeekTooltip = useMemo(
     () => leadsPerWeekData.map(d => `${d.count} Lead${d.count === 1 ? '' : 's'}`),
     [leadsPerWeekData],
@@ -948,15 +984,23 @@ export function DashboardView({
   }), [leadsPerWeekData]);
   const leadsPerWeekTooltipLinesSource = useMemo(() => leadsPerWeekData.map((d, wi) => {
     if (d.count === 0) return ['Keine neuen Leads'];
-    // Top-Source-Reihenfolge beibehalten, nur nicht-leere Einträge zeigen
     return leadsPerWeekSourceStacks
       .map(s => ({ key: s.key, n: s.values[wi] }))
       .filter(x => x.n > 0)
       .map(x => `${x.key}: ${x.n}`);
   }), [leadsPerWeekData, leadsPerWeekSourceStacks]);
+  const leadsPerWeekTooltipLinesLeadquelle = useMemo(() => leadsPerWeekData.map((_, wi) => {
+    return leadsPerWeekLeadquelleStacks
+      .map(s => ({ label: s.label, n: s.values[wi] }))
+      .filter(x => x.n > 0)
+      .reverse()
+      .map(x => `${x.label}: ${x.n}`);
+  }), [leadsPerWeekData, leadsPerWeekLeadquelleStacks]);
   const leadsPerWeekTooltipLines = leadsChartGrouping === 'source'
     ? leadsPerWeekTooltipLinesSource
-    : leadsPerWeekTooltipLinesMinutes;
+    : leadsChartGrouping === 'leadquelle'
+      ? leadsPerWeekTooltipLinesLeadquelle
+      : leadsPerWeekTooltipLinesMinutes;
   const leadsPerWeekAvg = useMemo(() => {
     if (leadsPerWeekTrend.length === 0) return 0;
     return Math.round(leadsPerWeekTrend.reduce((sum, v) => sum + v, 0) / leadsPerWeekTrend.length);
@@ -1067,12 +1111,13 @@ export function DashboardView({
             headerExtra={
               <select
                 value={leadsChartGrouping}
-                onChange={e => setLeadsChartGrouping(e.target.value as 'minutes' | 'source')}
+                onChange={e => setLeadsChartGrouping(e.target.value as 'minutes' | 'source' | 'leadquelle')}
                 className="text-[11px] border border-[#e8e8e8] rounded px-2 py-0.5 bg-white text-[#2F0D5B] focus:outline-none focus:ring-1 focus:ring-[#2F0D5B]"
                 title="Gruppierung"
               >
                 <option value="minutes">nach Minuten</option>
-                <option value="source">nach Source</option>
+                <option value="leadquelle">nach Leadquelle</option>
+                <option value="source">nach HS-Source</option>
               </select>
             }
           >
@@ -1088,12 +1133,14 @@ export function DashboardView({
               bars
               stacks={leadsChartGrouping === 'source'
                 ? leadsPerWeekSourceStacks.map(s => ({ values: s.values, color: s.color }))
-                : [
-                    { values: leadsPerWeekUnknown, color: '#B8BCC2' },
-                    { values: leadsPerWeekSmall, color: '#2E9E8E' },
-                    { values: leadsPerWeekMid, color: '#E8AC68' },
-                    { values: leadsPerWeekLarge, color: '#2F0D5B' },
-                  ]
+                : leadsChartGrouping === 'leadquelle'
+                  ? leadsPerWeekLeadquelleStacks.map(s => ({ values: s.values, color: s.color }))
+                  : [
+                      { values: leadsPerWeekUnknown, color: '#B8BCC2' },
+                      { values: leadsPerWeekSmall, color: '#2E9E8E' },
+                      { values: leadsPerWeekMid, color: '#E8AC68' },
+                      { values: leadsPerWeekLarge, color: '#2F0D5B' },
+                    ]
               }
             />
             <WeekLabels weeks={leadsWeeks} />
@@ -1103,6 +1150,15 @@ export function DashboardView({
                   <span key={s.key} className="flex items-center gap-1" title={s.key}>
                     <span className="inline-block w-2 h-2 rounded-sm" style={{ background: s.color }} />
                     <span className="max-w-[140px] truncate text-gray-500">{s.key}</span>
+                  </span>
+                ))}
+              </div>
+            ) : leadsChartGrouping === 'leadquelle' ? (
+              <div className="flex items-center gap-3 mt-2 text-[10px] flex-wrap">
+                {[...leadsPerWeekLeadquelleStacks].reverse().map(s => (
+                  <span key={s.key} className="flex items-center gap-1">
+                    <span className="inline-block w-2 h-2 rounded-sm" style={{ background: s.color }} />
+                    <span className="text-gray-500">{s.label}</span>
                   </span>
                 ))}
               </div>

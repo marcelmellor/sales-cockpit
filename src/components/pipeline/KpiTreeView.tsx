@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isWonStageLabel, isLostStageLabel } from '@/lib/hubspot/mrr';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
+import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
 import { isIcpRevenue, type MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
+import { classifyLead, leadMinutes, buildJourneyMap } from '@/lib/leads/classify';
 import type { PlaybookStats } from '@/lib/amplitude/playbook-stats';
 import {
   DATE_PRESETS,
@@ -70,6 +72,7 @@ const GOAL_SETS: GoalSet[] = [
       conversion: '20 %',
       cycle: 'verringern',
       onboarding: 'verringern',
+      leads: '50',
       pql: '0',
       int: '4',
       pb: '4',
@@ -119,12 +122,11 @@ const METRICS: MetricNode[] = [
   { id: 'onboarding', label: 'Onboarding-Zeit', fallback: '30h', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, lowerIsBetter: true, deltaFormat: 'delta', tooltip: 'Solution Consulting' },
   { id: 'deals', label: 'Deals / Woche', fallback: '?', target: '?', parentIds: ['conversion'], team: 'sales', dynamic: true, deltaFormat: 'delta' },
   // Left column: Leads
-  { id: 'leads', label: 'Leads / Woche', fallback: '?', target: '?', parentIds: ['deals'], computed: true, deltaFormat: 'delta' },
-  { id: 'contact-form', label: 'Contact Form (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, computed: true, deltaFormat: 'delta', tooltip: 'ICP-Leads via Contact Form (sipgate.de + sipgate.ai)' },
-  { id: 'cf-de', label: 'sipgate.de', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true, deltaFormat: 'vs' },
-  { id: 'cf-ai', label: 'sipgate.ai', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true, deltaFormat: 'vs' },
-  { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.500 Min/Monat' },
-  { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.500 Min/Monat' },
+  { id: 'leads', label: 'Leads / Woche', fallback: '?', target: '?', parentIds: ['deals'], dynamic: true, deltaFormat: 'delta', tooltip: 'HubSpot-Leads mit ≥ 2.000 Min/Monat' },
+  { id: 'contact-form', label: 'Contact Form (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, deltaFormat: 'delta', tooltip: 'ICP-Leads via Contact Form' },
+  { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.000 Min/Monat' },
+  { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.000 Min/Monat' },
+  { id: 'sonstige-leads', label: 'Sonstige / Woche', fallback: '?', target: '?', parentIds: ['leads'], dynamic: true, deltaFormat: 'vs', tooltip: 'Leads ≥ 2.000 Min ohne BQ-Journey-Zuordnung' },
   { id: 'pbx-signups', label: 'PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['pbx-leads'], dynamic: true, dashed: true, muted: true, deltaFormat: 'vs', tooltip: 'Alle PBX-Signups (Grundgesamtheit für Onboarding-Quali)' },
   // Right column: PQL path
   { id: 'pql', label: 'Product-Qualified Leads (ICP) / Woche', fallback: '[TODO]', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', deltaFormat: 'vs', tooltip: 'Nach ICP-Filter: ≥ 2.500 Min/Monat' },
@@ -141,6 +143,7 @@ const METRICS: MetricNode[] = [
 
 interface KpiTreeViewProps {
   deals: DealOverviewItem[];
+  leads: LeadOverviewItem[];
   marketingData: MarketingFunnelResponse | undefined;
   playbookStats: PlaybookStats | undefined;
   /** Marketing data for 2× the current window (for comparison period subtraction) */
@@ -219,6 +222,7 @@ interface LiveData {
 
 function computeLiveValues(
   deals: DealOverviewItem[],
+  leads: LeadOverviewItem[],
   marketingData: MarketingFunnelResponse | undefined,
   playbookStats: PlaybookStats | undefined,
   days: number,
@@ -289,6 +293,20 @@ function computeLiveValues(
     tooltips.set('arpa', `Ø MRR aus ${recentWon.length} Won-Deals`);
   }
 
+  // ── Leads / Woche (HubSpot leads with ≥ 2.000 Min, same source as chart) ──
+
+  const recentLeads = leads.filter(l => {
+    if (!l.createdate) return false;
+    const ts = new Date(l.createdate).getTime();
+    if (ts < cutoff || ts >= cutoffEnd) return false;
+    const mins = leadMinutes(l);
+    return mins != null && mins >= 2000;
+  });
+  if (recentLeads.length > 0) {
+    values.set('leads', fmtNum(recentLeads.length / weeks));
+    tooltips.set('leads', `${recentLeads.length} Leads (≥ 2.000 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+  }
+
   // ── Marketing-based metrics (BQ totals ÷ weeks in date range) ────────────
 
   if (marketingData) {
@@ -310,50 +328,24 @@ function computeLiveValues(
     values.set('preview-bestand', fmtNum(bq.previewTrialBestandskunde / weeks));
     tooltips.set('preview-bestand', `${bq.previewTrialBestandskunde} Bestandskunden-Previews in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
 
-    // ── Lead classification via Marketing Journeys ─────────────────────────
-    // All three buckets require ICP (minuteBucket ≥ 2.500 Min/Monat).
-    // Non-ICP leads are excluded entirely — the KPI tree tracks the ICP
-    // pipeline only.
-    //
-    //   • signup-leads — In-Product-Quali + ICP
-    //   • pbx-leads    — Onboarding-Quali + ICP
-    //   • cf-de / cf-ai — Contact Form by domain + ICP
+    // ── Lead classification: Amplitude touchpoints → HubSpot leadSource fallback
+    const journeyByLeadId = buildJourneyMap(marketingData.journeys);
 
-    const leadJourneys = marketingData.journeys.filter(
-      j => j.kind === 'lead' && j.createdate && new Date(j.createdate).getTime() >= cutoff && new Date(j.createdate).getTime() < cutoffEnd,
-    );
-    if (leadJourneys.length > 0) {
-      let inProductIcpLeads = 0;
-      let onboardingIcpLeads = 0;
-      let cfDeLeads = 0;
-      let cfAiLeads = 0;
+    if (recentLeads.length > 0) {
+      const counts = { 'contact-form': 0, 'pbx-onboarding': 0, 'in-product': 0, 'sonstige': 0 };
 
-      for (const j of leadJourneys) {
-        const isIcp = j.minuteBucket === 'gte_threshold';
-        if (!isIcp) continue;
-
-        const cfTouchpoint = j.touchpoints.find(t => t.anchor === 'lead_form_submitted');
-        if (cfTouchpoint) {
-          const domain = cfTouchpoint.pageDomain?.replace(/^www\./, '') ?? '';
-          if (domain.endsWith('sipgate.ai')) cfAiLeads++;
-          else cfDeLeads++;
-        } else if (j.touchpoints.some(t => t.anchor === 'agents_qualification_onboarding')) {
-          onboardingIcpLeads++;
-        } else if (j.touchpoints.some(t => t.anchor === 'agents_qualification_inproduct')) {
-          inProductIcpLeads++;
-        } else {
-          cfDeLeads++;
-        }
+      for (const l of recentLeads) {
+        counts[classifyLead(l, journeyByLeadId)]++;
       }
 
-      values.set('signup-leads', fmtNum(inProductIcpLeads / weeks));
-      tooltips.set('signup-leads', `${inProductIcpLeads} In-Product-Quali-Leads (≥ 2.500 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('pbx-leads', fmtNum(onboardingIcpLeads / weeks));
-      tooltips.set('pbx-leads', `${onboardingIcpLeads} Onboarding-Quali-Leads (≥ 2.500 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('cf-de', fmtNum(cfDeLeads / weeks));
-      tooltips.set('cf-de', `${cfDeLeads} Contact-Form-Leads sipgate.de (≥ 2.500 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('cf-ai', fmtNum(cfAiLeads / weeks));
-      tooltips.set('cf-ai', `${cfAiLeads} Contact-Form-Leads sipgate.ai (≥ 2.500 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('contact-form', fmtNum(counts['contact-form'] / weeks));
+      tooltips.set('contact-form', `${counts['contact-form']} Contact-Form-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('pbx-leads', fmtNum(counts['pbx-onboarding'] / weeks));
+      tooltips.set('pbx-leads', `${counts['pbx-onboarding']} Onboarding-Quali-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('signup-leads', fmtNum(counts['in-product'] / weeks));
+      tooltips.set('signup-leads', `${counts['in-product']} In-Product-Quali-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
+      values.set('sonstige-leads', fmtNum(counts['sonstige'] / weeks));
+      tooltips.set('sonstige-leads', `${counts['sonstige']} Leads ohne Zuordnung in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
     }
   }
 
@@ -667,7 +659,7 @@ function subtractPlaybookStats(
   };
 }
 
-export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarketingData, doubledPlaybookStats, datePresetKey, onDatePresetChange }: KpiTreeViewProps) {
+export function KpiTreeView({ deals, leads, marketingData, playbookStats, doubledMarketingData, doubledPlaybookStats, datePresetKey, onDatePresetChange }: KpiTreeViewProps) {
   const treeRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -694,7 +686,7 @@ export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarket
   const targetOverrides = useMemo(() => targetOverridesBySet.get(goalSetKey) ?? new Map<string, string>(), [targetOverridesBySet, goalSetKey]);
 
   // Collapsible sections — keyed by parent node ID whose children are hidden.
-  const DEFAULT_COLLAPSED = useMemo(() => new Set(['contact-form', 'trials']), []);
+  const DEFAULT_COLLAPSED = useMemo(() => new Set(['trials']), []);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(DEFAULT_COLLAPSED));
   const toggleCollapse = useCallback((id: string) => {
     setCollapsed(prev => {
@@ -708,8 +700,8 @@ export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarket
   // Live values from props (deal stats + marketing BQ totals + journey classification).
   const days = getDaysForPreset(datePresetKey);
   const liveData = useMemo(
-    () => computeLiveValues(filteredDeals, marketingData, playbookStats, days),
-    [filteredDeals, marketingData, playbookStats, days],
+    () => computeLiveValues(filteredDeals, leads, marketingData, playbookStats, days),
+    [filteredDeals, leads, marketingData, playbookStats, days],
   );
 
   const showComparison = canShowComparison(datePresetKey);
@@ -734,9 +726,9 @@ export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarket
     const compPb = (doubledPlaybookStats && playbookStats)
       ? subtractPlaybookStats(doubledPlaybookStats, playbookStats)
       : undefined;
-    return computeLiveValues(filteredDeals, compMkt, compPb, days, compCutoffRef.current);
+    return computeLiveValues(filteredDeals, leads, compMkt, compPb, days, compCutoffRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showComparison, days, filteredDeals, marketingData, doubledMarketingData, playbookStats, doubledPlaybookStats]);
+  }, [showComparison, days, filteredDeals, leads, marketingData, doubledMarketingData, playbookStats, doubledPlaybookStats]);
 
   // Merge: live values < user overrides (for manual nodes) < computed formulas.
   // Targets: static defaults < derived formulas < user overrides.
@@ -765,17 +757,8 @@ export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarket
 
     // ── Computed values ──────────────────────────────────────────────────────
 
-    // Contact Form = cf-de + cf-ai
-    const cfDe = v('cf-de');
-    const cfAi = v('cf-ai');
-    const cfSum = [cfDe, cfAi].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
-    if (cfSum > 0) vals.set('contact-form', fmtNum(cfSum));
-
-    // Leads = contact-form + signup-leads + pbx-leads
-    const agentLeads = v('signup-leads');
-    const pbxLeads = v('pbx-leads');
-    const leadsSum = [cfSum, agentLeads, pbxLeads].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
-    if (leadsSum > 0) vals.set('leads', fmtNum(leadsSum));
+    // Leads / Woche + contact-form are filled directly in computeLiveValues.
+    const leadsVal = v('leads');
 
     // Conversion is computed in computeLiveValues (Won / (Won + Lost))
     const sales = v('sales');
@@ -813,8 +796,8 @@ export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarket
     }
 
     const dealsTarget = t('deals');
-    if (!isNaN(dealsTarget) && !isNaN(dealsVal) && dealsVal > 0 && leadsSum > 0 && !tgts.has('leads')) {
-      tgts.set('leads', fmtTarget(dealsTarget * (leadsSum / dealsVal)) + '*');
+    if (!isNaN(dealsTarget) && !isNaN(dealsVal) && dealsVal > 0 && !isNaN(leadsVal) && leadsVal > 0 && !tgts.has('leads')) {
+      tgts.set('leads', fmtTarget(dealsTarget * (leadsVal / dealsVal)) + '*');
     }
 
     // Compute comparison resolved values (same derived formulas, no overrides/targets)
@@ -825,14 +808,7 @@ export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarket
         const txt = cv.get(id) ?? METRICS.find(m => m.id === id)?.fallback ?? '?';
         return parseNum(txt);
       };
-      const cvCfDe = cvNum('cf-de');
-      const cvCfAi = cvNum('cf-ai');
-      const cvCfSum = [cvCfDe, cvCfAi].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
-      if (cvCfSum > 0) cv.set('contact-form', fmtNum(cvCfSum));
-      const cvAgentLeads = cvNum('signup-leads');
-      const cvPbxLeads = cvNum('pbx-leads');
-      const cvLeadsSum = [cvCfSum, cvAgentLeads, cvPbxLeads].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
-      if (cvLeadsSum > 0) cv.set('leads', fmtNum(cvLeadsSum));
+      // Leads, contact-form, and sub-buckets for comparison are filled by computeLiveValues.
       const cvArpa = cvNum('arpa');
       const cvSales = cvNum('sales');
       const cvPql = cvNum('pql');
@@ -1018,17 +994,10 @@ export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarket
           <div className="kpi-col">
             {card('leads')}
             <div className="kpi-row">
-              <div className="kpi-col" style={{ gap: 16 }}>
-                {card('contact-form', true)}
-                {!collapsed.has('contact-form') && (
-                  <div className="kpi-row">
-                    {card('cf-de')}
-                    {card('cf-ai')}
-                  </div>
-                )}
-              </div>
+              {card('contact-form')}
               {card('pbx-leads')}
               {card('signup-leads')}
+              {card('sonstige-leads')}
             </div>
           </div>
 

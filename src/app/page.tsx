@@ -49,6 +49,7 @@ import type { DealStageHistoryMap } from '@/app/api/deals/overview/stage-history
 import type { LeadsOverviewResponse, LeadOverviewItem } from '@/app/api/leads/overview/route';
 import type { ProjectsOverviewResponse } from '@/app/api/projects/overview/route';
 import { MRR_BUCKET_THRESHOLD, type MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
+import { buildJourneyMap } from '@/lib/leads/classify';
 import type { PlaybookStats } from '@/lib/amplitude/playbook-stats';
 import {
   getActivationLabel,
@@ -499,6 +500,11 @@ function PipelineOverviewContent() {
     }
     return map;
   }, [marketingData]);
+
+  const leadJourneyMap = useMemo(
+    () => marketingData ? buildJourneyMap(marketingData.journeys) : new Map(),
+    [marketingData],
+  );
 
   // Refresh all data
   const handleRefresh = () => {
@@ -1221,6 +1227,7 @@ function PipelineOverviewContent() {
                 produkt={selectedProdukt}
                 leads={leadsData?.leads ?? []}
                 dealFirstTouchpointLabel={dealFirstTouchpointLabel}
+                leadJourneyMap={leadJourneyMap}
               />
             ) : effectiveViewMode === 'projects' ? (
               /* Projekte: Wochenansicht laufender AI-Agent-Projekte */
@@ -1229,6 +1236,7 @@ function PipelineOverviewContent() {
               /* KPI-Tree: AI Agents Metrik-Baum */
               <KpiTreeView
                 deals={dealsWithMeetings}
+                leads={leadsData?.leads ?? []}
                 marketingData={marketingData}
                 playbookStats={playbookStats}
                 doubledMarketingData={doubledMarketingData}
