@@ -36,6 +36,11 @@ interface MetricNode {
   muted?: boolean;
   /** Lower values are better (e.g. Sales Cycle, Onboarding-Zeit) */
   lowerIsBetter?: boolean;
+  /** How to display the comparison delta pill:
+   *  - 'delta' — arrow + absolute difference (↑ 40 €, ↓ 9)
+   *  - 'vs'    — previous period's value (vs 33 %, vs 1,9)
+   *  Default: 'delta' */
+  deltaFormat?: 'delta' | 'vs';
 }
 
 // ── Goal sets ───────────────────────────────────────────────────────────────
@@ -50,6 +55,7 @@ interface GoalSet {
   label: string;
   targets: Record<string, string>;
   coreMetrics: string[];
+  mutedMetrics: string[];
 }
 
 const GOAL_SETS: GoalSet[] = [
@@ -57,6 +63,7 @@ const GOAL_SETS: GoalSet[] = [
     key: 'q2-2026',
     label: 'Q2 2026',
     coreMetrics: ['mrr', 'leads', 'cycle'],
+    mutedMetrics: ['pql', 'int', 'pb', 'aha', 'trials', 'signup', 'preview-pbx', 'preview-bestand', 'pbx-signups'],
     targets: {
       mrr: '4.000 €',
       arpa: '500 €',
@@ -77,6 +84,7 @@ const GOAL_SETS: GoalSet[] = [
     key: 'q3-2026',
     label: 'Q3 2026',
     coreMetrics: [],
+    mutedMetrics: [],
     targets: {
       mrr: '20.000 €',
       arpa: '1.000 €',
@@ -102,31 +110,31 @@ const GOAL_SETS: GoalSet[] = [
 
 const METRICS: MetricNode[] = [
   // Spine (top → down)
-  { id: 'mrr', label: 'Neuer MRR / Woche', fallback: '?', target: '20.000 €', computed: true, tooltip: 'Gesamt-MRR: 20k €' },
-  { id: 'arpa', label: 'ARPA', fallback: '?', target: '1.000 €', parentIds: ['mrr'], dashed: true, dynamic: true },
-  { id: 'icp', label: 'Neue ICP-Kunden / Woche', fallback: '?', target: '?', parentIds: ['mrr'], dynamic: true, tooltip: '> 2.500 € / Monat' },
-  { id: 'sales', label: 'Sales / Woche', fallback: '?', target: '?', parentIds: ['icp'], team: 'sales', dynamic: true },
-  { id: 'conversion', label: 'Win Rate', fallback: '?', target: '25 %', parentIds: ['sales'], team: 'sales', computed: true },
-  { id: 'cycle', label: 'Sales Cycle', fallback: '?', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, dynamic: true, lowerIsBetter: true, tooltip: 'Ø Tage von Deal-Erstellung bis Abschluss (Won)' },
-  { id: 'onboarding', label: 'Onboarding-Zeit', fallback: '30h', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, lowerIsBetter: true, tooltip: 'Solution Consulting' },
-  { id: 'deals', label: 'Deals / Woche', fallback: '?', target: '?', parentIds: ['conversion'], team: 'sales', dynamic: true },
+  { id: 'mrr', label: 'Neuer MRR / Woche', fallback: '?', target: '20.000 €', computed: true, deltaFormat: 'delta', tooltip: 'Gesamt-MRR: 20k €' },
+  { id: 'arpa', label: 'ARPA', fallback: '?', target: '1.000 €', parentIds: ['mrr'], dashed: true, dynamic: true, deltaFormat: 'delta' },
+  { id: 'icp', label: 'Neue ICP-Kunden / Woche', fallback: '?', target: '?', parentIds: ['mrr'], dynamic: true, deltaFormat: 'vs', tooltip: '> 2.500 € / Monat' },
+  { id: 'sales', label: 'Sales / Woche', fallback: '?', target: '?', parentIds: ['icp'], team: 'sales', dynamic: true, deltaFormat: 'vs' },
+  { id: 'conversion', label: 'Win Rate', fallback: '?', target: '25 %', parentIds: ['sales'], team: 'sales', computed: true, deltaFormat: 'vs' },
+  { id: 'cycle', label: 'Sales Cycle', fallback: '?', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, dynamic: true, lowerIsBetter: true, deltaFormat: 'delta', tooltip: 'Ø Tage von Deal-Erstellung bis Abschluss (Won)' },
+  { id: 'onboarding', label: 'Onboarding-Zeit', fallback: '30h', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, lowerIsBetter: true, deltaFormat: 'delta', tooltip: 'Solution Consulting' },
+  { id: 'deals', label: 'Deals / Woche', fallback: '?', target: '?', parentIds: ['conversion'], team: 'sales', dynamic: true, deltaFormat: 'delta' },
   // Left column: Leads
-  { id: 'leads', label: 'Leads / Woche', fallback: '?', target: '?', parentIds: ['deals'], computed: true },
-  { id: 'contact-form', label: 'Contact Form (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, computed: true, tooltip: 'ICP-Leads via Contact Form (sipgate.de + sipgate.ai)' },
-  { id: 'cf-de', label: 'sipgate.de', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true },
-  { id: 'cf-ai', label: 'sipgate.ai', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true },
-  { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.500 Min/Monat' },
-  { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.500 Min/Monat' },
-  { id: 'pbx-signups', label: 'PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['pbx-leads'], dynamic: true, dashed: true, muted: true, tooltip: 'Alle PBX-Signups (Grundgesamtheit für Onboarding-Quali)' },
+  { id: 'leads', label: 'Leads / Woche', fallback: '?', target: '?', parentIds: ['deals'], computed: true, deltaFormat: 'delta' },
+  { id: 'contact-form', label: 'Contact Form (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, computed: true, deltaFormat: 'delta', tooltip: 'ICP-Leads via Contact Form (sipgate.de + sipgate.ai)' },
+  { id: 'cf-de', label: 'sipgate.de', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true, deltaFormat: 'vs' },
+  { id: 'cf-ai', label: 'sipgate.ai', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true, deltaFormat: 'vs' },
+  { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.500 Min/Monat' },
+  { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.500 Min/Monat' },
+  { id: 'pbx-signups', label: 'PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['pbx-leads'], dynamic: true, dashed: true, muted: true, deltaFormat: 'vs', tooltip: 'Alle PBX-Signups (Grundgesamtheit für Onboarding-Quali)' },
   // Right column: PQL path
-  { id: 'pql', label: 'Product-Qualified Leads (ICP) / Woche', fallback: '[TODO]', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', tooltip: 'Nach ICP-Filter: ≥ 2.500 Min/Monat' },
-  { id: 'int', label: 'Neue Kunden mit 1+ Integration / Woche', fallback: '[TODO]', target: '20', parentIds: ['pql'], team: 'onboarding' },
-  { id: 'pb', label: 'Neue Kunden mit 3+ Playbooks / Woche', fallback: '?', target: '20', parentIds: ['pql'], team: 'onboarding', dynamic: true, tooltip: 'Preview-Accounts, die danach ≥ 3 Playbooks erstellt haben' },
-  { id: 'aha', label: 'Aha-Moment / Woche', fallback: '[TODO]', target: '30', parentIds: ['int', 'pb'], team: 'onboarding' },
-  { id: 'trials', label: 'Agent Previews / Woche', fallback: '?', target: '80', parentIds: ['aha'], team: 'growth', dynamic: true },
-  { id: 'signup', label: 'Agent Signups / Woche', fallback: '?', target: '30', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'Paid Ads ab Juni 2026' },
-  { id: 'preview-pbx', label: 'PBX Signup → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials', 'pbx-signups'], team: 'growth', dynamic: true, tooltip: 'PBX-Kunden, die eine Agent-Preview starten' },
-  { id: 'preview-bestand', label: 'Bestandskunde → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials'], team: 'growth', dynamic: true, tooltip: 'Bestehende sipgate-Kunden ohne neuen Signup' },
+  { id: 'pql', label: 'Product-Qualified Leads (ICP) / Woche', fallback: '[TODO]', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', deltaFormat: 'vs', tooltip: 'Nach ICP-Filter: ≥ 2.500 Min/Monat' },
+  { id: 'int', label: 'Neue Kunden mit 1+ Integration / Woche', fallback: '[TODO]', target: '20', parentIds: ['pql'], team: 'onboarding', deltaFormat: 'delta' },
+  { id: 'pb', label: 'Neue Kunden mit 3+ Playbooks / Woche', fallback: '?', target: '20', parentIds: ['pql'], team: 'onboarding', dynamic: true, deltaFormat: 'delta', tooltip: 'Preview-Accounts, die danach ≥ 3 Playbooks erstellt haben' },
+  { id: 'aha', label: 'Aha-Moment / Woche', fallback: '[TODO]', target: '30', parentIds: ['int', 'pb'], team: 'onboarding', deltaFormat: 'delta' },
+  { id: 'trials', label: 'Agent Previews / Woche', fallback: '?', target: '80', parentIds: ['aha'], team: 'growth', dynamic: true, deltaFormat: 'delta' },
+  { id: 'signup', label: 'Agent Signups / Woche', fallback: '?', target: '30', parentIds: ['trials'], team: 'growth', dynamic: true, deltaFormat: 'delta', tooltip: 'Paid Ads ab Juni 2026' },
+  { id: 'preview-pbx', label: 'PBX Signup → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials', 'pbx-signups'], team: 'growth', dynamic: true, deltaFormat: 'delta', tooltip: 'PBX-Kunden, die eine Agent-Preview starten' },
+  { id: 'preview-bestand', label: 'Bestandskunde → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials'], team: 'growth', dynamic: true, deltaFormat: 'delta', tooltip: 'Bestehende sipgate-Kunden ohne neuen Signup' },
 ];
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -383,12 +391,13 @@ interface MetricCardProps {
   isCollapsed?: boolean;
   onToggleCollapse?: (id: string) => void;
   isCore?: boolean;
+  isMuted?: boolean;
 }
 
 function computeDeltaPill(
   currentStr: string,
   comparisonStr: string,
-  lowerIsBetter: boolean,
+  node: MetricNode,
 ): { label: string; className: string; tooltip: string } | null {
   const cur = parseNum(currentStr);
   const prev = parseNum(comparisonStr);
@@ -396,25 +405,24 @@ function computeDeltaPill(
   const diff = cur - prev;
   if (Math.abs(diff) < 0.005) return null;
   const isUp = diff > 0;
-  const isGood = lowerIsBetter ? !isUp : isUp;
-  const arrow = isUp ? '↑' : '↓';
-  const isPercent = currentStr.includes('%');
-  const unit = currentStr.includes('€') ? ' €' : '';
-  if (isPercent) {
-    return {
-      label: `vs ${comparisonStr}`,
-      className: `kpi-delta ${isGood ? 'kpi-delta-good' : 'kpi-delta-bad'}`,
-      tooltip: `Vorperiode: ${comparisonStr}`,
-    };
+  const isGood = node.lowerIsBetter ? !isUp : isUp;
+  const fmt = node.deltaFormat ?? 'delta';
+  let label: string;
+  if (fmt === 'vs') {
+    label = `vs ${comparisonStr}`;
+  } else {
+    const arrow = isUp ? '↑' : '↓';
+    const unit = currentStr.includes('€') ? ' €' : '';
+    label = `${arrow} ${fmtNum(Math.abs(diff))}${unit}`;
   }
   return {
-    label: `${arrow} ${fmtNum(Math.abs(diff))}${unit}`,
+    label,
     className: `kpi-delta ${isGood ? 'kpi-delta-good' : 'kpi-delta-bad'}`,
     tooltip: `Vorperiode: ${comparisonStr}`,
   };
 }
 
-function MetricCard({ node, values, targets, dynamicTooltips, comparisonValues, comparisonTooltips, onEditValue, onEditTarget, isCollapsible, isCollapsed, onToggleCollapse, isCore }: MetricCardProps) {
+function MetricCard({ node, values, targets, dynamicTooltips, comparisonValues, comparisonTooltips, onEditValue, onEditTarget, isCollapsible, isCollapsed, onToggleCollapse, isCore, isMuted }: MetricCardProps) {
   const val = values.get(node.id) ?? node.fallback;
   const target = targets.get(node.id) ?? '?';
   const canEditValue = !node.computed && !node.dynamic;
@@ -422,11 +430,12 @@ function MetricCard({ node, values, targets, dynamicTooltips, comparisonValues, 
   const compTooltip = comparisonTooltips?.get(node.id);
   const [showTip, setShowTip] = useState(false);
   const compVal = comparisonValues?.get(node.id);
-  const delta = compVal ? computeDeltaPill(val, compVal, !!node.lowerIsBetter) : null;
+  const delta = compVal ? computeDeltaPill(val, compVal, node) : null;
+  const muted = isMuted || node.muted;
 
   return (
     <div
-      className={`kpi-metric${node.muted ? ' kpi-muted' : ''}${isCollapsible ? ' kpi-collapsible' : ''}${isCore ? ' kpi-core' : ''}`}
+      className={`kpi-metric${muted ? ' kpi-muted' : ''}${isCollapsible ? ' kpi-collapsible' : ''}${isCore ? ' kpi-core' : ''}`}
       data-id={node.id}
     >
       {(tooltip || compTooltip) && (
@@ -704,17 +713,29 @@ export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarket
   );
 
   const showComparison = canShowComparison(datePresetKey);
+  // Stable cutoffEnd for the comparison period. We snapshot Date.now() into a
+  // ref so it doesn't change on every render (which would bust the memo and
+  // trigger the react-hooks/purity lint). The ref updates when the deps that
+  // actually matter change (preset, data arrivals).
+  const compCutoffRef = useRef(0);
+  if (showComparison) {
+    const candidate = Date.now() - days * 24 * 60 * 60 * 1000;
+    // Only update when the value drifts by more than 1 minute — prevents
+    // unnecessary memo invalidation from sub-second re-renders.
+    if (Math.abs(candidate - compCutoffRef.current) > 60_000) {
+      compCutoffRef.current = candidate;
+    }
+  }
   const comparisonData = useMemo(() => {
     if (!showComparison) return null;
-    const now = Date.now();
-    const prevEnd = now - days * 24 * 60 * 60 * 1000;
     const compMkt = (doubledMarketingData && marketingData)
       ? subtractBqTotals(doubledMarketingData, marketingData)
       : undefined;
     const compPb = (doubledPlaybookStats && playbookStats)
       ? subtractPlaybookStats(doubledPlaybookStats, playbookStats)
       : undefined;
-    return computeLiveValues(filteredDeals, compMkt, compPb, days, prevEnd);
+    return computeLiveValues(filteredDeals, compMkt, compPb, days, compCutoffRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showComparison, days, filteredDeals, marketingData, doubledMarketingData, playbookStats, doubledPlaybookStats]);
 
   // Merge: live values < user overrides (for manual nodes) < computed formulas.
@@ -912,6 +933,7 @@ export function KpiTreeView({ deals, marketingData, playbookStats, doubledMarket
         isCollapsed={collapsible ? collapsed.has(id) : undefined}
         onToggleCollapse={collapsible ? toggleCollapse : undefined}
         isCore={activeGoalSet.coreMetrics.includes(id)}
+        isMuted={activeGoalSet.mutedMetrics.includes(id)}
       />
     );
   };
@@ -1148,7 +1170,8 @@ const TREE_STYLES = `
 .kpi-core {
   border-width: 2px;
   border-color: #111827;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.08);
+  transform: scale(1.03);
 }
 .kpi-core .kpi-target-val {
   font-weight: 700;

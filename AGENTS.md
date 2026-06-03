@@ -409,3 +409,11 @@ uses `customfield_10016` at the time of writing.
 
 The first two routes validate the key with `isJiraIssueKey()` and return
 400 on garbage, 404 if JIRA returns 404, 502 on other JIRA errors.
+
+## Local dev URL — DO NOT use the Caddy HTTPS URL
+
+The local dev server runs on **`http://localhost:3020`**. Never navigate to
+`https://sales-cockpit.localhost` (the Caddy reverse-proxy URL) from
+browser automation tools (Claude in Chrome, preview tools, etc.). The
+Caddy URL triggers certificate warnings, auth redirects, and other issues
+that break automated testing. Always use `http://localhost:3020` directly.
