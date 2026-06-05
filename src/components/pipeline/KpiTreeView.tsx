@@ -67,7 +67,7 @@ const GOAL_SETS: GoalSet[] = [
     key: 'q2-2026',
     label: 'Q2 2026',
     coreMetrics: ['mrr', 'leads', 'cycle'],
-    mutedMetrics: ['pql', 'int', 'pb', 'aha', 'trials', 'signup', 'preview-pbx', 'preview-bestand', 'pbx-signups'],
+    mutedMetrics: ['activated', 'int', 'pb', 'aha', 'trials', 'signup', 'preview-pbx', 'preview-bestand', 'pbx-signups'],
     targets: {
       mrr: '4.000 €',
       arpa: '500 €',
@@ -75,7 +75,6 @@ const GOAL_SETS: GoalSet[] = [
       cycle: 'verringern',
       onboarding: 'verringern',
       leads: '50',
-      pql: '0',
       int: '4',
       pb: '4',
       aha: '6',
@@ -88,7 +87,7 @@ const GOAL_SETS: GoalSet[] = [
   {
     key: 'q3-2026',
     label: 'Q3 2026',
-    coreMetrics: [],
+    coreMetrics: ['mrr', 'leads', 'activated'],
     mutedMetrics: [],
     targets: {
       mrr: '20.000 €',
@@ -132,10 +131,10 @@ const METRICS: MetricNode[] = [
   { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.000 Min/Monat' },
   { id: 'sonstige-leads', label: 'Sonstige / Woche', fallback: '?', target: '?', parentIds: ['leads'], dynamic: true, hideComparison: true, tooltip: 'Leads ≥ 2.000 Min ohne BQ-Journey-Zuordnung' },
   { id: 'pbx-signups', label: 'PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['pbx-leads'], dynamic: true, dashed: true, muted: true, deltaFormat: 'vs', tooltip: 'Alle PBX-Signups (Grundgesamtheit für Onboarding-Quali)' },
-  // Right column: PQL path
-  { id: 'pql', label: 'Product-Qualified Leads (ICP) / Woche', fallback: '[TODO]', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', deltaFormat: 'vs', tooltip: 'Nach ICP-Filter: ≥ 2.500 Min/Monat' },
-  { id: 'int', label: 'Neue Kunden mit 1+ Integration / Woche', fallback: '[TODO]', target: '20', parentIds: ['pql'], team: 'onboarding', deltaFormat: 'delta' },
-  { id: 'pb', label: 'Neue Kunden mit 3+ Playbooks / Woche', fallback: '?', target: '20', parentIds: ['pql'], team: 'onboarding', dynamic: true, deltaFormat: 'delta', tooltip: 'Preview-Accounts, die danach ≥ 3 Playbooks erstellt haben' },
+  // Right column: Committed path
+  { id: 'activated', label: 'Neue Kontingent-Kunden / Woche', fallback: '0,60', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', deltaFormat: 'delta', tooltip: 'Kunden mit Kontingent-Buchung (≥ Tier 100). Upsell-Pool für ICP. Stand Juni 2026: ~0,6/Wo brutto (manuell)' },
+  { id: 'int', label: 'Neue Kunden mit 1+ Integration / Woche', fallback: '[TODO]', target: '20', parentIds: ['activated'], team: 'onboarding', deltaFormat: 'delta' },
+  { id: 'pb', label: 'Neue Kunden mit 3+ Playbooks / Woche', fallback: '?', target: '20', parentIds: ['activated'], team: 'onboarding', dynamic: true, deltaFormat: 'delta', tooltip: 'Preview-Accounts, die danach ≥ 3 Playbooks erstellt haben' },
   { id: 'aha', label: 'Aha-Moment / Woche', fallback: '[TODO]', target: '30', parentIds: ['int', 'pb'], team: 'onboarding', deltaFormat: 'delta' },
   { id: 'trials', label: 'Agent Previews / Woche', fallback: '?', target: '80', parentIds: ['aha'], team: 'growth', dynamic: true, deltaFormat: 'delta' },
   { id: 'signup', label: 'Agent Signups / Woche', fallback: '?', target: '30', parentIds: ['trials'], team: 'growth', dynamic: true, deltaFormat: 'delta', tooltip: 'Paid Ads ab Juni 2026' },
@@ -783,11 +782,9 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
     const dealsVal = v('deals');
     const conv = parseNum(vals.get('conversion') ?? '?') / 100;
 
-    // MRR = (sales + pql) × ARPA
+    // MRR = sales × ARPA (Committed Customers feed into ICP via upsell, not directly into MRR calc)
     const arpa = v('arpa');
-    const pql = v('pql');
-    const icpSum = [sales, pql].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
-    vals.set('mrr', !isNaN(arpa) && icpSum > 0 ? fmtEur(icpSum * arpa) : '?');
+    vals.set('mrr', !isNaN(arpa) && !isNaN(sales) && sales > 0 ? fmtEur(sales * arpa) : '?');
 
     // ── Derived targets (marked with *) ──────────────────────────────────────
 
@@ -796,26 +793,30 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
     const icpTarget = (!isNaN(mrrTarget) && !isNaN(arpaTarget) && arpaTarget > 0) ? mrrTarget / arpaTarget : NaN;
     if (!isNaN(icpTarget) && !tgts.has('icp')) tgts.set('icp', fmtTarget(icpTarget) + '*');
 
-    // PQL / Sales split — if PQL target is set explicitly, Sales = ICP − PQL
-    const PLG_RATIO = 0.3;
-    const explicitPqlTarget = t('pql');
-    if (isNaN(explicitPqlTarget) && !isNaN(icpTarget) && !tgts.has('pql')) {
-      tgts.set('pql', fmtTarget(icpTarget * PLG_RATIO) + '*');
-    }
-    const pqlTargetNum = t('pql');
-    const salesTarget = !isNaN(icpTarget) ? icpTarget - (isNaN(pqlTargetNum) ? 0 : pqlTargetNum) : NaN;
+    // Sales = all ICP conversions
+    const salesTarget = icpTarget;
     if (!isNaN(salesTarget) && !tgts.has('sales')) tgts.set('sales', fmtTarget(salesTarget) + '*');
 
+    // Deals = Sales / Win Rate (all deals, regardless of source)
     const convTarget = t('conversion');
     const convRate = !isNaN(convTarget) ? convTarget / 100 : conv;
-    const roundedSalesTarget = t('sales');
-    if (!isNaN(roundedSalesTarget) && !isNaN(convRate) && convRate > 0 && !tgts.has('deals')) {
-      tgts.set('deals', fmtTarget(roundedSalesTarget / convRate) + '*');
+    const dealsFromSales = !isNaN(salesTarget) && !isNaN(convRate) && convRate > 0 ? salesTarget / convRate : NaN;
+    if (!isNaN(dealsFromSales) && !tgts.has('deals')) tgts.set('deals', fmtTarget(dealsFromSales) + '*');
+
+    // Deals split: 70% from Leads, 30% from Kontingent-Kunden
+    const PLG_DEAL_RATIO = 0.3;
+    const dealsTarget = t('deals');
+
+    // Leads target — only needs to produce 70% of deals
+    const slgDeals = !isNaN(dealsTarget) ? dealsTarget * (1 - PLG_DEAL_RATIO) : NaN;
+    if (!isNaN(slgDeals) && !isNaN(dealsVal) && dealsVal > 0 && !isNaN(leadsVal) && leadsVal > 0 && !tgts.has('leads')) {
+      tgts.set('leads', fmtTarget(slgDeals * (leadsVal / dealsVal)) + '*');
     }
 
-    const dealsTarget = t('deals');
-    if (!isNaN(dealsTarget) && !isNaN(dealsVal) && dealsVal > 0 && !isNaN(leadsVal) && leadsVal > 0 && !tgts.has('leads')) {
-      tgts.set('leads', fmtTarget(dealsTarget * (leadsVal / dealsVal)) + '*');
+    // Kontingent-Kunden target — needs to produce 30% of deals
+    const plgDeals = !isNaN(dealsTarget) ? dealsTarget * PLG_DEAL_RATIO : NaN;
+    if (!isNaN(plgDeals) && !tgts.has('activated')) {
+      tgts.set('activated', fmtTarget(plgDeals) + '*');
     }
 
     // Compute comparison resolved values (same derived formulas, no overrides/targets)
@@ -829,9 +830,7 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
       // Leads, contact-form, and sub-buckets for comparison are filled by computeLiveValues.
       const cvArpa = cvNum('arpa');
       const cvSales = cvNum('sales');
-      const cvPql = cvNum('pql');
-      const cvIcpSum = [cvSales, cvPql].filter(n => !isNaN(n)).reduce((a, b) => a + b, 0);
-      cv.set('mrr', !isNaN(cvArpa) && cvIcpSum > 0 ? fmtEur(cvIcpSum * cvArpa) : '?');
+      cv.set('mrr', !isNaN(cvArpa) && !isNaN(cvSales) && cvSales > 0 ? fmtEur(cvSales * cvArpa) : '?');
       compVals = cv;
     }
 
@@ -985,10 +984,8 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
 
           <div className="kpi-icp-wrap">
             <div className="kpi-aside-left">{card('arpa')}</div>
-            {card('icp')}
+            {card('sales')}
           </div>
-
-          {card('sales')}
 
           <div className="kpi-conv-wrap">
             <div className="kpi-aside-left">{card('cycle')}</div>
@@ -1027,9 +1024,9 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
             </div>
           </div>
 
-          {/* Right: PQL path */}
+          {/* Right: Committed path */}
           <div className="kpi-col">
-            {card('pql')}
+            {card('activated')}
             <div className="kpi-row">
               {card('int')}
               {card('pb')}
