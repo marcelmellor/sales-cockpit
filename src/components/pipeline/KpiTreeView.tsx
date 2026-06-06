@@ -75,13 +75,6 @@ const GOAL_SETS: GoalSet[] = [
       cycle: 'verringern',
       onboarding: 'verringern',
       leads: '50',
-      int: '4',
-      pb: '4',
-      aha: '6',
-      trials: '15',
-      signup: '6',
-      'preview-pbx': '5',
-      'preview-bestand': '5',
     },
   },
   {
@@ -96,10 +89,6 @@ const GOAL_SETS: GoalSet[] = [
       cycle: 'verringern',
       onboarding: 'verringern',
       'contact-form': '10',
-      int: '20',
-      pb: '20',
-      aha: '30',
-      trials: '80',
       signup: '30',
       'preview-pbx': '25',
       'preview-bestand': '25',
@@ -815,8 +804,25 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
 
     // Kontingent-Kunden target — needs to produce 30% of deals
     const plgDeals = !isNaN(dealsTarget) ? dealsTarget * PLG_DEAL_RATIO : NaN;
-    if (!isNaN(plgDeals) && !tgts.has('activated')) {
+    if (!isNaN(plgDeals) && !tgts.has('activated') && !activeGoalSet.mutedMetrics.includes('activated')) {
       tgts.set('activated', fmtTarget(plgDeals) + '*');
+    }
+
+    // PLG funnel targets — derived upward from Kontingent-Kunden target
+    // Kontingent (25) → /50% → Skills/Int (50) → /75% → Aha (67) → /85% → Previews (79)
+    const COMMIT_CONV = 0.5;  // 3+ Skills → Kontingent-Kunde
+    const SKILL_CONV = 0.75;  // Aha-Moment → 3+ Skills / 1+ Integration
+    const AHA_CONV = 0.85;    // Preview → Aha-Moment
+    const muted = new Set(activeGoalSet.mutedMetrics);
+    const activatedTarget = t('activated');
+    if (!isNaN(activatedTarget) && !muted.has('activated')) {
+      const skillTarget = activatedTarget / COMMIT_CONV;
+      if (!tgts.has('int') && !muted.has('int')) tgts.set('int', fmtTarget(skillTarget) + '*');
+      if (!tgts.has('pb') && !muted.has('pb')) tgts.set('pb', fmtTarget(skillTarget) + '*');
+      const ahaTarget = skillTarget / SKILL_CONV;
+      if (!tgts.has('aha') && !muted.has('aha')) tgts.set('aha', fmtTarget(ahaTarget) + '*');
+      const previewTarget = ahaTarget / AHA_CONV;
+      if (!tgts.has('trials') && !muted.has('trials')) tgts.set('trials', fmtTarget(previewTarget) + '*');
     }
 
     // Compute comparison resolved values (same derived formulas, no overrides/targets)
