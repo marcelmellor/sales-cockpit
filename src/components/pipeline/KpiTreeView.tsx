@@ -92,6 +92,7 @@ const GOAL_SETS: GoalSet[] = [
       signup: '30',
       'preview-pbx': '25',
       'preview-bestand': '25',
+      activated: '10',
     },
   },
 ];
@@ -809,7 +810,7 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
     }
 
     // PLG funnel targets — derived upward from Kontingent-Kunden target
-    // Kontingent (25) → /50% → Skills/Int (50) → /75% → Aha (67) → /85% → Previews (79)
+    // Kontingent (10) → /50% → Skills/Int (20) → /75% → Aha (27) → /85% → Previews (31)
     const COMMIT_CONV = 0.5;  // 3+ Skills → Kontingent-Kunde
     const SKILL_CONV = 0.75;  // Aha-Moment → 3+ Skills / 1+ Integration
     const AHA_CONV = 0.85;    // Preview → Aha-Moment
