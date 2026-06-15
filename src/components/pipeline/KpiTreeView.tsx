@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { toPng } from 'html-to-image';
 import { isWonStageLabel, isLostStageLabel } from '@/lib/hubspot/mrr';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
@@ -84,11 +85,12 @@ const GOAL_SETS: GoalSet[] = [
     mutedMetrics: [],
     targets: {
       mrr: '20.000 €',
-      arpa: '1.000 €',
+      arpa: '700 €',
       conversion: '25 %',
       cycle: 'verringern',
       onboarding: 'verringern',
       'contact-form': '10',
+      trials: '80',
       signup: '30',
       'preview-pbx': '25',
       'preview-bestand': '25',
@@ -105,7 +107,7 @@ const GOAL_SETS: GoalSet[] = [
 const METRICS: MetricNode[] = [
   // Spine (top → down)
   { id: 'mrr', label: 'Neuer MRR / Woche', fallback: '?', target: '20.000 €', computed: true, deltaFormat: 'delta', tooltip: 'Gesamt-MRR: 20k €' },
-  { id: 'arpa', label: 'ARPA', fallback: '?', target: '1.000 €', parentIds: ['mrr'], dashed: true, dynamic: true, deltaFormat: 'delta' },
+  { id: 'arpa', label: 'ARPA', fallback: '?', target: '700 €', parentIds: ['mrr'], dashed: true, dynamic: true, deltaFormat: 'delta' },
   { id: 'icp', label: 'Neue ICP-Kunden / Woche', fallback: '?', target: '?', parentIds: ['mrr'], dynamic: true, deltaFormat: 'vs', tooltip: '> 2.500 € / Monat' },
   { id: 'sales', label: 'Sales / Woche', fallback: '?', target: '?', parentIds: ['icp'], team: 'sales', dynamic: true, deltaFormat: 'vs' },
   { id: 'conversion', label: 'Win Rate', fallback: '?', target: '25 %', parentIds: ['sales'], team: 'sales', computed: true, deltaFormat: 'vs' },
@@ -123,9 +125,9 @@ const METRICS: MetricNode[] = [
   { id: 'pbx-signups', label: 'PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['pbx-leads'], dynamic: true, dashed: true, muted: true, deltaFormat: 'vs', tooltip: 'Alle PBX-Signups (Grundgesamtheit für Onboarding-Quali)' },
   // Right column: Committed path
   { id: 'activated', label: 'Neue Kontingent-Kunden / Woche', fallback: '0,60', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', deltaFormat: 'delta', tooltip: 'Kunden mit Kontingent-Buchung (≥ Tier 100). Upsell-Pool für ICP. Stand Juni 2026: ~0,6/Wo brutto (manuell)' },
-  { id: 'int', label: 'Neue Kunden mit 1+ Integration / Woche', fallback: '[TODO]', target: '20', parentIds: ['activated'], team: 'onboarding', deltaFormat: 'delta' },
+  { id: 'int', label: 'Neue Kunden mit 1+ Integration / Woche', fallback: '🚧', target: '20', parentIds: ['activated'], team: 'onboarding', deltaFormat: 'delta' },
   { id: 'pb', label: 'Neue Kunden mit 3+ Playbooks / Woche', fallback: '?', target: '20', parentIds: ['activated'], team: 'onboarding', dynamic: true, deltaFormat: 'delta', tooltip: 'Preview-Accounts, die danach ≥ 3 Playbooks erstellt haben' },
-  { id: 'aha', label: 'Aha-Moment / Woche', fallback: '[TODO]', target: '30', parentIds: ['int', 'pb'], team: 'onboarding', deltaFormat: 'delta' },
+  { id: 'aha', label: 'Aha-Moment / Woche', fallback: '🚧', target: '30', parentIds: ['int', 'pb'], team: 'onboarding', deltaFormat: 'delta' },
   { id: 'trials', label: 'Agent Previews / Woche', fallback: '?', target: '80', parentIds: ['aha'], team: 'growth', dynamic: true, deltaFormat: 'delta' },
   { id: 'signup', label: 'Agent Signups / Woche', fallback: '?', target: '30', parentIds: ['trials'], team: 'growth', dynamic: true, deltaFormat: 'delta', tooltip: 'Paid Ads ab Juni 2026' },
   { id: 'preview-pbx', label: 'PBX Signup → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials', 'pbx-signups'], team: 'growth', dynamic: true, deltaFormat: 'delta', tooltip: 'PBX-Kunden, die eine Agent-Preview starten' },
@@ -372,6 +374,8 @@ function computeLiveValues(
 
 // ── Metric card component ───────────────────────────────────────────────────
 
+type ViewMode = 'ist' | 'ziel';
+
 interface MetricCardProps {
   node: MetricNode;
   values: Map<string, string>;
@@ -391,6 +395,7 @@ interface MetricCardProps {
   onToggleCollapse?: (id: string) => void;
   isCore?: boolean;
   isMuted?: boolean;
+  viewMode: ViewMode;
 }
 
 function computeDeltaPill(
@@ -421,7 +426,7 @@ function computeDeltaPill(
   };
 }
 
-function MetricCard({ node, values, targets, dynamicTooltips, comparisonValues, comparisonTooltips, onEditValue, onEditTarget, isCollapsible, isCollapsed, onToggleCollapse, isCore, isMuted }: MetricCardProps) {
+function MetricCard({ node, values, targets, dynamicTooltips, comparisonValues, comparisonTooltips, onEditValue, onEditTarget, isCollapsible, isCollapsed, onToggleCollapse, isCore, isMuted, viewMode }: MetricCardProps) {
   const val = values.get(node.id) ?? node.fallback;
   const target = targets.get(node.id) ?? '?';
   const canEditValue = !node.computed && !node.dynamic;
@@ -429,8 +434,10 @@ function MetricCard({ node, values, targets, dynamicTooltips, comparisonValues, 
   const compTooltip = comparisonTooltips?.get(node.id);
   const [showTip, setShowTip] = useState(false);
   const compVal = comparisonValues?.get(node.id);
-  const delta = compVal && !node.hideComparison ? computeDeltaPill(val, compVal, node) : null;
+  const isZiel = viewMode === 'ziel';
+  const delta = !isZiel && compVal && !node.hideComparison ? computeDeltaPill(val, compVal, node) : null;
   const muted = isMuted || node.muted;
+  const hasTarget = target && target !== '?';
 
   return (
     <div
@@ -454,31 +461,54 @@ function MetricCard({ node, values, targets, dynamicTooltips, comparisonValues, 
         </div>
       )}
       <div className="kpi-label">{node.label}</div>
-      <div className={`kpi-val-row${delta ? ' has-delta' : ''}`}>
-        <div className="kpi-val-spacer" />
-        <div
-          className={`kpi-val ${canEditValue ? 'kpi-editable' : ''}`}
-          onClick={canEditValue ? () => onEditValue(node.id) : undefined}
-        >
-          {val}
-        </div>
-        <div className="kpi-delta-slot">
-          {delta && <span className={delta.className} title={delta.tooltip}>{delta.label}</span>}
-        </div>
-      </div>
-      {target && target !== '?' ? (
-        <div
-          className="kpi-target kpi-editable"
-          onClick={() => onEditTarget(node.id)}
-        >
-          Ziel: <span className="kpi-target-val">{target}</span>
-        </div>
+
+      {isZiel ? (
+        <>
+          <div className="kpi-val-row">
+            <div
+              className={`kpi-val kpi-editable`}
+              onClick={() => onEditTarget(node.id)}
+            >
+              {hasTarget ? target : '–'}
+            </div>
+          </div>
+          <div
+            className={`kpi-ist ${canEditValue ? 'kpi-editable' : ''}`}
+            onClick={canEditValue ? () => onEditValue(node.id) : undefined}
+          >
+            Ist: <span className="kpi-ist-val">{val}</span>
+          </div>
+        </>
       ) : (
-        <div
-          className="kpi-target kpi-editable kpi-target-empty"
-          onClick={() => onEditTarget(node.id)}
-        />
+        <>
+          <div className={`kpi-val-row${delta ? ' has-delta' : ''}`}>
+            <div className="kpi-val-spacer" />
+            <div
+              className={`kpi-val ${canEditValue ? 'kpi-editable' : ''}`}
+              onClick={canEditValue ? () => onEditValue(node.id) : undefined}
+            >
+              {val}
+            </div>
+            <div className="kpi-delta-slot">
+              {delta && <span className={delta.className} title={delta.tooltip}>{delta.label}</span>}
+            </div>
+          </div>
+          {hasTarget ? (
+            <div
+              className="kpi-target kpi-editable"
+              onClick={() => onEditTarget(node.id)}
+            >
+              Ziel: <span className="kpi-target-val">{target}</span>
+            </div>
+          ) : (
+            <div
+              className="kpi-target kpi-editable kpi-target-empty"
+              onClick={() => onEditTarget(node.id)}
+            />
+          )}
+        </>
       )}
+
       {isCollapsible && (
         <button
           className="kpi-collapse-toggle"
@@ -670,6 +700,13 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
   const treeRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
+  // View mode toggle: "ist" = current values large, "ziel" = targets large.
+  const KPI_TREE_VIEW_MODE_KEY = 'kpi-tree:view-mode';
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    if (typeof window === 'undefined') return 'ist';
+    return (localStorage.getItem(KPI_TREE_VIEW_MODE_KEY) as ViewMode) || 'ist';
+  });
+
   // "Nur DE" filter — mirrors Dashboard badge, persisted in localStorage.
   const KPI_TREE_DE_ONLY_KEY = 'kpi-tree:de-only';
   const [deOnly, setDeOnly] = useState<boolean>(() => {
@@ -809,21 +846,18 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
       tgts.set('activated', fmtTarget(plgDeals) + '*');
     }
 
-    // PLG funnel targets — derived upward from Kontingent-Kunden target
-    // Kontingent (10) → /50% → Skills/Int (20) → /75% → Aha (27) → /85% → Previews (31)
-    const COMMIT_CONV = 0.5;  // 3+ Skills → Kontingent-Kunde
-    const SKILL_CONV = 0.75;  // Aha-Moment → 3+ Skills / 1+ Integration
-    const AHA_CONV = 0.85;    // Preview → Aha-Moment
+    // PLG funnel targets — derived downward from Previews target
+    // Previews (80) → ×80% → Aha (64) → ×80% → Skills/Int (51)
+    // Kontingent-Kunden target is set independently (not derived).
+    const STEP_CONV = 0.8;
     const muted = new Set(activeGoalSet.mutedMetrics);
-    const activatedTarget = t('activated');
-    if (!isNaN(activatedTarget) && !muted.has('activated')) {
-      const skillTarget = activatedTarget / COMMIT_CONV;
+    const trialsTarget = t('trials');
+    if (!isNaN(trialsTarget) && !muted.has('trials')) {
+      const ahaTarget = trialsTarget * STEP_CONV;
+      if (!tgts.has('aha') && !muted.has('aha')) tgts.set('aha', fmtTarget(ahaTarget) + '*');
+      const skillTarget = ahaTarget * STEP_CONV;
       if (!tgts.has('int') && !muted.has('int')) tgts.set('int', fmtTarget(skillTarget) + '*');
       if (!tgts.has('pb') && !muted.has('pb')) tgts.set('pb', fmtTarget(skillTarget) + '*');
-      const ahaTarget = skillTarget / SKILL_CONV;
-      if (!tgts.has('aha') && !muted.has('aha')) tgts.set('aha', fmtTarget(ahaTarget) + '*');
-      const previewTarget = ahaTarget / AHA_CONV;
-      if (!tgts.has('trials') && !muted.has('trials')) tgts.set('trials', fmtTarget(previewTarget) + '*');
     }
 
     // Compute comparison resolved values (same derived formulas, no overrides/targets)
@@ -873,6 +907,45 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
       });
     }
   }, [resolved.targets, goalSetKey]);
+
+  const [exporting, setExporting] = useState(false);
+  const handleExportPng = useCallback(async () => {
+    const el = treeRef.current;
+    if (!el || exporting) return;
+    setExporting(true);
+    try {
+      const w = el.scrollWidth;
+      const h = el.scrollHeight;
+      const bg = '#f3f4f6';
+      const rawUrl = await toPng(el, {
+        backgroundColor: bg,
+        pixelRatio: 2,
+        width: w,
+        height: h,
+        style: { width: `${w}px`, height: `${h}px`, overflow: 'visible' },
+      });
+      const pad = 48;
+      const img = new Image();
+      img.src = rawUrl;
+      await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = rej; });
+      const canvas = document.createElement('canvas');
+      canvas.width = (w + pad * 2) * 2;
+      canvas.height = (h + pad * 2) * 2;
+      const ctx = canvas.getContext('2d')!;
+      ctx.scale(2, 2);
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w + pad * 2, h + pad * 2);
+      ctx.drawImage(img, pad, pad, w, h);
+      const link = document.createElement('a');
+      link.download = `kpi-tree-${activeGoalSet.label.replace(/\s+/g, '-').toLowerCase()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    } catch (e) {
+      console.error('[KpiTree] PNG export failed:', e);
+    } finally {
+      setExporting(false);
+    }
+  }, [exporting, activeGoalSet.label]);
 
   // Draw connectors on mount + resize
   useEffect(() => {
@@ -934,6 +1007,7 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
         onToggleCollapse={collapsible ? toggleCollapse : undefined}
         isCore={activeGoalSet.coreMetrics.includes(id)}
         isMuted={activeGoalSet.mutedMetrics.includes(id)}
+        viewMode={viewMode}
       />
     );
   };
@@ -955,6 +1029,21 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
               {g.label}
             </button>
           ))}
+        </div>
+        <div className="kpi-legend-item">
+          <span style={{ color: '#9ca3af', marginRight: 4 }}>Ansicht</span>
+          <button
+            onClick={() => { setViewMode('ist'); localStorage.setItem(KPI_TREE_VIEW_MODE_KEY, 'ist'); }}
+            className={`kpi-preset-btn ${viewMode === 'ist' ? 'kpi-preset-active' : ''}`}
+          >
+            Ist
+          </button>
+          <button
+            onClick={() => { setViewMode('ziel'); localStorage.setItem(KPI_TREE_VIEW_MODE_KEY, 'ziel'); }}
+            className={`kpi-preset-btn ${viewMode === 'ziel' ? 'kpi-preset-active' : ''}`}
+          >
+            Ziel
+          </button>
         </div>
         <div className="kpi-legend-item">
           <button
@@ -980,6 +1069,14 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
             </button>
           ))}
         </div>
+        <button
+          className="kpi-preset-btn kpi-export-btn"
+          onClick={handleExportPng}
+          disabled={exporting}
+          title="Als PNG exportieren"
+        >
+          {exporting ? '...' : 'PNG'}
+        </button>
       </div>
 
       <div className="kpi-tree" ref={treeRef}>
@@ -1237,6 +1334,17 @@ const TREE_STYLES = `
   color: var(--kpi-text-2);
   font-weight: 400;
 }
+
+/* Ziel-mode: Ist annotation below the big target */
+.kpi-ist {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--kpi-text-3);
+}
+.kpi-ist-val {
+  color: var(--kpi-text-2);
+  font-weight: 400;
+}
 .kpi-delta {
   font-size: 10px;
   font-weight: 500;
@@ -1352,5 +1460,14 @@ const TREE_STYLES = `
 .kpi-preset-active:hover {
   background: #1f2937;
   color: #fff;
+}
+.kpi-export-btn {
+  margin-left: 8px;
+  border: 1px solid var(--kpi-border);
+  padding: 2px 10px;
+}
+.kpi-export-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 `;
