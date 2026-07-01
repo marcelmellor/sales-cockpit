@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 import type { Touchpoint } from './journeys';
 
 // In-product AI-Agents-Qualifizierungs-Events. Liegen in einem ANDEREN
@@ -84,8 +84,7 @@ export async function getAgentsQualificationByMastersipid(
     return new Map();
   }
 
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query: QUERY,
     params: { mastersipids: normalized },
     types: { mastersipids: ['STRING'] },

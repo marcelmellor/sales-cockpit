@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 import type { Touchpoint } from './journeys';
 
 // Anonyme Pre-Signup-Page-Views auf den Marketing-Sites (sipgate.ai /
@@ -97,8 +97,7 @@ export async function getPreSignupPageViewsByEmail(
     return new Map();
   }
 
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query: QUERY,
     params: { emails: normalized, domains: TRACKED_DOMAINS },
     types: { emails: ['STRING'], domains: ['STRING'] },

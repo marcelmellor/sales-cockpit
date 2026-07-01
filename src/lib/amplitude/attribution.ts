@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 
 // Phase 1: AI Agents only. The HubSpot tag for AI Agents is `frontdesk` — that's
 // what `?produkt=frontdesk` selects across leads/deals overview routes. Inside
@@ -104,8 +104,7 @@ export async function getAiAgentsAttributionByEmail(
     return new Map();
   }
 
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query: QUERY,
     params: { emails: normalized },
     types: { emails: ['STRING'] },

@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 
 // Top-of-funnel counts across the *entire* AI-Agents-flavoured Amplitude
 // audience (not filtered by deal). Used by the Marketing tab to show how
@@ -72,8 +72,7 @@ interface RawRow {
  * (top of funnel). Independent of which deals exist in HubSpot.
  */
 export async function getAiAgentsFunnelTop(): Promise<FunnelTopCounts> {
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query: QUERY,
     params: { event_types: TOUCHPOINT_EVENT_TYPES },
     types: { event_types: ['STRING'] },

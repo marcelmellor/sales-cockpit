@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 
 // Phase 2: full marketing-touchpoint journey for AI Agents (= frontdesk).
 // Unlike `getAiAgentsAttributionByEmail` which returns only the earliest
@@ -119,8 +119,7 @@ export async function getTouchpointsByEmail(
     return new Map();
   }
 
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query: QUERY,
     params: { emails: normalized, event_types: TOUCHPOINT_EVENT_TYPES },
     types: { emails: ['STRING'], event_types: ['STRING'] },

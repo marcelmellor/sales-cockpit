@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 import type { Touchpoint } from './journeys';
 import { getLostPreviewOverride } from './lost-preview-overrides';
 
@@ -64,8 +64,7 @@ export async function getPreviewTrialsByMastersipid(
     return new Map();
   }
 
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query: QUERY,
     params: { mastersipids: normalized },
     types: { mastersipids: ['STRING'] },

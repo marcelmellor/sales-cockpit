@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 
 // sipgate-Customer-Stammdaten aus dem kuratierten `amplitude.user_properties`-
 // Snapshot. Wir nutzen das im Marketing-Tab nur für eine Sache: die "Bestands-
@@ -41,8 +41,7 @@ export async function getCustomerCreationByMastersipid(
     return new Map();
   }
 
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query: QUERY,
     params: { mastersipids: ids },
     types: { mastersipids: ['INT64'] },

@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 
 // Playbook-Adoption nach Preview-Aktivierung.
 //
@@ -25,7 +25,6 @@ export interface PlaybookStats {
  * @param days — Rolling window in Tagen (z.B. 30, 90)
  */
 export async function getPlaybookStats(days: number): Promise<PlaybookStats> {
-  const bq = getBigQuery();
 
   const query = `
     -- 1. Accounts, die im Zeitraum eine Preview aktiviert haben
@@ -77,7 +76,7 @@ export async function getPlaybookStats(days: number): Promise<PlaybookStats> {
       (SELECT COUNTIF(playbook_count >= 3) FROM post_preview_playbooks) AS accounts_3plus
   `;
 
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query,
     params: { days },
     types: { days: 'INT64' },

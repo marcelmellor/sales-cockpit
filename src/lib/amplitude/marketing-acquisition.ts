@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 import type { Touchpoint } from './journeys';
 
 // Marketing-Acquisition über UTM/Click-IDs: für jeden User finden wir die
@@ -147,8 +147,7 @@ export async function getMarketingAcquisitionByEmail(
     return new Map();
   }
 
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query: QUERY,
     params: { emails: normalized },
     types: { emails: ['STRING'] },

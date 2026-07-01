@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 import { getLostPreviewOverridesInWindow } from './lost-preview-overrides';
 
 // Globale BQ-Counts für Funnel-Stages, unabhängig von HubSpot. Jede Stage
@@ -39,8 +39,7 @@ export interface ActivationTotals {
 }
 
 export async function getActivationTotals(days: number): Promise<ActivationTotals> {
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query: ACTIVATION_QUERY,
     params: { days },
     types: { days: 'INT64' },
@@ -189,8 +188,7 @@ export interface PreviewTrialTotals {
 export async function getPreviewTrialTotals(days: number): Promise<PreviewTrialTotals> {
   const overrides = getLostPreviewOverridesInWindow(days);
   const query = buildPreviewQuery(overrides);
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query,
     params: { days },
     types: { days: 'INT64' },

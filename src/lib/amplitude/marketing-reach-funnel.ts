@@ -1,4 +1,4 @@
-import { getBigQuery } from './client';
+import { runBigQueryQuery } from './client';
 
 // Globaler Top-of-Funnel: Anzahl unique device_ids im Zeitfenster, die ein
 // Marketing-getaggtes Event hatten (Paid-Ads via gclid/fbclid, Paid-/Content-/
@@ -61,8 +61,7 @@ export interface MarketingReachFunnelCounts {
 }
 
 export async function getMarketingReachFunnel(days: number): Promise<MarketingReachFunnelCounts> {
-  const bq = getBigQuery();
-  const [rows] = await bq.query({
+  const rows = await runBigQueryQuery({
     query: QUERY,
     params: { days },
     types: { days: 'INT64' },
