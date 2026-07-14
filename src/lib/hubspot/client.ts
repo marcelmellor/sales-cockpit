@@ -75,6 +75,16 @@ export function getHubSpotClient(): HubSpotClient {
   return new HubSpotClient();
 }
 
+// Portfolio-Produktschlüssel → HubSpot Line-Item `category`. Single source of
+// truth für die Line-Item-Klassifizierung: genutzt vom Union-Fetch in
+// `getDealsWithAssociations` (Deals mit passenden Line-Items werden auch ohne
+// gesetztes `angebotene_produkte`-Token erfasst) und von der Nachfilterung in
+// `/api/deals/overview`. Line Items sind die Source of Truth — das
+// `angebotene_produkte`-Feld ist manuell gepflegt und kann fehlen/veraltet sein.
+export const PRODUCT_LINE_ITEM_CATEGORY: Record<string, string> = {
+  frontdesk: 'AI Agent',
+};
+
 export class HubSpotClient {
   private async request<T>(
     endpoint: string,
@@ -291,6 +301,29 @@ export class HubSpotClient {
       after = response.paging?.next?.after;
     } while (after);
 
+    // Union-Fetch: das `angebotene_produkte`-Token-Filter oben verpasst Deals,
+    // bei denen das (manuell gepflegte) Feld leer/veraltet ist, obwohl die Line
+    // Items den Deal eindeutig dem Produkt zuordnen. Line Items sind die Source
+    // of Truth (siehe AGENTS.md). Wir holen daher zusätzlich alle Deals dieser
+    // Pipeline, die ein Line Item mit der passenden `category` haben, und mergen
+    // die bislang fehlenden hinein. Ohne diesen Schritt kann die spätere
+    // Line-Item-Nachfilterung in /api/deals/overview so einen Deal nicht mehr
+    // retten — sie kann nur bereits geladene Deals verwerfen, keine ergänzen.
+    const lineItemCategory = produkt ? PRODUCT_LINE_ITEM_CATEGORY[produkt] : undefined;
+    if (lineItemCategory) {
+      const dealIdsWithCategory = await this.getDealIdsWithLineItemCategory(lineItemCategory);
+      const alreadyFetched = new Set(allDeals.map(d => d.id));
+      const orphanIds = Array.from(dealIdsWithCategory).filter(id => !alreadyFetched.has(id));
+      if (orphanIds.length > 0) {
+        const orphanDeals = await this.getDealsByIds(orphanIds, properties);
+        // Line Items sind nicht pipeline-scoped — auf die angefragte Pipeline
+        // eingrenzen, damit AI-Agent-Deals aus anderen Pipelines nicht einsickern.
+        allDeals = allDeals.concat(
+          orphanDeals.filter(d => d.properties.pipeline === pipelineId),
+        );
+      }
+    }
+
     const deals = { results: allDeals };
 
     // Use batch associations API to get all company + contact associations
@@ -346,6 +379,82 @@ export class HubSpotClient {
     }));
 
     return { results: dealsWithAssociations };
+  }
+
+  // Alle Deal-IDs (über alle Pipelines) ermitteln, die mindestens ein Line Item
+  // mit der gegebenen `category` haben. Zwei Schritte, jeweils gebatcht:
+  //   1. Line-Item-Suche nach `category` (paginiert, 100/Seite).
+  //   2. Line-Item → Deal-Assoziationen (batch/read, 100 Inputs/Call).
+  // Der Aufrufer grenzt anschließend auf die gewünschte Pipeline ein.
+  private async getDealIdsWithLineItemCategory(category: string): Promise<Set<string>> {
+    const lineItemIds: string[] = [];
+    let after: string | undefined;
+    do {
+      const searchBody: {
+        properties: string[];
+        filterGroups: Array<{ filters: Array<{ propertyName: string; operator: string; value: string }> }>;
+        sorts: Array<{ propertyName: string; direction: string }>;
+        limit: number;
+        after?: string;
+      } = {
+        properties: ['category'],
+        filterGroups: [{ filters: [{ propertyName: 'category', operator: 'EQ', value: category }] }],
+        sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
+        limit: 100,
+      };
+      if (after) searchBody.after = after;
+
+      const response = await this.request<{
+        results: Array<{ id: string }>;
+        paging?: { next?: { after: string } };
+      }>('/crm/v3/objects/line_items/search', {
+        method: 'POST',
+        body: JSON.stringify(searchBody),
+      });
+      for (const li of response.results) lineItemIds.push(li.id);
+      after = response.paging?.next?.after;
+    } while (after);
+
+    const dealIds = new Set<string>();
+    if (lineItemIds.length === 0) return dealIds;
+
+    const batchSize = 100;
+    for (let i = 0; i < lineItemIds.length; i += batchSize) {
+      const batchIds = lineItemIds.slice(i, i + batchSize);
+      const response = await this.request<{
+        results: Array<{ from: { id: string }; to: Array<{ toObjectId: number }> }>;
+      }>('/crm/v4/associations/line_items/deals/batch/read', {
+        method: 'POST',
+        body: JSON.stringify({ inputs: batchIds.map(id => ({ id })) }),
+      });
+      for (const r of response.results) {
+        for (const t of r.to) dealIds.add(String(t.toObjectId));
+      }
+    }
+    return dealIds;
+  }
+
+  // Batch-Read von Deal-Properties für eine Liste von IDs (100/Call).
+  private async getDealsByIds(
+    dealIds: string[],
+    properties: string[],
+  ): Promise<Array<{ id: string; properties: Record<string, string> }>> {
+    const result: Array<{ id: string; properties: Record<string, string> }> = [];
+    const batchSize = 100;
+    for (let i = 0; i < dealIds.length; i += batchSize) {
+      const batchIds = dealIds.slice(i, i + batchSize);
+      const response = await this.request<{
+        results: Array<{ id: string; properties: Record<string, string> }>;
+      }>('/crm/v3/objects/deals/batch/read', {
+        method: 'POST',
+        body: JSON.stringify({
+          properties,
+          inputs: batchIds.map(id => ({ id })),
+        }),
+      });
+      result.push(...response.results);
+    }
+    return result;
   }
 
   // Fetch line item categories for a batch of deals.

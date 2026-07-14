@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { getHubSpotClient } from '@/lib/hubspot/client';
+import { getHubSpotClient, PRODUCT_LINE_ITEM_CATEGORY } from '@/lib/hubspot/client';
 import { getOrFetch } from '@/lib/server-cache';
 import {
   AmplitudeAttribution,
@@ -169,11 +169,9 @@ async function buildPipelineOverview(
     );
 
     // Filter: if product filter is active, drop deals that have line items but none
-    // of them match the selected product. Mapping from portfolio key → category value.
-    const PRODUCT_CATEGORY: Record<string, string> = {
-      frontdesk: 'AI Agent',
-    };
-    const requiredCategory = produkt ? PRODUCT_CATEGORY[produkt] : undefined;
+    // of them match the selected product. Mapping from portfolio key → category value
+    // lives in the HubSpot client (shared with the union-fetch in getDealsWithAssociations).
+    const requiredCategory = produkt ? PRODUCT_LINE_ITEM_CATEGORY[produkt] : undefined;
     const filteredDeals = requiredCategory
       ? dealsWithAssociations.results.filter(deal => {
           const categories = lineItemCategoriesByDeal.get(deal.id);
