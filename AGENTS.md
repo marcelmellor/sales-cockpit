@@ -332,16 +332,31 @@ fresh-from-HubSpot.
 
 ### Storage backend
 
-`src/lib/server-cache.ts` picks the backend at runtime:
+`src/lib/server-cache.ts` picks the backend at runtime by **probing the
+capability**, not by reading an env var:
 
-- **Production (Netlify Functions, `NETLIFY=true`):** `@netlify/blobs`
-  store named `hubspot-cache`. Provisioned automatically by the
-  `@netlify/plugin-nextjs` runtime — no setup, no env vars.
-- **Local dev (`next dev`, no Netlify context):** file-system fallback
-  in `.cache/blobs/` (gitignored). Without this fallback, `getStore()`
-  would throw because there are no Netlify credentials in the dev
-  process. We do not require `netlify dev` because the project's
-  `scripts/dev-prep.sh` runs `next dev` directly.
+- **Production (deployed Netlify Functions):** `@netlify/blobs` store named
+  `hubspot-cache`. Provisioned automatically by the `@netlify/plugin-nextjs`
+  runtime — no setup, no env vars.
+- **Local dev (`next dev`):** file-system fallback in `.cache/blobs/`
+  (gitignored). We do not require `netlify dev` because `scripts/dev-prep.sh`
+  runs `next dev` directly.
+
+Detection: `getBlobStore()` calls `getStore('hubspot-cache')` once (cached).
+It succeeds only when a Netlify Blobs context is injected (deployed runtime)
+and throws under local `next dev` → fs fallback. Each response's
+`cache.backend` field (`'blobs' | 'fs'`) reports which one ran, for
+diagnosis.
+
+> ⚠️ **Do NOT gate this on `process.env.NETLIFY === 'true'`.** That variable
+> is set during the Netlify *build* but is **absent at function *runtime***.
+> Gating on it silently forced every production request onto the ephemeral fs
+> fallback (writes vanish between invocations), so the cache never persisted,
+> the slow overview endpoints rebuilt on every call, and both hit the ~26s
+> function timeout → **502**. This exact bug shipped once (fixed in the commit
+> that added `getBlobStore()`); don't reintroduce it. Same reasoning for the
+> warm-vs-sync gate in `serveWarmBacked` — that one keys off
+> `NODE_ENV === 'production'` (reliable at runtime), never `NETLIFY`.
 
 Read/write errors are logged and swallowed — a broken cache must never
 break the request path. A cache miss simply re-fetches from HubSpot.
