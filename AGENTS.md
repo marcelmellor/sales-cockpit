@@ -21,25 +21,100 @@ equal "AI Agent Preview started". The preview/trial activation is tracked
 elsewhere (PBX provisioning system), not as an Amplitude event. When
 comparing funnel data, do not conflate the two.
 
-## Git workflow — NO WORKTREES, EVER
+## Branching, Commits & Session Isolation
 
-**Absolute rule: all development happens in the main checkout at `/Users/mellor/Development/sales-cockpit` on the `main` branch. Never use a git worktree. Never create a feature branch.**
+"I thought the feature was live, but it never shipped" has two root causes that
+pull in opposite directions — so guarding against only one reintroduces the other:
 
-Why: the user's local dev server runs out of the main checkout. A worktree is a separate directory on disk with its own checkout — any file you edit there is invisible to the running app. Every time an agent works in a worktree, the user ends up looking at stale UI and wondering why fixes don't land. This has happened repeatedly. Do not let it happen again.
+- **Branch rot:** work committed to a branch that was never merged.
+- **Working-tree rot:** work never committed at all — concurrent sessions piling
+  uncommitted changes into the *same* working directory until they entangle and
+  none of it ships.
 
-If a session starts and `pwd` is inside `.claude/worktrees/`:
+Feature branches *are* branch rot and don't fix working-tree rot, so
+"branch vs main" is the wrong axis. The rules below attack both roots directly:
+**session isolation**, a **hard done-gate**, and disciplined integration.
 
-1. Stop immediately. Do not run any task.
-2. Tell the user to restart Claude Code from `/Users/mellor/Development/sales-cockpit` without worktree isolation.
-3. End the session.
+**Base invariant — local `main` mirrors `origin/main` at all times.** Every
+divergence disaster starts here: the shared checkout accumulates commits that
+never reach `origin` (or the same work lands on `origin` via a squash-merge under
+a *different* SHA), so the two histories split while looking identical, and Git
+then reports conflicts where there is no real content difference. Prevent it —
+don't reconcile it after the fact:
 
-This is enforced by hooks in `.claude/settings.json`:
-- `SessionStart` aborts with a policy message if cwd is a worktree.
-- `PreToolUse` on Edit/Write/MultiEdit/NotebookEdit blocks file changes under `.claude/worktrees/`.
+- **Start clean.** Before any change-session — and before spawning a worktree —
+  run `git fetch origin && git switch main && git merge --ff-only origin/main`.
+  If the fast-forward is refused, local `main` has already drifted: stop and
+  reconcile it *first* (rebase/merge the unique local commits onto `origin/main`,
+  or discard them), never build on top of the drift.
+- **Cut worktrees from `origin/main`, never from local `HEAD`.** A worktree
+  branched off a stale checkout inherits the drift and yields a PR whose base is
+  wrong — the noisy-diff / phantom-conflict trap.
+- **Never leave commits sitting on local `main` unpushed.** Push is a separate,
+  explicit step (never auto-coupled to the commit), but it must not be *deferred*:
+  push before you end the session, before you cut a worktree, and before you step
+  away. Unpushed local-`main` commits are the seed of every "same feature, two
+  SHAs" conflict, especially once the same work also arrives through a PR.
+- **Re-sync the serving checkout after every merge.** The dev server runs from the
+  main checkout; merging a PR on GitHub does **not** update it. After a merge, in
+  the main checkout run `git fetch origin && git merge --ff-only origin/main`
+  (restart the dev server if it caches build output). Skip this and the live
+  preview keeps showing stale code — the exact "I don't see my change" trap.
 
-If a hook blocks you, the rule has been correctly applied — do not try to work around it.
+### 1. Isolate every change-session in its own git worktree
 
-Commit directly on `main`. No PR workflow, no feature branches, no long-running side branches. Small commits, often.
+Any session that will modify code works in its **own git worktree**, never in the
+shared main checkout. Two concurrent sessions then cannot entangle each other's
+working tree. (Claude Code: use `isolation: "worktree"`.) The worktree is
+disposable; what matters is that its changes reach `main` via the done-gate below
+before the session ends.
+
+**Clean up the worktree when you're done.** Once its changes have reached `main`,
+remove it — `git worktree remove <path>`, and `git worktree prune` for any that
+were deleted by hand. Never leave abandoned worktrees behind: they accumulate in
+`git worktree list`, hold stale copies that mislead the next session, and
+detached-HEAD leftovers are pure clutter. Claude Code's `isolation: "worktree"`
+auto-removes a worktree that ends unchanged, but any worktree you committed work
+in must be cleaned up explicitly.
+
+**Live-preview caveat:** the Next.js dev server runs from the main checkout and
+does **not** see edits made in a worktree — this used to bite repeatedly (agent
+edits in a worktree, user stares at stale UI). When a task needs live visual
+verification, either run the dev server from the worktree for the session, or merge
+to `main` and verify there. Never assume the running app reflects worktree edits.
+
+### 2. Done = committed + pushed + deploy-verified
+
+A change is not "done" until it is committed, pushed to `main`, and the resulting
+Netlify deploy is confirmed green. **Never end a session with uncommitted or
+unpushed changes that belong to the task.** Committing and pushing are separate
+steps: commit as you go, but **push is always an explicit step** — never auto-push
+on commit, never bundle "commit + push" into one action (global rule: never
+`git push` without asking). At session end, `git status` must be
+clean except for deliberately-ignored artifacts. If work is genuinely unfinished,
+say so explicitly and leave it committed on a clearly-named branch — not loose in a
+working tree.
+
+### 3. Choose the integration path at the first change of a session
+
+- **Direct to `main`** — for small, low-risk changes. Small commits, often;
+  the push follows as a separate explicit step.
+- **Worktree + branch + GitHub issue + PR** — for larger or riskier features where
+  a review/merge checkpoint and traceability are worth it. An opened PR must be
+  merged or closed within the session — never left to rot.
+
+Either way, the done-gate (rule 2) applies. If a change is too risky for `main`,
+gate it with a feature flag, not a long-lived branch. Issues and PRs live in this
+repo's own tracker (<https://github.com/sipgate/sales-cockpit>); reference the
+issue from the closing commit with `Closes #NN`.
+
+### 4. Guard against foreign in-flight work
+
+At the start of a change-session, check `git status`. If it already contains
+uncommitted changes you did not create, another session owns them — do not build on
+top of or commit them blindly. Surface them and either work in a fresh worktree off
+`origin/main` (per the base invariant — never off a possibly-stale local `HEAD`)
+or coordinate before touching shared files.
 
 ## HubSpot authentication — Private App Token in sipgate 2025 (27058496)
 
