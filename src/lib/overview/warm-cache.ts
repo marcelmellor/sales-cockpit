@@ -18,7 +18,8 @@
 import {
   getOrFetch,
   readCacheEntry,
-  isNetlifyRuntime,
+  isProdRuntime,
+  cacheBackend,
   type CacheMeta,
 } from '@/lib/server-cache';
 
@@ -31,7 +32,7 @@ export interface WarmBackedResult<T> {
 // when we can't resolve our own base URL. Guarded by TV_SECRET so the public
 // `/.netlify/functions/...` endpoint can't be used to burn HubSpot/BQ quota.
 export function triggerWarm(): void {
-  if (!isNetlifyRuntime()) return;
+  if (!isProdRuntime()) return;
   const base = process.env.DEPLOY_PRIME_URL || process.env.URL;
   const secret = process.env.TV_SECRET;
   if (!base || !secret) return;
@@ -57,7 +58,10 @@ export async function serveWarmBacked<T>(
   opts: { forceRefresh?: boolean } = {},
 ): Promise<WarmBackedResult<T> | null> {
   // Local dev: no warmer infrastructure → behave like before (build inline).
-  if (!isNetlifyRuntime()) {
+  // Gated on NODE_ENV (not Blobs availability): even if Blobs were somehow
+  // unreachable in production we must still NOT build synchronously there — a
+  // 50s build would blow the function timeout → 502. Better a 503 "warming".
+  if (!isProdRuntime()) {
     return getOrFetch<T>(key, ttlSeconds, builder, opts);
   }
 
@@ -70,7 +74,7 @@ export async function serveWarmBacked<T>(
     if (stale || opts.forceRefresh) triggerWarm();
     return {
       data: entry.data,
-      meta: { hit: true, cachedAt: entry.timestamp, ageMs, ttlSeconds },
+      meta: { hit: true, cachedAt: entry.timestamp, ageMs, ttlSeconds, backend: cacheBackend() },
     };
   }
 
