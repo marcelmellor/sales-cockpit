@@ -492,3 +492,68 @@ The local dev server runs on **`http://localhost:3020`**. Never navigate to
 browser automation tools (Claude in Chrome, preview tools, etc.). The
 Caddy URL triggers certificate warnings, auth redirects, and other issues
 that break automated testing. Always use `http://localhost:3020` directly.
+
+## Cache-Warmer for the slow overview endpoints
+
+`/api/leads/overview?produkt=frontdesk` and `/api/marketing/funnel` need
+**34–50 s** to build on a cold cache (heavy HubSpot fan-out + Amplitude
+BigQuery). Netlify kills a synchronous function at ~26 s, so these two
+endpoints used to 502 permanently: the server-side Blobs cache is only
+written *after* a successful build, the build never finished in time, so the
+cache never warmed and every request re-timed-out. (`/api/deals/overview`
+at ~12 s stayed under the limit — that's why only these two broke.)
+
+**Fix:** the slow builds no longer run on the request path. A background
+function keeps the cache hot; the routes only ever read it.
+
+### Moving parts
+
+- `src/lib/overview/leads.ts` / `marketing-funnel.ts` — the extracted
+  `buildLeadsOverview` / `buildMarketingFunnel` builders (moved out of the
+  route files so a plain Netlify function can import them — route files
+  import `next/server` and are not bundlable there). The routes now keep
+  only their `GET` handler and re-export the lead types.
+- `src/lib/overview/warm-targets.ts` — single source of truth for *what*
+  is warmed (`getWarmTargets()`) and the sequential rebuild-and-write loop
+  (`warmAllTargets()`). Targets: `leads-overview:frontdesk` and
+  `marketing-funnel:frontdesk:{30,90,all}d` (the three Marketing-tab date
+  presets; `all` is recomputed each run via `getDaysForPreset('all')` so its
+  key tracks the value the client sends). Comparison windows (×2) are **not**
+  warmed — they fall back to the cold-start path.
+- `src/lib/overview/warm-cache.ts` — `serveWarmBacked()`, the read-side used
+  by the two routes. On Netlify it **never builds synchronously**: serves the
+  cached entry (even if stale, nudging the warmer out-of-band), or returns
+  `null` on a true cold miss → the route answers `503 { warming: true }`.
+  Off Netlify (`next dev`) it falls back to the old synchronous `getOrFetch`.
+- `netlify/functions/warm-overview-cache-background.mts` — `config.background`
+  (15-min budget). Runs `warmAllTargets()`. The **only** place the slow
+  builds run in production.
+- `netlify/functions/warm-overview-cache-scheduled.mts` —
+  `config.schedule = "*/4 * * * *"` (30 s budget, too short to build). It
+  only fires the background function (which 202s immediately). Scheduled
+  functions run **only on published production deploys**.
+- Frontend (`src/app/page.tsx`): the leads + marketing queries `retry: 6,
+  retryDelay: 10_000` so a cold-start `503` is bridged (~60 s) until the
+  warmer has populated the cache, instead of surfacing an error.
+
+### Auth / env
+
+The background function is public (`/.netlify/functions/…`), so it is guarded
+by **`TV_SECRET`** (header `x-warm-secret`) — the same secret `/tv` and the
+route bypass already use. No new env var to provision. The scheduled function
+and `triggerWarm()` resolve the self base URL from Netlify's built-in
+`DEPLOY_PRIME_URL` / `URL`.
+
+### Gotchas
+
+- Bundling: the Netlify function imports the builder tree which uses the `@/`
+  path alias. Netlify's esbuild bundler resolves it from the repo
+  `tsconfig.json` (verified). The builder tree must stay free of `next/*`
+  imports or it won't bundle — keep `getSession`/`NextResponse` in the route
+  files, not in `src/lib/overview/`.
+- Cadence vs. TTL: warmer runs every 4 min; cache TTLs are 5 min (leads) /
+  30 min (funnel). If the warmer dies, `serveWarmBacked` keeps serving the
+  last cached entry rather than 502ing.
+- This is a stopgap on top of the server-side cache. Once BigQuery
+  replication lands (see "Server-side response cache"), the builds get fast
+  enough to run in-band and both the warmer and the cache can go.
