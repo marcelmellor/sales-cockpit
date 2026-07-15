@@ -31,11 +31,54 @@ export interface CacheMeta {
   cachedAt: number;
   ageMs: number;
   ttlSeconds: number;
+  /** Which storage backend served/stored this entry. Purely diagnostic. */
+  backend?: CacheBackend;
 }
 
-function isNetlifyEnv(): boolean {
-  // Netlify Functions setzen NETLIFY=true. Lokales `next dev` nicht.
-  return process.env.NETLIFY === 'true';
+export type CacheBackend = 'blobs' | 'fs';
+
+// Runtime detection — DO NOT gate on `process.env.NETLIFY`. That variable is
+// set during the Netlify *build*, but is NOT reliably present at function
+// *runtime*. Gating cache storage on it made every production request use the
+// ephemeral fs fallback below (writes vanish between invocations), so the
+// server cache never persisted and the slow overview endpoints rebuilt on
+// every call → Netlify timeout → 502. Instead we probe the real capability:
+// getStore() succeeds only when a Netlify Blobs context is injected (deployed
+// Functions), and throws under local `next dev`.
+let cachedStore: ReturnType<typeof getStore> | null | undefined;
+function getBlobStore(): ReturnType<typeof getStore> | null {
+  if (cachedStore !== undefined) return cachedStore;
+  try {
+    cachedStore = getStore(STORE_NAME);
+  } catch (err) {
+    console.warn(
+      '[server-cache] Netlify Blobs unavailable, using fs fallback:',
+      err instanceof Error ? err.message : err,
+    );
+    cachedStore = null;
+  }
+  return cachedStore;
+}
+
+/** True when the shared Netlify Blobs cache is reachable (deployed runtime). */
+export function isBlobsAvailable(): boolean {
+  return getBlobStore() !== null;
+}
+
+/** Which backend the cache is currently using. Diagnostic only. */
+export function cacheBackend(): CacheBackend {
+  return isBlobsAvailable() ? 'blobs' : 'fs';
+}
+
+/**
+ * True in a deployed (serverless) build, false under local `next dev`. On
+ * Netlify `NODE_ENV=production`; `next dev` sets `development`. Used to decide
+ * whether the slow overview builds may run synchronously (dev only) or must be
+ * served exclusively from the warm cache (prod — a sync build there would
+ * exceed the function timeout and 502).
+ */
+export function isProdRuntime(): boolean {
+  return process.env.NODE_ENV === 'production';
 }
 
 function localPath(key: string): string {
@@ -44,9 +87,9 @@ function localPath(key: string): string {
 }
 
 async function readEntry<T>(key: string): Promise<CacheEntry<T> | null> {
-  if (isNetlifyEnv()) {
+  const store = getBlobStore();
+  if (store) {
     try {
-      const store = getStore(STORE_NAME);
       const raw = await store.get(key, { type: 'json' });
       return (raw as CacheEntry<T> | null) ?? null;
     } catch (err) {
@@ -63,9 +106,9 @@ async function readEntry<T>(key: string): Promise<CacheEntry<T> | null> {
 }
 
 async function writeEntry<T>(key: string, entry: CacheEntry<T>): Promise<void> {
-  if (isNetlifyEnv()) {
+  const store = getBlobStore();
+  if (store) {
     try {
-      const store = getStore(STORE_NAME);
       await store.setJSON(key, entry);
     } catch (err) {
       console.warn(`[server-cache] blob write failed for ${key}:`, err);
@@ -94,6 +137,7 @@ export async function getOrFetch<T>(
   fetcher: () => Promise<T>,
   options: { forceRefresh?: boolean } = {},
 ): Promise<{ data: T; meta: CacheMeta }> {
+  const backend = cacheBackend();
   if (!options.forceRefresh) {
     const cached = await readEntry<T>(key);
     if (cached) {
@@ -101,7 +145,7 @@ export async function getOrFetch<T>(
       if (ageMs <= ttlSeconds * 1000) {
         return {
           data: cached.data,
-          meta: { hit: true, cachedAt: cached.timestamp, ageMs, ttlSeconds },
+          meta: { hit: true, cachedAt: cached.timestamp, ageMs, ttlSeconds, backend },
         };
       }
     }
@@ -111,7 +155,7 @@ export async function getOrFetch<T>(
   await writeEntry(key, entry);
   return {
     data,
-    meta: { hit: false, cachedAt: entry.timestamp, ageMs: 0, ttlSeconds },
+    meta: { hit: false, cachedAt: entry.timestamp, ageMs: 0, ttlSeconds, backend },
   };
 }
 
@@ -133,15 +177,6 @@ export async function readCacheEntry<T>(
  */
 export async function writeCacheEntry<T>(key: string, data: T): Promise<void> {
   await writeEntry<T>(key, { data, timestamp: Date.now() });
-}
-
-/**
- * True, wenn wir im Netlify-Function-Runtime laufen (nicht lokales `next dev`).
- * Steuert, ob der Warmer-Pfad aktiv ist oder auf synchrones Inline-Build
- * zurückfällt.
- */
-export function isNetlifyRuntime(): boolean {
-  return isNetlifyEnv();
 }
 
 /**
