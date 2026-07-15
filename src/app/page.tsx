@@ -270,6 +270,12 @@ function PipelineOverviewContent() {
     },
     enabled: isAuthenticated && !!selectedProdukt,
     staleTime: 5 * 60 * 1000,
+    // Cold-Start: der Server antwortet 503 "warming" solange der Background-
+    // Warmer den Cache noch nicht gefüllt hat. Lang genug retryen (12×10s ≈ 2min),
+    // um den sequentiellen Warmer-Lauf (~110s für alle Targets) zu überdauern,
+    // statt sofort einen Fehler zu zeigen. Panels zeigen derweil localStorage-Daten.
+    retry: 12,
+    retryDelay: 10_000,
     initialData: () =>
       leadsCacheKey ? getCachedData<LeadsOverviewResponse>(leadsCacheKey) ?? undefined : undefined,
   });
@@ -332,6 +338,10 @@ function PipelineOverviewContent() {
       selectedProdukt === 'frontdesk' &&
       (effectiveViewMode === 'marketing' || effectiveViewMode === 'dashboard' || effectiveViewMode === 'kpi-tree'),
     staleTime: 30 * 60 * 1000,
+    // Cold-Start: 503 "warming" überbrücken bis der Background-Warmer den
+    // Funnel-Cache gefüllt hat (Build ~50s). Siehe Leads-Query oben.
+    retry: 12,
+    retryDelay: 10_000,
     // Beim Date-Preset-Wechsel die vorherigen Daten im UI lassen statt
     // Loading-Spinner zu zeigen. Marketing-Touch zeigt kurz die alten Zahlen,
     // dann liest sich das Diagramm sauber zur neuen Auflösung um.

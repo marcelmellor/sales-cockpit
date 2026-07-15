@@ -116,6 +116,35 @@ export async function getOrFetch<T>(
 }
 
 /**
+ * Liest einen Cache-Eintrag ROH aus — ohne TTL-Prüfung. Der Warmer-Read-Pfad
+ * (`serveWarmBacked`) entscheidet selbst über Staleness und serviert bewusst
+ * auch abgelaufene Einträge, statt synchron neu zu bauen. Gibt `null` bei Miss.
+ */
+export async function readCacheEntry<T>(
+  key: string,
+): Promise<{ data: T; timestamp: number } | null> {
+  return readEntry<T>(key);
+}
+
+/**
+ * Schreibt `data` mit aktuellem Timestamp in den Cache. Benutzt vom
+ * Background-Warmer, der die teuren Builds außerhalb des Request-Pfads
+ * berechnet und die fertigen Responses hier ablegt.
+ */
+export async function writeCacheEntry<T>(key: string, data: T): Promise<void> {
+  await writeEntry<T>(key, { data, timestamp: Date.now() });
+}
+
+/**
+ * True, wenn wir im Netlify-Function-Runtime laufen (nicht lokales `next dev`).
+ * Steuert, ob der Warmer-Pfad aktiv ist oder auf synchrones Inline-Build
+ * zurückfällt.
+ */
+export function isNetlifyRuntime(): boolean {
+  return isNetlifyEnv();
+}
+
+/**
  * Stabiler Hash über eine Liste von Strings (z.B. dealIds), damit die
  * Reihenfolge im Cache-Key egal ist.
  */
