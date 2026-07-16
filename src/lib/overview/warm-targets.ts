@@ -69,6 +69,25 @@ export interface WarmResult {
   error?: string;
 }
 
+// ⛔ EMERGENCY KILL SWITCH — warmer fully disabled 2026-07-16.
+//
+// The warmer rebuilt ALL targets on EVERY invocation, ignoring the cache TTL
+// entirely: the cron fires every 4 min (see warm-overview-cache-scheduled.mts)
+// and each run re-ran ~40 Amplitude BigQuery queries regardless of how fresh
+// the cached entry was → ~1000 $/day of BigQuery cost from the 2026-07-15
+// deploy onwards. Warmer completely disabled to stop the bleed immediately.
+//
+// Effect while disabled: `serveWarmBacked` keeps serving the last cached entry
+// (Netlify Blobs persist across deploys), so the leads/marketing endpoints
+// stay up but their data freezes — no new BigQuery spend. This is the single
+// choke point: in production the routes never build inline, so a no-op here
+// guarantees zero warmer-driven BigQuery usage even if a trigger still fires.
+//
+// TODO(re-enable): the proper fix is to honour the TTL — only rebuild a target
+// whose cached entry is actually stale (reuse getOrFetch's age check) instead
+// of unconditionally rebuilding. Do NOT just delete this guard.
+const WARMER_DISABLED: boolean = true;
+
 // Rebuilds every warm target and writes it to the shared cache. Runs the
 // targets **sequentially** on purpose: each build already fans out heavily
 // against HubSpot (rate-limited to 4 concurrent) and BigQuery, so running them
@@ -76,6 +95,12 @@ export interface WarmResult {
 // ~3 min, well inside the 15-min background-function budget. A single failing
 // target is logged and skipped — it must not abort the others.
 export async function warmAllTargets(): Promise<WarmResult[]> {
+  if (WARMER_DISABLED) {
+    console.warn(
+      '[warm-cache] warmer is DISABLED (emergency kill switch) — skipping all builds, no BigQuery usage',
+    );
+    return [];
+  }
   const results: WarmResult[] = [];
   for (const target of getWarmTargets()) {
     const start = Date.now();
