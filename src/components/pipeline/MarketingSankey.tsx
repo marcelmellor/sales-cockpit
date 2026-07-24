@@ -2,133 +2,32 @@
 
 import { useMemo } from 'react';
 import type { MarketingFunnelJourney } from '@/lib/marketing/funnel-types';
-import type { Touchpoint } from '@/lib/amplitude/journeys';
+import {
+  categorize,
+  COLUMN_REGISTRY,
+  COL1_META,
+  COL1_ORDER,
+  COL2_META,
+  COL2_ORDER,
+  COL3_META,
+  COL3_ORDER,
+  COL4_META,
+  COL4_ORDER,
+  COL_PREVIEW_META,
+  COL_PREVIEW_ORDER,
+  type ColumnKey,
+  type DealCategory,
+} from '@/lib/marketing/flow-model';
 
 // 5-column Sankey-flow visualisation der AI-Agents-Marketing-Deals.
 // Klassifiziert jeden Deal nach Activation / Preview / Quali / Lead / Outcome
 // und rendert die Pfad-Flüsse als kurvige SVG-Bänder. Pure SVG ohne D3 — bei
-// ~75 Deals × 14 Kategorien lohnt sich keine Lib.
+// ~75 Deals × 14 Kategorien lohnt sich keine Lib. Klassifikation + Meta liegen
+// in `@/lib/marketing/flow-model` (geteilt mit der Zeitverlauf-View).
 
-type Col1 = 'agent_signup' | 'pbx_signup' | 'contact_form' | 'bestandskunde' | 'andere';
-type ColPreview = 'preview_yes' | 'preview_no';
-type Col2 = 'inproduct' | 'onboarding' | 'andere';
-type Col3 = 'lead_gte_2500' | 'lead_lt_2500' | 'lead_unknown_min' | 'no_lead';
-type Col4 = 'deal_gte_450' | 'deal_lt_450' | 'deal_unknown_mrr' | 'no_deal';
-
-interface DealCategory {
-  col1: Col1;
-  colPreview: ColPreview;
-  col2: Col2;
-  col3: Col3;
-  col4: Col4;
-}
-
-function categorize(j: MarketingFunnelJourney): DealCategory {
-  const tps = j.touchpoints;
-  // chronologically earliest signup wins (Agent vs PBX). Fallback chain:
-  // signup → Bestandskunde (sipgate-Account vor unserem Tracking) → andere.
-  const earliestSignup = tps.find(
-    (t: Touchpoint) =>
-      t.anchor === 'signup_atlantis_frontdesk' || t.anchor === 'signup_atlantis_other_product',
-  );
-  const hasContactForm = tps.some(
-    (t: Touchpoint) => t.anchor === 'lead_form_submitted',
-  );
-  const col1: Col1 =
-    earliestSignup?.anchor === 'signup_atlantis_frontdesk'
-      ? 'agent_signup'
-      : earliestSignup?.anchor === 'signup_atlantis_other_product'
-        ? 'pbx_signup'
-        : j.customerSince
-          ? 'bestandskunde'
-          : hasContactForm
-            ? 'contact_form'
-            : 'andere';
-
-  const colPreview: ColPreview = tps.some(
-    (t: Touchpoint) => t.anchor === 'preview_trial_started',
-  )
-    ? 'preview_yes'
-    : 'preview_no';
-
-  const earliestQuali = tps.find(
-    (t: Touchpoint) =>
-      t.anchor === 'agents_qualification_onboarding' || t.anchor === 'agents_qualification_inproduct',
-  );
-  const col2: Col2 =
-    earliestQuali?.anchor === 'agents_qualification_onboarding'
-      ? 'onboarding'
-      : earliestQuali?.anchor === 'agents_qualification_inproduct'
-        ? 'inproduct'
-        : 'andere';
-
-  const col3: Col3 = !j.hasLead
-    ? 'no_lead'
-    : j.minuteBucket === 'lt_threshold'
-      ? 'lead_lt_2500'
-      : j.minuteBucket === 'gte_threshold'
-        ? 'lead_gte_2500'
-        : 'lead_unknown_min';
-  const col4: Col4 = !j.hasDeal
-    ? 'no_deal'
-    : j.mrrBucket === 'gte_threshold'
-      ? 'deal_gte_450'
-      : j.mrrBucket === 'lt_threshold'
-        ? 'deal_lt_450'
-        : 'deal_unknown_mrr';
-
-  return { col1, colPreview, col2, col3, col4 };
-}
-
-const COL1_META: Record<Col1, { label: string; color: string }> = {
-  agent_signup: { label: 'Agent Signup', color: '#10b981' },
-  pbx_signup: { label: 'PBX Signup', color: '#6366f1' },
-  contact_form: { label: 'Contact Form', color: '#f59e0b' },
-  bestandskunde: { label: 'Bestandskunde', color: '#94a3b8' },
-  andere: { label: 'andere', color: '#cbd5e1' },
-};
-const COL_PREVIEW_META: Record<ColPreview, { label: string; color: string }> = {
-  preview_yes: { label: 'Preview gestartet', color: '#06b6d4' },
-  preview_no: { label: 'keine Preview', color: '#d1d5db' },
-};
-const COL2_META: Record<Col2, { label: string; color: string }> = {
-  inproduct: { label: 'In-Product-Quali', color: '#f97316' },
-  onboarding: { label: 'Onboarding-Quali', color: '#8b5cf6' },
-  andere: { label: 'keine Quali', color: '#a3a3a3' },
-};
-const COL3_META: Record<Col3, { label: string; color: string }> = {
-  lead_gte_2500: { label: 'Lead ≥ 2.500 Min', color: '#2563eb' },
-  lead_lt_2500: { label: 'Lead < 2.500 Min', color: '#7dd3fc' },
-  lead_unknown_min: { label: 'Lead (Min unbekannt)', color: '#f472b6' },
-  no_lead: { label: 'kein Lead', color: '#c4b5fd' },
-};
-const COL4_META: Record<Col4, { label: string; color: string }> = {
-  deal_gte_450: { label: 'Deal ≥ 450 € MRR', color: '#059669' },
-  deal_lt_450: { label: 'Deal < 450 € MRR', color: '#0891b2' },
-  deal_unknown_mrr: { label: 'Deal (MRR unbekannt)', color: '#d97706' },
-  no_deal: { label: 'kein Deal', color: '#cbd5e1' },
-};
-
-const COL1_ORDER: Col1[] = ['agent_signup', 'pbx_signup', 'contact_form', 'bestandskunde', 'andere'];
-const COL_PREVIEW_ORDER: ColPreview[] = ['preview_yes', 'preview_no'];
-const COL2_ORDER: Col2[] = ['onboarding', 'inproduct', 'andere'];
-const COL3_ORDER: Col3[] = ['lead_gte_2500', 'lead_lt_2500', 'lead_unknown_min', 'no_lead'];
-const COL4_ORDER: Col4[] = ['deal_gte_450', 'deal_lt_450', 'deal_unknown_mrr', 'no_deal'];
-
-export type ColumnKey = 'col1' | 'colPreview' | 'col2' | 'col3' | 'col4';
-
-// Spalten-Metadaten — wird sowohl von der Sankey-Layout-Funktion als auch
-// vom MarketingView (Toolbar) benutzt, damit die Reihenfolge konsistent bleibt.
-export const COLUMN_REGISTRY: ReadonlyArray<{
-  key: ColumnKey;
-  label: string;
-}> = [
-  { key: 'col1', label: 'Einstieg' },
-  { key: 'colPreview', label: 'Agent Preview (Trial)' },
-  { key: 'col2', label: 'Qualifizierung' },
-  { key: 'col3', label: 'HubSpot Lead' },
-  { key: 'col4', label: 'HubSpot Deal' },
-];
+// Für Abwärtskompatibilität re-exportiert — Konsumenten sollten künftig direkt
+// aus `@/lib/marketing/flow-model` importieren.
+export { COLUMN_REGISTRY, type ColumnKey };
 
 interface NodeBox {
   id: string;

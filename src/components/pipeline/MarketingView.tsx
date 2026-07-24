@@ -10,8 +10,10 @@ import type {
 import type { Touchpoint } from '@/lib/amplitude/journeys';
 import { formatTouchpointLabel } from '@/lib/marketing/touchpoint-label';
 import { hubspotDealUrl } from '@/lib/hubspot/urls';
-import { MarketingSankey, COLUMN_REGISTRY, type ColumnKey } from './MarketingSankey';
+import { MarketingSankey } from './MarketingSankey';
+import { COLUMN_REGISTRY, type ColumnKey } from '@/lib/marketing/flow-model';
 import { MarketingFunnel } from './MarketingFunnel';
+import { MarketingConversionOverTime } from './MarketingConversionOverTime';
 import {
   DATE_PRESETS,
   HARD_FLOOR_DATE_MS as HARD_FLOOR_DATE,
@@ -29,6 +31,10 @@ interface MarketingViewProps {
    *  Query (BQ) das Window braucht — bei Toggle dort die Query neu fetchen. */
   datePresetKey: DatePresetKey;
   onDatePresetChange: (key: DatePresetKey) => void;
+  /** Baut Deep-Links auf die Deals-/Leads-Ansicht, gefiltert auf die
+   *  übergebenen HubSpot-IDs. Von page.tsx durchgereicht (kennt Router + URL). */
+  buildDealsHref: (dealIds: string[]) => string;
+  buildLeadsHref: (leadIds: string[]) => string;
 }
 
 export function MarketingView({
@@ -37,6 +43,8 @@ export function MarketingView({
   isFetching,
   datePresetKey,
   onDatePresetChange,
+  buildDealsHref,
+  buildLeadsHref,
 }: MarketingViewProps) {
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() =>
     COLUMN_REGISTRY.map(c => c.key).filter(k => k !== 'colPreview'),
@@ -69,19 +77,30 @@ export function MarketingView({
   type FunnelGrouping = 'marketingTouch' | 'activation';
   const [funnelGrouping, setFunnelGrouping] = useState<FunnelGrouping>('activation');
 
-  const filteredJourneys = useMemo(() => {
-    if (!data) return [];
+  // Unteransicht des Marketing-Tabs: 'flow' = Funnel + Sankey + Journey-Tabelle,
+  // 'timeline' = Wochen-/Monats-Conversion zwischen zwei Flow-Punkten. Beide
+  // teilen sich denselben Date-Filter (filteredJourneys).
+  type SubView = 'flow' | 'timeline';
+  const [subView, setSubView] = useState<SubView>('flow');
+
+  // Datums-Cutoff (ms) des aktiven Presets — Floor immer angewendet. Wird für
+  // den Flow (createdate-Filter) UND für die Zeitverlauf-View (Quell-Event-
+  // Filter) benutzt, damit der Datums-Filter in beiden Ansichten greift.
+  const cutoffMs = useMemo(() => {
     const preset = DATE_PRESETS.find(p => p.key === datePresetKey) ?? DATE_PRESETS[DATE_PRESETS.length - 1];
     const presetCutoff =
       preset.days === null ? HARD_FLOOR_DATE : +new Date() - preset.days * 24 * 60 * 60 * 1000;
-    // Floor immer angewendet — auch "Alle" geht nicht weiter zurück.
-    const cutoff = Math.max(presetCutoff, HARD_FLOOR_DATE);
+    return Math.max(presetCutoff, HARD_FLOOR_DATE);
+  }, [datePresetKey]);
+
+  const filteredJourneys = useMemo(() => {
+    if (!data) return [];
     return data.journeys.filter(j => {
       if (!j.createdate) return false;
       const t = new Date(j.createdate).getTime();
-      return Number.isFinite(t) && t >= cutoff;
+      return Number.isFinite(t) && t >= cutoffMs;
     });
-  }, [data, datePresetKey]);
+  }, [data, cutoffMs]);
 
   if (isLoading && !data) {
     return (
@@ -266,28 +285,80 @@ export function MarketingView({
   );
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <SubViewToggle active={subView} onChange={setSubView} />
+      </div>
       <DateFilterBar
         active={datePresetKey}
         onChange={onDatePresetChange}
         totalEntries={data.journeys.length}
         filteredEntries={filteredJourneys.length}
+        leadingLabel={subView === 'timeline' ? 'Quell-Event in den letzten' : 'Erstellt in den letzten'}
+        showCount={subView === 'flow'}
       />
-      <MarketingFunnel
-        stages={dynamicFunnel}
-        visibleStages={visibleFunnelStages}
-        onToggleStage={toggleFunnelStage}
-        grouping={funnelGrouping}
-        onGroupingChange={setFunnelGrouping}
-        isFetching={isFetching}
-      />
-      <MarketingSankey
-        journeys={filteredJourneys}
-        marketingTouchTotal={marketingTouch}
-        signupTotal={signup}
-        visibleColumns={visibleColumns}
-        onToggleColumn={toggleColumn}
-      />
-      <JourneyTable journeys={tableJourneys} />
+      {subView === 'flow' ? (
+        <>
+          <MarketingFunnel
+            stages={dynamicFunnel}
+            visibleStages={visibleFunnelStages}
+            onToggleStage={toggleFunnelStage}
+            grouping={funnelGrouping}
+            onGroupingChange={setFunnelGrouping}
+            isFetching={isFetching}
+          />
+          <MarketingSankey
+            journeys={filteredJourneys}
+            marketingTouchTotal={marketingTouch}
+            signupTotal={signup}
+            visibleColumns={visibleColumns}
+            onToggleColumn={toggleColumn}
+          />
+          <JourneyTable journeys={tableJourneys} />
+        </>
+      ) : (
+        <MarketingConversionOverTime
+          journeys={data.journeys}
+          cutoffMs={cutoffMs}
+          isFetching={isFetching}
+          buildDealsHref={buildDealsHref}
+          buildLeadsHref={buildLeadsHref}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-View-Toggle (Flow ↔ Zeitverlauf)
+// ---------------------------------------------------------------------------
+
+function SubViewToggle({
+  active,
+  onChange,
+}: {
+  active: 'flow' | 'timeline';
+  onChange: (v: 'flow' | 'timeline') => void;
+}) {
+  const items: Array<{ key: 'flow' | 'timeline'; label: string }> = [
+    { key: 'flow', label: 'Flow' },
+    { key: 'timeline', label: 'Conversion über Zeit' },
+  ];
+  return (
+    <div className="inline-flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+      {items.map(it => (
+        <button
+          key={it.key}
+          type="button"
+          onClick={() => onChange(it.key)}
+          className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+            active === it.key
+              ? 'bg-white text-gray-900 shadow-sm'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          {it.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -301,13 +372,20 @@ interface DateFilterBarProps {
   onChange: (key: DatePresetKey) => void;
   totalEntries: number;
   filteredEntries: number;
+  /** Führender Text vor den Presets. Flow: „Erstellt in den letzten",
+   *  Zeitverlauf: „Quell-Event in den letzten" (dort greift der Filter auf
+   *  das Anker-Datum, nicht auf createdate). */
+  leadingLabel: string;
+  /** Entry-Zähler rechts einblenden (nur sinnvoll im Flow, wo die createdate-
+   *  gefilterte Journey-Menge die Basis ist). */
+  showCount: boolean;
 }
 
-function DateFilterBar({ active, onChange, totalEntries, filteredEntries }: DateFilterBarProps) {
+function DateFilterBar({ active, onChange, totalEntries, filteredEntries, leadingLabel, showCount }: DateFilterBarProps) {
   return (
     <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 flex items-center justify-between flex-wrap gap-3">
       <div className="flex items-center gap-2">
-        <span className="text-xs text-gray-500">Erstellt in den letzten</span>
+        <span className="text-xs text-gray-500">{leadingLabel}</span>
         <div className="flex items-center gap-1">
           {DATE_PRESETS.map(p => (
             <button
@@ -325,9 +403,11 @@ function DateFilterBar({ active, onChange, totalEntries, filteredEntries }: Date
           ))}
         </div>
       </div>
-      <div className="text-xs text-gray-500 tabular-nums">
-        {filteredEntries.toLocaleString('de-DE')} von {totalEntries.toLocaleString('de-DE')} Entries
-      </div>
+      {showCount && (
+        <div className="text-xs text-gray-500 tabular-nums">
+          {filteredEntries.toLocaleString('de-DE')} von {totalEntries.toLocaleString('de-DE')} Entries
+        </div>
+      )}
     </div>
   );
 }
