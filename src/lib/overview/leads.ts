@@ -41,6 +41,7 @@ export interface LeadOverviewItem {
   leadStageIsClosed: boolean;
   leadSource: string | null; // free-text e.g. "Rueckruf anfordern (Frontdesk)"
   source: string | null; // enum e.g. "Contact Form"
+  disqualificationReason: string | null; // HubSpot enum-Rohwert, z.B. "kein Interesse", "WVL"
   product: string[]; // selected product keys, e.g. ["frontdesk"]
   leadAge: number; // days since creation
   daysInStage: number; // Tage in aktueller Lead-Stage (-1 wenn unbekannt)
@@ -254,6 +255,7 @@ export async function buildLeadsOverview(produkt: string | null): Promise<LeadsO
         leadStageIsClosed: stage?.metadata?.isClosed === 'true',
         leadSource: lead.properties.lead_source || null,
         source: lead.properties.source || null,
+        disqualificationReason: lead.properties.hs_lead_disqualification_reason || null,
         product: productList,
         leadAge: calculateLeadAge(lead.properties.hs_createdate),
         daysInStage: stageInfoById.get(lead.id)?.daysInStage ?? -1,

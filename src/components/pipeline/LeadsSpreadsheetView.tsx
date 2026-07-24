@@ -96,6 +96,7 @@ type ColumnKey =
   | 'leadStage'
   | 'source'
   | 'leadSource'
+  | 'disqualificationReason'
   | 'product'
   | 'minuten'
   | 'inboundVolumen'
@@ -124,6 +125,21 @@ interface ColumnDef {
   getSortValue: (l: LeadOverviewItem) => number | string | null;
   render: (l: LeadOverviewItem) => React.ReactNode;
   getCsvValue: (l: LeadOverviewItem) => string;
+}
+
+// Bei diesen HubSpot-Enum-Optionen weicht der gespeicherte Rohwert vom
+// Anzeige-Label ab. Für alle übrigen Werte ist Rohwert === Label, deshalb
+// dienen nur die Ausnahmen als Override (Fallback = Rohwert).
+const DISQUALIFICATION_REASON_LABELS: Record<string, string> = {
+  'schlechtes Timing': 'schlechtes Timing (> 6 Monate)',
+  'Partner-Lead': 'Partner oder Partner-Lead',
+  WVL: 'Nicht erreicht / Wiedervorlage',
+};
+
+function disqualificationReasonLabel(l: LeadOverviewItem): string {
+  const raw = l.disqualificationReason;
+  if (!raw) return '';
+  return DISQUALIFICATION_REASON_LABELS[raw] ?? raw;
 }
 
 const COLUMNS: ColumnDef[] = [
@@ -168,6 +184,21 @@ const COLUMNS: ColumnDef[] = [
     getSortValue: (l) => (l.leadSource || '').toLowerCase(),
     render: (l) => <span className="text-gray-600">{l.leadSource || '—'}</span>,
     getCsvValue: (l) => l.leadSource || '',
+  },
+  {
+    key: 'disqualificationReason',
+    label: 'Disqualifizierungsgrund',
+    sortable: true,
+    getSortValue: (l) => disqualificationReasonLabel(l).toLowerCase(),
+    render: (l) => {
+      const label = disqualificationReasonLabel(l);
+      return label ? (
+        <span className="text-gray-600">{label}</span>
+      ) : (
+        <span className="text-gray-400">—</span>
+      );
+    },
+    getCsvValue: (l) => disqualificationReasonLabel(l),
   },
   {
     key: 'product',

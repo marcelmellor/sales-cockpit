@@ -886,6 +886,7 @@ export class HubSpotClient {
       'agents_minuten',
       'anrufvolumen',
       'inbound_volumen',
+      'hs_lead_disqualification_reason',
     ];
 
     let allLeads: Array<{
