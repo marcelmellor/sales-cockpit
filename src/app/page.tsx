@@ -892,11 +892,66 @@ function PipelineOverviewContent() {
     [leadsFilter, activeLeadsBadges],
   );
 
+  // Deep-Link-Kohorte aus der Marketing-Zeitverlauf-View: `?dealIds=a,b,c` bzw.
+  // `?leadIds=a,b,c` schränken die Deals- bzw. Leads-Ansicht auf genau diese
+  // HubSpot-IDs ein (die konvertierten Deals/Leads einer Wochen-/Monats-
+  // Kohorte). Override — der normale FilterBuilder wird dann übersprungen,
+  // damit „genau diese Einträge" gilt.
+  const cohortDealIds = useMemo(() => {
+    const raw = searchParams.get('dealIds');
+    if (!raw) return null;
+    const ids = raw.split(',').map(s => s.trim()).filter(Boolean);
+    return ids.length > 0 ? new Set(ids) : null;
+  }, [searchParams]);
+  const cohortLeadIds = useMemo(() => {
+    const raw = searchParams.get('leadIds');
+    if (!raw) return null;
+    const ids = raw.split(',').map(s => s.trim()).filter(Boolean);
+    return ids.length > 0 ? new Set(ids) : null;
+  }, [searchParams]);
+
   // Den effektiven Filterbaum (manuell + aktive Badges) auf die Deals anwenden.
+  // Ausnahme: bei aktivem `dealIds`-Deep-Link genau auf die Kohorten-Deals
+  // einschränken, unabhängig vom FilterBuilder.
   const dealsForDealsTab = useMemo(
-    () => applyDealFilters(dealsWithMeetings, effectiveDealsFilter, stageHistoryData ?? {}, stageHistoryLoading),
-    [dealsWithMeetings, effectiveDealsFilter, stageHistoryData, stageHistoryLoading],
+    () =>
+      cohortDealIds
+        ? dealsWithMeetings.filter(d => cohortDealIds.has(d.id))
+        : applyDealFilters(dealsWithMeetings, effectiveDealsFilter, stageHistoryData ?? {}, stageHistoryLoading),
+    [cohortDealIds, dealsWithMeetings, effectiveDealsFilter, stageHistoryData, stageHistoryLoading],
   );
+
+  // Baut Deep-Links auf die Deals-/Leads-Ansicht, gefiltert auf die übergebenen
+  // IDs (behält produkt & Co. aus der aktuellen URL, räumt den jeweils anderen
+  // Kohorten-Param weg). Werden an die Marketing-View durchgereicht.
+  const buildDealsHref = useCallback((dealIds: string[]) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('view', 'deals');
+    params.set('dealIds', dealIds.join(','));
+    params.delete('leadIds');
+    return `/?${params.toString()}`;
+  }, [searchParams]);
+  const buildLeadsHref = useCallback((leadIds: string[]) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('view', 'leads');
+    params.set('leadIds', leadIds.join(','));
+    params.delete('dealIds');
+    return `/?${params.toString()}`;
+  }, [searchParams]);
+
+  // Hebt den jeweiligen Kohorten-Deep-Link wieder auf.
+  const clearCohortDealIds = useCallback(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('dealIds');
+    const qs = params.toString();
+    router.replace(qs ? `/?${qs}` : '/', { scroll: false });
+  }, [router, searchParams]);
+  const clearCohortLeadIds = useCallback(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('leadIds');
+    const qs = params.toString();
+    router.replace(qs ? `/?${qs}` : '/', { scroll: false });
+  }, [router, searchParams]);
 
   // Leads-Basis: rohe Liste — alle Quickfilter sind jetzt System-Badges und
   // fließen über effectiveLeadsFilter in applyLeadFilters ein.
@@ -906,8 +961,11 @@ function PipelineOverviewContent() {
   );
 
   const leadsForLeadsTab = useMemo(
-    () => applyLeadFilters(leadsBase, effectiveLeadsFilter),
-    [leadsBase, effectiveLeadsFilter],
+    () =>
+      cohortLeadIds
+        ? leadsBase.filter(l => cohortLeadIds.has(l.id))
+        : applyLeadFilters(leadsBase, effectiveLeadsFilter),
+    [cohortLeadIds, leadsBase, effectiveLeadsFilter],
   );
 
   // Filter-Set Handler: Deals-Tab
@@ -1262,27 +1320,54 @@ function PipelineOverviewContent() {
                 isFetching={marketingFetching}
                 datePresetKey={marketingDatePresetKey}
                 onDatePresetChange={setMarketingDatePresetKey}
+                buildDealsHref={buildDealsHref}
+                buildLeadsHref={buildLeadsHref}
               />
             ) : effectiveViewMode === 'leads' ? (
               /* Leads-Tab: Sales- oder Sheet-Sicht */
               <>
-                <FilterBuilder<LeadFieldType>
-                  filter={leadsFilter}
-                  onSetFilter={setLeadsFilter}
-                  fieldConfigs={leadsFieldConfigs}
-                  defaultType={LEAD_DEFAULT_FIELD}
-                  getInputKind={getLeadInputKind}
-                  totalFiltered={leadsForLeadsTab.length}
-                  totalItems={leadsBase.length}
-                  itemLabel="Leads"
-                  savedSets={leadsSavedSets}
-                  onSaveFilterSet={handleSaveLeadsFilterSet}
-                  onDeleteFilterSet={handleDeleteLeadsFilterSet}
-                  showFilterSets={!!leadsFiltersetsKey}
-                  systemBadges={leadsSystemBadges}
-                  activeBadgeIds={activeLeadsBadgeIds}
-                  onToggleBadge={handleToggleLeadsBadge}
-                />
+                {cohortLeadIds ? (
+                  /* Deep-Link aus der Marketing-Zeitverlauf-View: genau die
+                     konvertierten Leads einer Kohorte. */
+                  <div className="flex items-center justify-between gap-3 flex-wrap bg-cyan-50 border border-cyan-200 rounded-lg px-4 py-3">
+                    <span className="text-sm text-cyan-900">
+                      Gefiltert auf{' '}
+                      <strong>{leadsForLeadsTab.length}</strong>{' '}
+                      {leadsForLeadsTab.length === 1 ? 'konvertierten Lead' : 'konvertierte Leads'}
+                      {' '}aus der Marketing-Kohorte
+                      {cohortLeadIds.size !== leadsForLeadsTab.length && (
+                        <span className="text-cyan-700">
+                          {' '}({cohortLeadIds.size} angefragt, {leadsForLeadsTab.length} gefunden)
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={clearCohortLeadIds}
+                      className="text-xs font-medium text-cyan-800 hover:text-cyan-950 underline underline-offset-2"
+                    >
+                      Filter aufheben
+                    </button>
+                  </div>
+                ) : (
+                  <FilterBuilder<LeadFieldType>
+                    filter={leadsFilter}
+                    onSetFilter={setLeadsFilter}
+                    fieldConfigs={leadsFieldConfigs}
+                    defaultType={LEAD_DEFAULT_FIELD}
+                    getInputKind={getLeadInputKind}
+                    totalFiltered={leadsForLeadsTab.length}
+                    totalItems={leadsBase.length}
+                    itemLabel="Leads"
+                    savedSets={leadsSavedSets}
+                    onSaveFilterSet={handleSaveLeadsFilterSet}
+                    onDeleteFilterSet={handleDeleteLeadsFilterSet}
+                    showFilterSets={!!leadsFiltersetsKey}
+                    systemBadges={leadsSystemBadges}
+                    activeBadgeIds={activeLeadsBadgeIds}
+                    onToggleBadge={handleToggleLeadsBadge}
+                  />
+                )}
                 {leadsSubView === 'sheet' ? (
                   <LeadsSpreadsheetView leads={leadsForLeadsTab} />
                 ) : (
@@ -1296,25 +1381,51 @@ function PipelineOverviewContent() {
               </>
             ) : (
               <>
-                <FilterBuilder<DealFieldType>
-                  filter={dealsFilter}
-                  onSetFilter={setDealsFilter}
-                  fieldConfigs={dealsFieldConfigs}
-                  defaultType={DEAL_DEFAULT_FIELD}
-                  getInputKind={getDealInputKind}
-                  totalFiltered={dealsForDealsTab.length}
-                  totalItems={dealsWithMeetings.length}
-                  itemLabel="Deals"
-                  pendingDataLabel={stageHistoryLoading ? 'Stage-History laden...' : null}
-                  pendingDataLoading={stageHistoryLoading}
-                  savedSets={dealsSavedSets}
-                  onSaveFilterSet={handleSaveDealsFilterSet}
-                  onDeleteFilterSet={handleDeleteDealsFilterSet}
-                  showFilterSets={!!dealsFiltersetsKey}
-                  systemBadges={dealsSystemBadges}
-                  activeBadgeIds={activeDealsBadgeIds}
-                  onToggleBadge={handleToggleDealsBadge}
-                />
+                {cohortDealIds ? (
+                  /* Deep-Link aus der Marketing-Zeitverlauf-View: genau die
+                     konvertierten Deals einer Kohorte. FilterBuilder wird
+                     ausgeblendet, damit die Einschränkung eindeutig bleibt. */
+                  <div className="flex items-center justify-between gap-3 flex-wrap bg-cyan-50 border border-cyan-200 rounded-lg px-4 py-3">
+                    <span className="text-sm text-cyan-900">
+                      Gefiltert auf{' '}
+                      <strong>{dealsForDealsTab.length}</strong>{' '}
+                      {dealsForDealsTab.length === 1 ? 'konvertierten Deal' : 'konvertierte Deals'}
+                      {' '}aus der Marketing-Kohorte
+                      {cohortDealIds.size !== dealsForDealsTab.length && (
+                        <span className="text-cyan-700">
+                          {' '}({cohortDealIds.size} angefragt, {dealsForDealsTab.length} in dieser Pipeline gefunden)
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={clearCohortDealIds}
+                      className="text-xs font-medium text-cyan-800 hover:text-cyan-950 underline underline-offset-2"
+                    >
+                      Filter aufheben
+                    </button>
+                  </div>
+                ) : (
+                  <FilterBuilder<DealFieldType>
+                    filter={dealsFilter}
+                    onSetFilter={setDealsFilter}
+                    fieldConfigs={dealsFieldConfigs}
+                    defaultType={DEAL_DEFAULT_FIELD}
+                    getInputKind={getDealInputKind}
+                    totalFiltered={dealsForDealsTab.length}
+                    totalItems={dealsWithMeetings.length}
+                    itemLabel="Deals"
+                    pendingDataLabel={stageHistoryLoading ? 'Stage-History laden...' : null}
+                    pendingDataLoading={stageHistoryLoading}
+                    savedSets={dealsSavedSets}
+                    onSaveFilterSet={handleSaveDealsFilterSet}
+                    onDeleteFilterSet={handleDeleteDealsFilterSet}
+                    showFilterSets={!!dealsFiltersetsKey}
+                    systemBadges={dealsSystemBadges}
+                    activeBadgeIds={activeDealsBadgeIds}
+                    onToggleBadge={handleToggleDealsBadge}
+                  />
+                )}
                 {dealsSubView === 'sheet' ? (
                   /* Deals-Tab, Sheet-Sicht */
                   <SpreadsheetView deals={dealsForDealsTab} />
