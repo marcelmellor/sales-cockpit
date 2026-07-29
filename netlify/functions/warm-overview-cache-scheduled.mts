@@ -1,23 +1,29 @@
-// ⛔ EMERGENCY KILL SWITCH — cron disabled 2026-07-16.
+// Cron intentionally DISABLED — the overview cache is kept warm ON-DEMAND only.
 //
-// This function used to fire the background warmer every 4 minutes. The warmer
-// ignored the cache TTL and re-ran ~40 Amplitude BigQuery queries on every tick
-// → ~1000 $/day of BigQuery cost from the 2026-07-15 deploy onwards. The
-// `config.schedule` below is removed so Netlify no longer registers a cron, and
-// the handler is a no-op as a second line of defence. The background warmer
-// (warmAllTargets) is ALSO short-circuited — see src/lib/overview/warm-targets.ts.
+// Design decision after the 2026-07-15 cost incident: there is no wall-clock
+// cron driving rebuilds. Instead the cache is refreshed lazily — when a user
+// actually opens leads/marketing, `serveWarmBacked` serves the cached entry and
+// nudges the background warmer (`triggerWarm()` → warm-overview-cache-background)
+// if the entry is stale/missing. So BigQuery cost scales with real usage, not
+// with the clock, and there is no autonomous loop that can run away.
 //
-// TODO(re-enable): restore `config.schedule` only together with the TTL-aware
-// rebuild fix in warm-targets.ts, never before.
+// The background warmer is additionally TTL-gated (it only rebuilds targets
+// whose cached entry actually expired — see src/lib/overview/warm-targets.ts),
+// and hard-capped by the per-query `maximumBytesBilled` limit + the GCP
+// project-level daily bytes quota.
+//
+// This file is kept as a no-schedule no-op so that, IF a periodic safety-net is
+// ever wanted, re-enabling is a one-line `config.schedule` change — but only
+// ever with the TTL-gate in place. Emergency off-switch for the whole warmer:
+// set `WARMER_DISABLED=true` in the Netlify env.
 
 import type { Config } from '@netlify/functions';
 
 const handler = async (): Promise<void> => {
-  console.warn('[warm-scheduled] disabled (emergency kill switch) — no-op');
+  console.warn('[warm-scheduled] no cron — cache is warmed on-demand only');
 };
 
 export default handler;
 
-// No `schedule` on purpose — the cron is disabled. Kept as a plain (un-invoked)
-// function so re-enabling is a one-line change once the TTL fix lands.
+// No `schedule` on purpose — on-demand warming only (see header).
 export const config: Config = {};

@@ -24,7 +24,7 @@ import {
   MARKETING_FUNNEL_CACHE_TTL_SECONDS,
 } from './marketing-funnel';
 import { DATE_PRESETS, getDaysForPreset } from '@/lib/marketing/date-presets';
-import { writeCacheEntry } from '@/lib/server-cache';
+import { readCacheEntry, writeCacheEntry } from '@/lib/server-cache';
 
 export interface WarmTarget {
   key: string;
@@ -66,38 +66,40 @@ export interface WarmResult {
   key: string;
   ok: boolean;
   ms: number;
+  /** True when the target was still fresh and no rebuild ran (TTL-gate hit). */
+  skipped?: boolean;
   error?: string;
 }
 
-// ⛔ EMERGENCY KILL SWITCH — warmer fully disabled 2026-07-16.
-//
-// The warmer rebuilt ALL targets on EVERY invocation, ignoring the cache TTL
-// entirely: the cron fires every 4 min (see warm-overview-cache-scheduled.mts)
-// and each run re-ran ~40 Amplitude BigQuery queries regardless of how fresh
-// the cached entry was → ~1000 $/day of BigQuery cost from the 2026-07-15
-// deploy onwards. Warmer completely disabled to stop the bleed immediately.
-//
-// Effect while disabled: `serveWarmBacked` keeps serving the last cached entry
-// (Netlify Blobs persist across deploys), so the leads/marketing endpoints
-// stay up but their data freezes — no new BigQuery spend. This is the single
-// choke point: in production the routes never build inline, so a no-op here
-// guarantees zero warmer-driven BigQuery usage even if a trigger still fires.
-//
-// TODO(re-enable): the proper fix is to honour the TTL — only rebuild a target
-// whose cached entry is actually stale (reuse getOrFetch's age check) instead
-// of unconditionally rebuilding. Do NOT just delete this guard.
-const WARMER_DISABLED: boolean = true;
+// Emergency kill switch, env-controlled so ops can disable the warmer WITHOUT a
+// code change if it ever misbehaves again (set `WARMER_DISABLED=true` in the
+// Netlify env). Defaults to ENABLED. History: the warmer was hard-disabled in
+// code on 2026-07-16 after it caused ~1000 $/day of BigQuery cost — see the
+// TTL-gate below for the actual fix that made re-enabling safe.
+function warmerDisabled(): boolean {
+  return process.env.WARMER_DISABLED === 'true';
+}
 
-// Rebuilds every warm target and writes it to the shared cache. Runs the
+// Rebuilds every STALE warm target and writes it to the shared cache. Runs the
 // targets **sequentially** on purpose: each build already fans out heavily
 // against HubSpot (rate-limited to 4 concurrent) and BigQuery, so running them
 // in parallel would multiply the pressure and trip 429s. Sequential total is
 // ~3 min, well inside the 15-min background-function budget. A single failing
 // target is logged and skipped — it must not abort the others.
+//
+// TTL-gate — the core fix for the 2026-07-15 cost incident: the warmer used to
+// rebuild ALL targets on EVERY invocation, re-running ~40 Amplitude BigQuery
+// queries every 4 min regardless of cache freshness (~1000 $/day). Now a run
+// only rebuilds a target whose cached entry is actually missing or older than
+// its TTL. Cost is therefore bounded by the TTL (how often an entry can go
+// stale), NOT by how often the warmer is invoked — so the cron cadence and the
+// on-read `triggerWarm()` nudges can no longer stack into a runaway. Backstops
+// underneath: the per-query `maximumBytesBilled` cap and the GCP project-level
+// daily bytes quota.
 export async function warmAllTargets(): Promise<WarmResult[]> {
-  if (WARMER_DISABLED) {
+  if (warmerDisabled()) {
     console.warn(
-      '[warm-cache] warmer is DISABLED (emergency kill switch) — skipping all builds, no BigQuery usage',
+      '[warm-cache] warmer is DISABLED via WARMER_DISABLED env — skipping all builds',
     );
     return [];
   }
@@ -105,6 +107,13 @@ export async function warmAllTargets(): Promise<WarmResult[]> {
   for (const target of getWarmTargets()) {
     const start = Date.now();
     try {
+      // Skip targets whose cached entry is still within its TTL — this is what
+      // bounds cost. Only rebuild what actually expired.
+      const existing = await readCacheEntry<unknown>(target.key);
+      if (existing && Date.now() - existing.timestamp <= target.ttlSeconds * 1000) {
+        results.push({ key: target.key, ok: true, ms: 0, skipped: true });
+        continue;
+      }
       const data = await target.build();
       await writeCacheEntry(target.key, data);
       results.push({ key: target.key, ok: true, ms: Date.now() - start });
