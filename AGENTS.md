@@ -519,7 +519,9 @@ cache never warmed and every request re-timed-out. (`/api/deals/overview`
 at ~12 s stayed under the limit — that's why only these two broke.)
 
 **Fix:** the slow builds no longer run on the request path. A background
-function keeps the cache hot; the routes only ever read it.
+function does the build off-band; the routes only ever read the cache. The
+build is triggered **on-demand** — when a user opens a stale/cold view — not
+by a wall-clock cron (see the cost incident below for why).
 
 ### Moving parts
 
@@ -529,35 +531,60 @@ function keeps the cache hot; the routes only ever read it.
   import `next/server` and are not bundlable there). The routes now keep
   only their `GET` handler and re-export the lead types.
 - `src/lib/overview/warm-targets.ts` — single source of truth for *what*
-  is warmed (`getWarmTargets()`) and the sequential rebuild-and-write loop
+  is warmed (`getWarmTargets()`) and the rebuild-and-write loop
   (`warmAllTargets()`). Targets: `leads-overview:frontdesk` and
   `marketing-funnel:frontdesk:{30,90,all}d` (the three Marketing-tab date
   presets; `all` is recomputed each run via `getDaysForPreset('all')` so its
   key tracks the value the client sends). Comparison windows (×2) are **not**
   warmed — they fall back to the cold-start path.
+  - **TTL-gated:** a run only rebuilds a target whose cached entry is missing
+    or older than its TTL; fresh targets are skipped (`skipped: true`). Cost is
+    bounded by the TTL (how stale an entry can get), **not** by how often the
+    warmer is invoked — so on-demand triggers can't stack into a runaway.
+  - **Kill switch:** set `WARMER_DISABLED=true` in the env to make
+    `warmAllTargets()` a no-op without a code change.
 - `src/lib/overview/warm-cache.ts` — `serveWarmBacked()`, the read-side used
   by the two routes. On Netlify it **never builds synchronously**: serves the
-  cached entry (even if stale, nudging the warmer out-of-band), or returns
-  `null` on a true cold miss → the route answers `503 { warming: true }`.
-  Off Netlify (`next dev`) it falls back to the old synchronous `getOrFetch`.
+  cached entry (even if stale, nudging the warmer out-of-band via
+  `triggerWarm()`), or returns `null` on a true cold miss → the route answers
+  `503 { warming: true }`. Off Netlify (`next dev`) it falls back to the old
+  synchronous `getOrFetch`.
 - `netlify/functions/warm-overview-cache-background.mts` — `config.background`
   (15-min budget). Runs `warmAllTargets()`. The **only** place the slow
-  builds run in production.
-- `netlify/functions/warm-overview-cache-scheduled.mts` —
-  `config.schedule = "*/4 * * * *"` (30 s budget, too short to build). It
-  only fires the background function (which 202s immediately). Scheduled
-  functions run **only on published production deploys**.
+  builds run in production. Invoked on-demand by `triggerWarm()`.
+- `netlify/functions/warm-overview-cache-scheduled.mts` — **cron disabled**
+  (no `config.schedule`, no-op handler). Kept as a no-schedule function so a
+  conservative safety-net cron would be a one-line change — but only ever
+  together with the TTL-gate.
 - Frontend (`src/app/page.tsx`): the leads + marketing queries `retry: 6,
   retryDelay: 10_000` so a cold-start `503` is bridged (~60 s) until the
   warmer has populated the cache, instead of surfacing an error.
+
+### Cost guardrails (BigQuery) — the 2026-07 incident
+
+The original design ran the warmer on a `*/4 * * * *` cron that rebuilt **all**
+targets on **every** tick, ignoring the cache TTL — ~40 Amplitude BigQuery
+queries every 4 min = **~1000 $/day** of BigQuery cost (360 runs/day, the
+`marketing:all` window scanning a near-TB events table). Three independent
+guardrails now bound this:
+
+- **On-demand + TTL-gate** (above) — the cron is gone; cost scales with real
+  usage and is capped by the per-target TTL.
+- **Per-query `maximumBytesBilled` cap** — `runBigQueryQuery` in
+  `src/lib/amplitude/client.ts` sets a hard 300 GiB ceiling (override via
+  `BIGQUERY_MAX_BYTES_BILLED`). Any single query that would scan more FAILS
+  loudly (billed 0) instead of running — blast-radius cap for a dropped
+  `WHERE` / lost `event_type` filter / accidental `SELECT *`. Sizing:
+  heaviest legit query is ~74 GiB; runaway full-table scans are 493–816 GiB.
+- **GCP project-level daily bytes quota** (set outside this repo) — the
+  backstop for anything that slips past the code guards.
 
 ### Auth / env
 
 The background function is public (`/.netlify/functions/…`), so it is guarded
 by **`TV_SECRET`** (header `x-warm-secret`) — the same secret `/tv` and the
-route bypass already use. No new env var to provision. The scheduled function
-and `triggerWarm()` resolve the self base URL from Netlify's built-in
-`DEPLOY_PRIME_URL` / `URL`.
+route bypass already use. No new env var to provision. `triggerWarm()`
+resolves the self base URL from Netlify's built-in `DEPLOY_PRIME_URL` / `URL`.
 
 ### Gotchas
 
@@ -566,9 +593,12 @@ and `triggerWarm()` resolve the self base URL from Netlify's built-in
   `tsconfig.json` (verified). The builder tree must stay free of `next/*`
   imports or it won't bundle — keep `getSession`/`NextResponse` in the route
   files, not in `src/lib/overview/`.
-- Cadence vs. TTL: warmer runs every 4 min; cache TTLs are 5 min (leads) /
-  30 min (funnel). If the warmer dies, `serveWarmBacked` keeps serving the
-  last cached entry rather than 502ing.
+- Cache TTLs: 5 min (leads) / 30 min (funnel). If the warmer never runs,
+  `serveWarmBacked` keeps serving the last cached entry rather than 502ing.
+- The `marketing:all` key is `getDaysForPreset('all')` = days-since-floor,
+  which increments by 1 each day → a **new, cold key every day**. The first
+  viewer per day triggers the on-demand warm and waits ~50 s (503 → retry).
+  A stable `:all` key would remove this; left as a known wrinkle.
 - This is a stopgap on top of the server-side cache. Once BigQuery
   replication lands (see "Server-side response cache"), the builds get fast
   enough to run in-band and both the warmer and the cache can go.
