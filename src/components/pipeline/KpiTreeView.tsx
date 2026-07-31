@@ -2,11 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toPng } from 'html-to-image';
-import { isWonStageLabel, isLostStageLabel } from '@/lib/hubspot/mrr';
 import type { DealOverviewItem } from '@/app/api/deals/overview/route';
 import type { LeadOverviewItem } from '@/app/api/leads/overview/route';
-import { isIcpRevenue, type MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
-import { classifyLead, leadMinutes, buildJourneyMap } from '@/lib/leads/classify';
+import type { MarketingFunnelResponse } from '@/lib/marketing/funnel-types';
 import type { PlaybookStats } from '@/lib/amplitude/playbook-stats';
 import {
   DATE_PRESETS,
@@ -15,124 +13,20 @@ import {
   type DatePresetKey,
 } from '@/lib/marketing/date-presets';
 import { dealTitleHasCountryFlag } from './filters/dealFilters';
-
-// ── Data types ───────────────────────────────────────────────────────────────
-
-type Team = 'growth' | 'onboarding' | 'sales';
-
-interface MetricNode {
-  id: string;
-  label: string;
-  /** Default / fallback value shown when no live data available */
-  fallback: string;
-  target: string;
-  tooltip?: string;
-  team?: Team;
-  /** Value is computed from children — not directly editable */
-  computed?: boolean;
-  /** Value is filled from live data — not editable */
-  dynamic?: boolean;
-  parentIds?: string[];
-  /** Visual connector to parent is dashed */
-  dashed?: boolean;
-  /** Muted context node — grayed out, not part of the core tree */
-  muted?: boolean;
-  /** Lower values are better (e.g. Sales Cycle, Onboarding-Zeit) */
-  lowerIsBetter?: boolean;
-  /** How to display the comparison delta pill:
-   *  - 'delta' — arrow + absolute difference (↑ 40 €, ↓ 9)
-   *  - 'vs'    — previous period's value (vs 33 %, vs 1,9)
-   *  Default: 'delta' */
-  deltaFormat?: 'delta' | 'vs';
-  /** Suppress the comparison delta pill entirely */
-  hideComparison?: boolean;
-}
-
-// ── Goal sets ───────────────────────────────────────────────────────────────
-// Each goal set maps metric IDs to their target strings. The active set
-// overrides the static `target` on MetricNode. User-editable target overrides
-// still layer on top.
-
-type GoalSetKey = 'q2-2026' | 'q3-2026';
-
-interface GoalSet {
-  key: GoalSetKey;
-  label: string;
-  targets: Record<string, string>;
-  coreMetrics: string[];
-  mutedMetrics: string[];
-}
-
-const GOAL_SETS: GoalSet[] = [
-  {
-    key: 'q2-2026',
-    label: 'Q2 2026',
-    coreMetrics: ['mrr', 'leads', 'cycle'],
-    mutedMetrics: ['activated', 'int', 'pb', 'aha', 'trials', 'signup', 'preview-pbx', 'preview-bestand', 'pbx-signups'],
-    targets: {
-      mrr: '4.000 €',
-      arpa: '500 €',
-      conversion: '20 %',
-      cycle: 'verringern',
-      onboarding: 'verringern',
-      leads: '50',
-    },
-  },
-  {
-    key: 'q3-2026',
-    label: 'Q3 2026',
-    coreMetrics: ['mrr', 'leads', 'activated'],
-    mutedMetrics: [],
-    targets: {
-      mrr: '20.000 €',
-      arpa: '700 €',
-      conversion: '25 %',
-      cycle: 'verringern',
-      onboarding: 'verringern',
-      'contact-form': '10',
-      trials: '80',
-      signup: '30',
-      'preview-pbx': '25',
-      'preview-bestand': '25',
-      activated: '10',
-    },
-  },
-];
-
-// ── Static tree structure ────────────────────────────────────────────────────
-// `fallback` is only used when live data is unavailable (loading, missing
-// marketing data, etc.). Nodes marked `dynamic` get their value injected from
-// props; nodes marked `computed` derive their value from other nodes.
-
-const METRICS: MetricNode[] = [
-  // Spine (top → down)
-  { id: 'mrr', label: 'Neuer MRR / Woche', fallback: '?', target: '20.000 €', computed: true, deltaFormat: 'delta', tooltip: 'Gesamt-MRR: 20k €' },
-  { id: 'arpa', label: 'ARPA', fallback: '?', target: '700 €', parentIds: ['mrr'], dashed: true, dynamic: true, deltaFormat: 'delta' },
-  { id: 'icp', label: 'Neue ICP-Kunden / Woche', fallback: '?', target: '?', parentIds: ['mrr'], dynamic: true, deltaFormat: 'vs', tooltip: '> 2.500 € / Monat' },
-  { id: 'sales', label: 'Sales / Woche', fallback: '?', target: '?', parentIds: ['icp'], team: 'sales', dynamic: true, deltaFormat: 'vs' },
-  { id: 'conversion', label: 'Win Rate', fallback: '?', target: '25 %', parentIds: ['sales'], team: 'sales', computed: true, deltaFormat: 'vs' },
-  { id: 'cycle', label: 'Sales Cycle', fallback: '?', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, dynamic: true, lowerIsBetter: true, deltaFormat: 'delta', tooltip: 'Ø Tage von Deal-Erstellung bis Abschluss (Won)' },
-  { id: 'onboarding', label: 'Onboarding-Zeit', fallback: '30h', target: 'verringern', parentIds: ['conversion'], team: 'sales', dashed: true, lowerIsBetter: true, deltaFormat: 'delta', tooltip: 'Solution Consulting' },
-  { id: 'deals', label: 'Deals / Woche', fallback: '?', target: '?', parentIds: ['conversion'], team: 'sales', dynamic: true, deltaFormat: 'delta' },
-  // Left column: Leads
-  { id: 'leads', label: 'Leads / Woche', fallback: '?', target: '?', parentIds: ['deals'], dynamic: true, deltaFormat: 'delta', tooltip: 'HubSpot-Leads mit ≥ 2.000 Min/Monat' },
-  { id: 'contact-form', label: 'Contact Form (ICP) / Woche', fallback: '?', target: '10', parentIds: ['leads'], dynamic: true, deltaFormat: 'delta', tooltip: 'ICP-Leads via Contact Form (sipgate.de + sipgate.ai)' },
-  { id: 'cf-de', label: 'sipgate.de', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true, deltaFormat: 'vs' },
-  { id: 'cf-ai', label: 'sipgate.ai', fallback: '?', target: '?', parentIds: ['contact-form'], dynamic: true, deltaFormat: 'vs' },
-  { id: 'signup-leads', label: 'In-Product-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads', 'trials'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'Preview-Leads mit In-Product-Qualifizierung und ≥ 2.000 Min/Monat' },
-  { id: 'pbx-leads', label: 'PBX-Onboarding-Quali (ICP) / Woche', fallback: '?', target: '?', parentIds: ['leads'], team: 'growth', dynamic: true, deltaFormat: 'vs', tooltip: 'PBX-Kunden mit Onboarding-Qualifizierung und ≥ 2.000 Min/Monat' },
-  { id: 'sonstige-leads', label: 'Sonstige / Woche', fallback: '?', target: '?', parentIds: ['leads'], dynamic: true, hideComparison: true, tooltip: 'Leads ≥ 2.000 Min ohne BQ-Journey-Zuordnung' },
-  { id: 'pbx-signups', label: 'PBX Signups / Woche', fallback: '?', target: '?', parentIds: ['pbx-leads'], dynamic: true, dashed: true, muted: true, deltaFormat: 'vs', tooltip: 'Alle PBX-Signups (Grundgesamtheit für Onboarding-Quali)' },
-  // Right column: Committed path
-  { id: 'activated', label: 'Neue Kontingent-Kunden / Woche', fallback: '0,60', target: '?', parentIds: ['deals', 'icp'], team: 'onboarding', deltaFormat: 'delta', tooltip: 'Kunden mit Kontingent-Buchung (≥ Tier 100). Upsell-Pool für ICP. Stand Juni 2026: ~0,6/Wo brutto (manuell)' },
-  { id: 'int', label: 'Neue Kunden mit 1+ Integration / Woche', fallback: '🚧', target: '20', parentIds: ['activated'], team: 'onboarding', deltaFormat: 'delta' },
-  { id: 'pb', label: 'Neue Kunden mit 3+ Playbooks / Woche', fallback: '?', target: '20', parentIds: ['activated'], team: 'onboarding', dynamic: true, deltaFormat: 'delta', tooltip: 'Preview-Accounts, die danach ≥ 3 Playbooks erstellt haben' },
-  { id: 'aha', label: 'Aha-Moment / Woche', fallback: '🚧', target: '30', parentIds: ['int', 'pb'], team: 'onboarding', deltaFormat: 'delta' },
-  { id: 'trials', label: 'Agent Previews / Woche', fallback: '?', target: '80', parentIds: ['aha'], team: 'growth', dynamic: true, deltaFormat: 'delta' },
-  { id: 'signup', label: 'Agent Signups / Woche', fallback: '?', target: '30', parentIds: ['trials'], team: 'growth', dynamic: true, deltaFormat: 'delta', tooltip: 'Paid Ads ab Juni 2026' },
-  { id: 'preview-pbx', label: 'PBX Signup → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials', 'pbx-signups'], team: 'growth', dynamic: true, deltaFormat: 'delta', tooltip: 'PBX-Kunden, die eine Agent-Preview starten' },
-  { id: 'preview-bestand', label: 'Bestandskunde → Agent Preview / Woche', fallback: '?', target: '25', parentIds: ['trials'], team: 'growth', dynamic: true, deltaFormat: 'delta', tooltip: 'Bestehende sipgate-Kunden ohne neuen Signup' },
-];
+import {
+  METRICS,
+  GOAL_SETS,
+  parseNum,
+  fmtNum,
+  type MetricNode,
+  type GoalSetKey,
+} from '@/lib/kpi-tree/model';
+import {
+  computeLiveValues,
+  subtractBqTotals,
+  subtractPlaybookStats,
+  resolveKpiTree,
+} from '@/lib/kpi-tree/compute';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -150,226 +44,6 @@ interface KpiTreeViewProps {
    *  comparable. */
   datePresetKey: DatePresetKey;
   onDatePresetChange: (key: DatePresetKey) => void;
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function parseNum(txt: string): number {
-  if (!txt || txt === '?' || txt === '—') return NaN;
-  return parseFloat(txt.replace(/[.*€%]/g, '').replace(/\./g, '').replace(',', '.').trim());
-}
-
-/** Intelligente Rundung: je größer die Zahl, desto gröber.
- *  < 1      → 2 Nachkommastellen  (0,25)
- *  1–< 5    → 1 Nachkommastelle   (3,2)
- *  5–< 100  → ganze Zahl          (7, 42)
- *  100–1000 → auf 5er             (435)
- *  ≥ 1000   → auf 10er            (1.230) */
-function smartRound(n: number): number {
-  const abs = Math.abs(n);
-  if (abs < 1) return Math.round(n * 100) / 100;
-  if (abs < 5) return Math.round(n * 10) / 10;
-  if (abs < 100) return Math.round(n);
-  if (abs < 1000) return Math.round(n / 5) * 5;
-  return Math.round(n / 10) * 10;
-}
-
-function fmtNum(n: number): string {
-  if (isNaN(n)) return '?';
-  const rounded = smartRound(n);
-  const decimals = Math.abs(rounded) < 1 ? 2 : Math.abs(rounded) < 5 ? 1 : 0;
-  return rounded.toLocaleString('de-DE', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-}
-
-function fmtTarget(n: number): string {
-  if (isNaN(n)) return '?';
-  const abs = Math.abs(n);
-  const rounded = abs < 5 ? Math.round(n) : Math.round(n / 5) * 5;
-  return rounded.toLocaleString('de-DE', { maximumFractionDigits: 0 });
-}
-
-function fmtEur(n: number): string {
-  if (isNaN(n)) return '?';
-  const rounded = smartRound(n);
-  return rounded.toLocaleString('de-DE', { maximumFractionDigits: 0 }) + ' €';
-}
-
-const TEAM_COLORS: Record<Team, string> = {
-  sales: '#315DFF',
-  growth: '#00BD82',
-  onboarding: '#8642FE',
-};
-
-const TEAM_LABELS: Record<Team, string> = {
-  sales: 'Sales & SC',
-  growth: 'Product Growth',
-  onboarding: 'Onboarding',
-};
-
-// ── Live data → per-week values ─────────────────────────────────────────────
-
-interface LiveData {
-  values: Map<string, string>;
-  /** Dynamic tooltips showing the formula behind a value. Overrides the
-   *  static `tooltip` on MetricNode when present. */
-  tooltips: Map<string, string>;
-}
-
-function computeLiveValues(
-  deals: DealOverviewItem[],
-  leads: LeadOverviewItem[],
-  marketingData: MarketingFunnelResponse | undefined,
-  playbookStats: PlaybookStats | undefined,
-  days: number,
-  cutoffEnd: number = Date.now(),
-): LiveData {
-  const values = new Map<string, string>();
-  const tooltips = new Map<string, string>();
-  const weeks = Math.max(days / 7, 1);
-  const cutoff = cutoffEnd - days * 24 * 60 * 60 * 1000;
-
-  // ── Deal-based metrics (rolling window, ICP only: MRR ≥ threshold) ───────
-
-  const icpDeals = deals.filter(d => isIcpRevenue(d.revenue));
-
-  const recentCreated = icpDeals.filter(
-    d => d.createdate && new Date(d.createdate).getTime() >= cutoff && new Date(d.createdate).getTime() < cutoffEnd,
-  );
-  const recentWon = icpDeals.filter(
-    d => isWonStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff && new Date(d.closedate).getTime() < cutoffEnd,
-  );
-  const recentLost = icpDeals.filter(
-    d => isLostStageLabel(d.dealStage) && d.closedate && new Date(d.closedate).getTime() >= cutoff && new Date(d.closedate).getTime() < cutoffEnd,
-  );
-  const recentClosed = recentWon.length + recentLost.length;
-
-  // Deals / Woche
-  if (recentCreated.length > 0) {
-    values.set('deals', fmtNum(recentCreated.length / weeks));
-    tooltips.set('deals', `${recentCreated.length} neue Deals in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-  }
-
-  // Sales / Woche (won deals)
-  if (recentWon.length > 0) {
-    values.set('sales', fmtNum(recentWon.length / weeks));
-    tooltips.set('sales', `${recentWon.length} Won-Deals in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-  }
-
-  // Conversion = Won / (Won + Lost) — nur abgeschlossene Deals
-  if (recentClosed > 0) {
-    const conv = recentWon.length / recentClosed;
-    values.set('conversion', fmtNum(conv * 100) + ' %');
-    tooltips.set('conversion', `${recentWon.length} Won / ${recentClosed} abgeschlossen (${recentWon.length} Won + ${recentLost.length} Lost) in ${days} Tagen — nach Abschlussdatum, nicht Erstelldatum`);
-  }
-
-  // Sales Cycle = Ø Tage von Erstellung bis Abschluss (Won + Lost)
-  const closedWithDates = [...recentWon, ...recentLost].filter(d => d.createdate && d.closedate);
-  if (closedWithDates.length > 0) {
-    const openCount = recentCreated.length - recentClosed;
-    const avgDays = closedWithDates.reduce((sum, d) => {
-      return sum + (new Date(d.closedate!).getTime() - new Date(d.createdate!).getTime()) / (24 * 60 * 60 * 1000);
-    }, 0) / closedWithDates.length;
-    const rounded = Math.round(avgDays);
-    values.set('cycle', `${rounded} Tage`);
-    tooltips.set('cycle', `Ø ${rounded} Tage aus ${closedWithDates.length} abgeschlossenen Deals (${recentWon.length} Won + ${recentLost.length} Lost) — ${openCount} weitere Deals noch offen`);
-  }
-
-  // ICP-Kunden / Woche (won deals with ICP tier)
-  const recentIcp = recentWon.filter(d => d.icpTier != null);
-  if (recentWon.length > 0) {
-    values.set('icp', fmtNum(recentIcp.length / weeks));
-    tooltips.set('icp', `${recentIcp.length} von ${recentWon.length} Won-Deals mit ICP-Tier in ${days} Tagen`);
-  }
-
-  // ARPA (average revenue of recently won deals)
-  if (recentWon.length > 0) {
-    const avgRevenue = recentWon.reduce((sum, d) => sum + d.revenue, 0) / recentWon.length;
-    values.set('arpa', fmtEur(avgRevenue));
-    tooltips.set('arpa', `Ø MRR aus ${recentWon.length} Won-Deals`);
-  }
-
-  // ── Leads / Woche (HubSpot leads with ≥ 2.000 Min, same source as chart) ──
-
-  const recentLeads = leads.filter(l => {
-    if (!l.createdate) return false;
-    const ts = new Date(l.createdate).getTime();
-    if (ts < cutoff || ts >= cutoffEnd) return false;
-    const mins = leadMinutes(l);
-    return mins != null && mins >= 2000;
-  });
-  if (recentLeads.length > 0) {
-    values.set('leads', fmtNum(recentLeads.length / weeks));
-    tooltips.set('leads', `${recentLeads.length} Leads (≥ 2.000 Min) in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-  }
-
-  // ── Marketing-based metrics (BQ totals ÷ weeks in date range) ────────────
-
-  if (marketingData) {
-    const bq = marketingData.bqTotals;
-
-    // Agent Signups / Woche (nur Frontdesk-Signup, nicht PBX)
-    values.set('signup', fmtNum(bq.activationAgent / weeks));
-    tooltips.set('signup', `${bq.activationAgent} Agent-Signups in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-
-    // PBX Signups / Woche (alle Nicht-Frontdesk-Signups)
-    values.set('pbx-signups', fmtNum(bq.activationOther / weeks));
-    tooltips.set('pbx-signups', `${bq.activationOther} PBX-Signups in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-
-    // Previews / Woche — Gesamt + Aufschlüsselung nach Herkunft
-    values.set('trials', fmtNum(bq.previewTrialTotal / weeks));
-    tooltips.set('trials', `${bq.previewTrialTotal} Previews in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-    values.set('preview-pbx', fmtNum(bq.previewTrialOther / weeks));
-    tooltips.set('preview-pbx', `${bq.previewTrialOther} PBX-Previews in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-    values.set('preview-bestand', fmtNum(bq.previewTrialBestandskunde / weeks));
-    tooltips.set('preview-bestand', `${bq.previewTrialBestandskunde} Bestandskunden-Previews in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-
-    // ── Lead classification: Amplitude touchpoints → HubSpot leadSource fallback
-    const journeyByLeadId = buildJourneyMap(marketingData.journeys);
-
-    if (recentLeads.length > 0) {
-      const counts = { 'contact-form': 0, 'pbx-onboarding': 0, 'in-product': 0, 'sonstige': 0 };
-      let cfDe = 0;
-      let cfAi = 0;
-
-      for (const l of recentLeads) {
-        const bucket = classifyLead(l, journeyByLeadId);
-        counts[bucket]++;
-        if (bucket === 'contact-form') {
-          const j = journeyByLeadId.get(l.id);
-          const cfTp = j?.touchpoints.find(t => t.anchor === 'lead_form_submitted');
-          const domain = cfTp?.pageDomain?.replace(/^www\./, '') ?? '';
-          if (domain.endsWith('sipgate.ai')) cfAi++;
-          else cfDe++;
-        }
-      }
-
-      values.set('contact-form', fmtNum(counts['contact-form'] / weeks));
-      tooltips.set('contact-form', `${counts['contact-form']} Contact-Form-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('cf-de', fmtNum(cfDe / weeks));
-      tooltips.set('cf-de', `${cfDe} Contact-Form-Leads sipgate.de in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('cf-ai', fmtNum(cfAi / weeks));
-      tooltips.set('cf-ai', `${cfAi} Contact-Form-Leads sipgate.ai in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('pbx-leads', fmtNum(counts['pbx-onboarding'] / weeks));
-      tooltips.set('pbx-leads', `${counts['pbx-onboarding']} Onboarding-Quali-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('signup-leads', fmtNum(counts['in-product'] / weeks));
-      tooltips.set('signup-leads', `${counts['in-product']} In-Product-Quali-Leads in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-      values.set('sonstige-leads', fmtNum(counts['sonstige'] / weeks));
-      tooltips.set('sonstige-leads', `${counts['sonstige']} Leads ohne Zuordnung in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-    }
-  }
-
-  // ── Playbook-Stats (Preview → 3+ Playbooks) ────────────────────────────────
-
-  if (playbookStats && playbookStats.accountsWith3PlusPlaybooks != null) {
-    const n3plus = playbookStats.accountsWith3PlusPlaybooks;
-    const nTotal = playbookStats.previewAccountsTotal;
-    values.set('pb', fmtNum(n3plus / weeks));
-    tooltips.set('pb', nTotal != null
-      ? `${n3plus} von ${nTotal} Preview-Accounts mit ≥ 3 Playbooks in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`
-      : `${n3plus} Accounts mit ≥ 3 Playbooks in ${days} Tagen ÷ ${fmtNum(weeks)} Wochen`);
-  }
-
-  return { values, tooltips };
 }
 
 // ── Metric card component ───────────────────────────────────────────────────
@@ -666,36 +340,6 @@ function drawConnectors(treeEl: HTMLDivElement, svgEl: SVGSVGElement) {
 
 // ── Main component ──────────────────────────────────────────────────────────
 
-function subtractBqTotals(
-  doubled: MarketingFunnelResponse,
-  current: MarketingFunnelResponse,
-): MarketingFunnelResponse {
-  const bq = doubled.bqTotals;
-  const cur = current.bqTotals;
-  return {
-    ...doubled,
-    bqTotals: {
-      activationAgent: bq.activationAgent - cur.activationAgent,
-      activationOther: bq.activationOther - cur.activationOther,
-      activationTotal: bq.activationTotal - cur.activationTotal,
-      previewTrialTotal: bq.previewTrialTotal - cur.previewTrialTotal,
-      previewTrialAgent: bq.previewTrialAgent - cur.previewTrialAgent,
-      previewTrialOther: bq.previewTrialOther - cur.previewTrialOther,
-      previewTrialBestandskunde: bq.previewTrialBestandskunde - cur.previewTrialBestandskunde,
-    },
-  };
-}
-
-function subtractPlaybookStats(
-  doubled: PlaybookStats,
-  current: PlaybookStats,
-): PlaybookStats {
-  return {
-    accountsWith3PlusPlaybooks: doubled.accountsWith3PlusPlaybooks - current.accountsWith3PlusPlaybooks,
-    previewAccountsTotal: doubled.previewAccountsTotal - current.previewAccountsTotal,
-  };
-}
-
 export function KpiTreeView({ deals, leads, marketingData, playbookStats, doubledMarketingData, doubledPlaybookStats, datePresetKey, onDatePresetChange }: KpiTreeViewProps) {
   const treeRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -776,107 +420,19 @@ export function KpiTreeView({ deals, leads, marketingData, playbookStats, double
 
   // Merge: live values < user overrides (for manual nodes) < computed formulas.
   // Targets: static defaults < derived formulas < user overrides.
-  const resolved = useMemo(() => {
-    // Start with live values, then layer user overrides for manual nodes on top.
-    const vals = new Map(liveData.values);
-    const tips = new Map(liveData.tooltips);
-    for (const [id, txt] of valueOverrides) {
-      const node = METRICS.find(m => m.id === id);
-      // Only apply overrides to non-dynamic, non-computed nodes
-      if (node && !node.dynamic && !node.computed) vals.set(id, txt);
-    }
-    const tgts = new Map<string, string>();
-    for (const [id, val] of Object.entries(activeGoalSet.targets)) tgts.set(id, val);
-    for (const [id, val] of targetOverrides) tgts.set(id, val);
-
-    // Helper: read a resolved value as number
-    const v = (id: string): number => {
-      const txt = vals.get(id) ?? METRICS.find(m => m.id === id)?.fallback ?? '?';
-      return parseNum(txt);
-    };
-    const t = (id: string): number => {
-      const txt = tgts.get(id) ?? METRICS.find(m => m.id === id)?.target ?? '?';
-      return parseNum(txt);
-    };
-
-    // ── Computed values ──────────────────────────────────────────────────────
-
-    // Leads / Woche + contact-form are filled directly in computeLiveValues.
-    const leadsVal = v('leads');
-
-    // Conversion is computed in computeLiveValues (Won / (Won + Lost))
-    const sales = v('sales');
-    const dealsVal = v('deals');
-    const conv = parseNum(vals.get('conversion') ?? '?') / 100;
-
-    // MRR = sales × ARPA (Committed Customers feed into ICP via upsell, not directly into MRR calc)
-    const arpa = v('arpa');
-    vals.set('mrr', !isNaN(arpa) && !isNaN(sales) && sales > 0 ? fmtEur(sales * arpa) : '?');
-
-    // ── Derived targets (marked with *) ──────────────────────────────────────
-
-    const mrrTarget = t('mrr');
-    const arpaTarget = t('arpa');
-    const icpTarget = (!isNaN(mrrTarget) && !isNaN(arpaTarget) && arpaTarget > 0) ? mrrTarget / arpaTarget : NaN;
-    if (!isNaN(icpTarget) && !tgts.has('icp')) tgts.set('icp', fmtTarget(icpTarget) + '*');
-
-    // Sales = all ICP conversions
-    const salesTarget = icpTarget;
-    if (!isNaN(salesTarget) && !tgts.has('sales')) tgts.set('sales', fmtTarget(salesTarget) + '*');
-
-    // Deals = Sales / Win Rate (all deals, regardless of source)
-    const convTarget = t('conversion');
-    const convRate = !isNaN(convTarget) ? convTarget / 100 : conv;
-    const dealsFromSales = !isNaN(salesTarget) && !isNaN(convRate) && convRate > 0 ? salesTarget / convRate : NaN;
-    if (!isNaN(dealsFromSales) && !tgts.has('deals')) tgts.set('deals', fmtTarget(dealsFromSales) + '*');
-
-    // Deals split: 70% from Leads, 30% from Kontingent-Kunden
-    const PLG_DEAL_RATIO = 0.3;
-    const dealsTarget = t('deals');
-
-    // Leads target — only needs to produce 70% of deals
-    const slgDeals = !isNaN(dealsTarget) ? dealsTarget * (1 - PLG_DEAL_RATIO) : NaN;
-    if (!isNaN(slgDeals) && !isNaN(dealsVal) && dealsVal > 0 && !isNaN(leadsVal) && leadsVal > 0 && !tgts.has('leads')) {
-      tgts.set('leads', fmtTarget(slgDeals * (leadsVal / dealsVal)) + '*');
-    }
-
-    // Kontingent-Kunden target — needs to produce 30% of deals
-    const plgDeals = !isNaN(dealsTarget) ? dealsTarget * PLG_DEAL_RATIO : NaN;
-    if (!isNaN(plgDeals) && !tgts.has('activated') && !activeGoalSet.mutedMetrics.includes('activated')) {
-      tgts.set('activated', fmtTarget(plgDeals) + '*');
-    }
-
-    // PLG funnel targets — derived downward from Previews target
-    // Previews (80) → ×80% → Aha (64) → ×80% → Skills/Int (51)
-    // Kontingent-Kunden target is set independently (not derived).
-    const STEP_CONV = 0.8;
-    const muted = new Set(activeGoalSet.mutedMetrics);
-    const trialsTarget = t('trials');
-    if (!isNaN(trialsTarget) && !muted.has('trials')) {
-      const ahaTarget = trialsTarget * STEP_CONV;
-      if (!tgts.has('aha') && !muted.has('aha')) tgts.set('aha', fmtTarget(ahaTarget) + '*');
-      const skillTarget = ahaTarget * STEP_CONV;
-      if (!tgts.has('int') && !muted.has('int')) tgts.set('int', fmtTarget(skillTarget) + '*');
-      if (!tgts.has('pb') && !muted.has('pb')) tgts.set('pb', fmtTarget(skillTarget) + '*');
-    }
-
-    // Compute comparison resolved values (same derived formulas, no overrides/targets)
-    let compVals: Map<string, string> | undefined;
-    if (comparisonData) {
-      const cv = new Map(comparisonData.values);
-      const cvNum = (id: string): number => {
-        const txt = cv.get(id) ?? METRICS.find(m => m.id === id)?.fallback ?? '?';
-        return parseNum(txt);
-      };
-      // Leads, contact-form, and sub-buckets for comparison are filled by computeLiveValues.
-      const cvArpa = cvNum('arpa');
-      const cvSales = cvNum('sales');
-      cv.set('mrr', !isNaN(cvArpa) && !isNaN(cvSales) && cvSales > 0 ? fmtEur(cvSales * cvArpa) : '?');
-      compVals = cv;
-    }
-
-    return { values: vals, targets: tgts, tooltips: tips, comparisonValues: compVals, comparisonTooltips: comparisonData?.tooltips };
-  }, [liveData, valueOverrides, targetOverrides, activeGoalSet, comparisonData]);
+  // The actual merge + computed-node + cascading-target logic lives in
+  // resolveKpiTree (shared with the MCP server) so the rendered tree and any
+  // programmatic consumer agree on every number.
+  const resolved = useMemo(
+    () => resolveKpiTree({
+      liveData,
+      goalSet: activeGoalSet,
+      comparisonData,
+      valueOverrides,
+      targetOverrides,
+    }),
+    [liveData, valueOverrides, targetOverrides, activeGoalSet, comparisonData],
+  );
 
   const handleEditValue = useCallback((id: string) => {
     const node = METRICS.find(m => m.id === id);
