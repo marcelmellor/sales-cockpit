@@ -572,3 +572,62 @@ and `triggerWarm()` resolve the self base URL from Netlify's built-in
 - This is a stopgap on top of the server-side cache. Once BigQuery
   replication lands (see "Server-side response cache"), the builds get fast
   enough to run in-band and both the warmer and the cache can go.
+
+## MCP server — `/api/mcp` (Streamable HTTP)
+
+The cockpit exposes its consolidated numbers to AI agents through an MCP
+server, served in-app as a Next.js route at **`/api/mcp`** (Streamable
+HTTP transport, via `mcp-handler` + `@modelcontextprotocol/sdk`). It is
+optimised for the **AI Agents (`frontdesk`)** product — every tool defaults
+to that portfolio.
+
+### Why in-app, not standalone
+
+The tools do **not** re-derive anything. They self-fetch the existing
+overview endpoints (`/api/deals/overview`, `/api/leads/overview`,
+`/api/projects/overview`, `/api/marketing/funnel`,
+`/api/amplitude/playbook-stats`) over HTTP, so they inherit the same
+HubSpot batching, server-side response cache and rate-limit handling.
+Internal calls authenticate with the existing **`TV_SECRET`** bypass (the
+same one `/tv` uses) — no browser session needed. The self-fetch base URL
+is `MCP_SELF_BASE_URL` → Netlify `URL`/`DEPLOY_PRIME_URL` →
+`http://localhost:3020`.
+
+### Tools
+
+| Tool | What it returns |
+|---|---|
+| `get_kpi_tree` | The full KPI tree as structured data (flat node list: id, label, current value/target, team, parents, formula). Params: `days` (default 30), `goalSet` (`q2-2026`\|`q3-2026`, default `q2-2026`), `deOnly` (default true). |
+| `get_consolidated_metrics` | Everything behind the charts in one call: pipeline KPIs + marketing funnel + playbook + projects. Params: `days`, `deOnly`, `minMrr`. |
+| `get_pipeline_summary` | HubSpot pipeline KPIs (won/lost/open, MRR/ARR, win rate, sales cycle, per-stage + per-ICP-tier). Params: `produkt`, `deOnly`, `minMrr`. |
+| `get_marketing_funnel` | Five funnel stages + BigQuery signup/preview totals. Param: `days`. |
+| `get_playbook_stats` | Preview → 3+ playbooks adoption. Param: `days`. |
+| `get_projects_summary` | Onboarding/implementation project status counts. Param: `produkt`. |
+
+### Single source of truth for the KPI tree
+
+The KPI-tree model + math is shared, not duplicated. `KpiTreeView.tsx` and
+the MCP server both import from `src/lib/kpi-tree/`:
+
+- `model.ts` — `METRICS`, `GOAL_SETS`, formatting helpers.
+- `compute.ts` — `computeLiveValues()` (per-week values) and
+  `resolveKpiTree()` (computed nodes like MRR = Sales × ARPA, and the
+  cascading derived targets). The React view's `resolved` memo is just a
+  call to `resolveKpiTree()`.
+- `build.ts` — `buildKpiTree()`, the structured-tree assembler for MCP.
+
+So the numbers an agent reads are byte-for-byte the ones the tree renders.
+If you change the tree's math, change it in `src/lib/kpi-tree/` — never
+fork it back into the component.
+
+### Auth + client config
+
+The endpoint requires a static bearer token in **`MCP_SECRET`** (returns
+`503` if unset, `401` on a bad token). Send it as
+`Authorization: Bearer <MCP_SECRET>` (query fallback: `?mcpSecret=`).
+
+`.mcp.json` (committed) wires Claude Code to `http://localhost:3020/api/mcp`
+with `Authorization: Bearer ${MCP_SECRET}`. The `${MCP_SECRET}` is expanded
+from **Claude Code's own environment**, so export it in the shell you launch
+Claude Code from (the value lives in `.env.local`; it is never committed).
+The dev server picks up `MCP_SECRET` from `.env.local` automatically.

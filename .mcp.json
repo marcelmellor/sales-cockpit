@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "sales-cockpit": {
+      "type": "http",
+      "url": "http://localhost:3020/api/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_SECRET}"
+      }
+    }
+  }
+}

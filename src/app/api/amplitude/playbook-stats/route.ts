@@ -7,12 +7,17 @@ const CACHE_TTL_SECONDS = 30 * 60;
 
 export async function GET(request: Request) {
   try {
-    const session = await getSession();
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const { searchParams } = new URL(request.url);
+    const tvSecret = searchParams.get('tvSecret');
+    const isValidTvSecret = tvSecret && process.env.TV_SECRET && tvSecret === process.env.TV_SECRET;
+
+    if (!isValidTvSecret) {
+      const session = await getSession();
+      if (!session) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
     }
 
-    const { searchParams } = new URL(request.url);
     const daysRaw = Number(searchParams.get('days'));
     const days = Number.isFinite(daysRaw) && daysRaw > 0 && daysRaw <= 365 ? daysRaw : 90;
     const forceRefresh = searchParams.get('refresh') === '1';
