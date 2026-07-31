@@ -595,7 +595,7 @@ export function DashboardView({
     });
   }, [wonDeals, weeks]);
 
-  const newArrData = useMemo(() => weeks.map((weekEnd, i) => {
+  const newMrrData = useMemo(() => weeks.map((weekEnd, i) => {
     const endMs = weekEnd.getTime();
     const startMs = i > 0 ? weeks[i - 1].getTime() : endMs - MS_PER_WEEK;
     const wonThisWeek = wonDeals.filter(d => {
@@ -604,17 +604,17 @@ export function DashboardView({
       const wonAt = closed ?? created;
       return wonAt != null && wonAt > startMs && wonAt <= endMs;
     });
-    const arr = wonThisWeek.reduce((sum, deal) => sum + deal.revenue * 12, 0);
-    return { arr, wonCount: wonThisWeek.length };
+    const mrr = wonThisWeek.reduce((sum, deal) => sum + deal.revenue, 0);
+    return { mrr, wonCount: wonThisWeek.length };
   }), [wonDeals, weeks]);
 
-  const newArrTrend = useMemo(() => newArrData.map(d => d.arr), [newArrData]);
-  const newArrTooltip = useMemo(() => newArrData.map(d => d.arr > 0 ? formatEUR(d.arr) : '0 €'), [newArrData]);
-  const newArrExtra = useMemo(() => newArrData.map(d => `${d.wonCount} Won Deal${d.wonCount === 1 ? '' : 's'}`), [newArrData]);
-  const newArrAvg = useMemo(() => {
-    if (newArrTrend.length === 0) return 0;
-    return Math.round(newArrTrend.reduce((sum, value) => sum + value, 0) / newArrTrend.length);
-  }, [newArrTrend]);
+  const newMrrTrend = useMemo(() => newMrrData.map(d => d.mrr), [newMrrData]);
+  const newMrrTooltip = useMemo(() => newMrrData.map(d => d.mrr > 0 ? formatEUR(d.mrr) : '0 €'), [newMrrData]);
+  const newMrrExtra = useMemo(() => newMrrData.map(d => `${d.wonCount} Won Deal${d.wonCount === 1 ? '' : 's'}`), [newMrrData]);
+  const newMrrAvg = useMemo(() => {
+    if (newMrrTrend.length === 0) return 0;
+    return Math.round(newMrrTrend.reduce((sum, value) => sum + value, 0) / newMrrTrend.length);
+  }, [newMrrTrend]);
 
   const winRateData = useMemo(() => weeks.map((weekEnd, i) => {
     const endMs = weekEnd.getTime();
@@ -1094,8 +1094,8 @@ export function DashboardView({
             />
             <WeekLabels weeks={weeks} />
           </ChartCard>
-          <ChartCard title="New ARR / Woche">
-            <Sparkline data={newArrTrend} color="#94D825" weeks={weeks} tooltipOverride={newArrTooltip} tooltipExtra={newArrExtra} bars targetValue={newArrAvg} targetLabel={`Ø ${formatEUR(newArrAvg)}`} targetColor="#2C3333" />
+          <ChartCard title="New MRR / Woche">
+            <Sparkline data={newMrrTrend} color="#94D825" weeks={weeks} tooltipOverride={newMrrTooltip} tooltipExtra={newMrrExtra} bars targetValue={newMrrAvg} targetLabel={`Ø ${formatEUR(newMrrAvg)}`} targetColor="#2C3333" />
             <WeekLabels weeks={weeks} />
           </ChartCard>
           <ChartCard title="Win Rate (Wochenkohorte)">
