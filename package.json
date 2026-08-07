@@ -26,7 +26,7 @@
     "lucide-react": "^0.563.0",
     "mcp-handler": "^1.1.0",
     "next": "16.1.4",
-    "next-auth": "^5.0.0-beta.30",
+    "next-auth": "^5.0.0-beta.32",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "zustand": "^5.0.10"
